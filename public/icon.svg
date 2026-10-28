@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#16202e"/><stop offset="1" stop-color="#08090d"/>
+    </linearGradient>
+    <linearGradient id="road" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffb347"/><stop offset="1" stop-color="#b46a1e"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="96" fill="url(#sky)"/>
+  <path d="M256 96 400 448H112z" fill="#12161f"/>
+  <path d="M256 150 320 448H192z" fill="url(#road)" opacity=".18"/>
+  <g fill="#ffcf90">
+    <rect x="246" y="200" width="20" height="46" rx="6"/>
+    <rect x="246" y="286" width="20" height="46" rx="6"/>
+    <rect x="246" y="372" width="20" height="46" rx="6"/>
+  </g>
+  <text x="256" y="150" font-family="Impact, system-ui, sans-serif" font-size="92" font-weight="800"
+        text-anchor="middle" fill="#ffb347">100</text>
+</svg>

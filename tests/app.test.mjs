@@ -94,11 +94,21 @@ document.getElementById('roomInput').value = 'phone-room-7';
 document.getElementById('roomInput').dispatch('input', { target: { value: 'phone-room-7' } });
 check('room code sanitised + stored', api.state.room === 'phone-room-7', api.state.room);
 
+// phones ask for fullscreen + a landscape lock before the world is measured
+const orientationLocks = [];
+const fullscreenCalls = [];
+screen.orientation = { lock: async (kind) => { orientationLocks.push(kind); } };
+document.documentElement.requestFullscreen = async () => { fullscreenCalls.push(1); };
+document.fullscreenElement = null;
+
 // start the run
 await api.startRun();
 await wait(400);
 const game = api.game;
 check('game constructed', Boolean(game));
+check('phone goes fullscreen for the lock', fullscreenCalls.length === 1, `${fullscreenCalls.length}`);
+check('phone locks to landscape', orientationLocks.includes('landscape'), orientationLocks.join(','));
+check('rotate overlay offers a landscape button', Boolean(document.getElementById('rotateLock')));
 if (game) {
   check('renderer attached to #app', document.getElementById('app').children.length > 0);
   check('hud visible', !document.getElementById('hud').classList.contains('hidden'));

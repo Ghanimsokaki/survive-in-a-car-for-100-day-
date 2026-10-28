@@ -793,3 +793,61 @@ body.touch{-webkit-user-select:none;user-select:none;overscroll-behavior:none}
   border:1px solid rgba(255,255,255,.1);color:#8d96a6;font-size:9px;letter-spacing:1.6px;cursor:pointer}
 #qualityRow.seg button:hover{border-color:rgba(255,179,71,.45);color:#e6ecf6}
 #qualityRow.seg button.on{background:rgba(255,179,71,.14);border-color:var(--amber);color:var(--amber)}
+
+/* ===================== PHONE HUD FRAME (authoritative) =====================
+   One frame for every touch layout, portrait or landscape:
+   the hotbar is docked to the very bottom edge, the action cluster and the
+   diagnostics panel sit directly above it, and the prompt / toasts / owner
+   chip stack on top of those. Nothing is allowed to sit on the hotbar.
+   (Kept last in the file so it wins over the older per-breakpoint rules.)
+*/
+@media (pointer:coarse), (max-width:820px){
+  #hotbar{left:calc(6px + env(safe-area-inset-left));right:calc(6px + env(safe-area-inset-right));
+    top:auto;bottom:calc(6px + env(safe-area-inset-bottom));width:auto;transform:none;
+    display:flex;flex-wrap:nowrap;justify-content:center;gap:4px;overflow:hidden;z-index:14}
+  #hotbar .hot-slot{flex:0 1 46px;width:46px;min-width:0;height:44px;border-radius:10px;padding:0}
+  #hotbar .hot-slot .hot-name{display:none}
+  #hotbar .hot-slot .hot-glyph{font-size:16px}
+
+  #actions{z-index:15;left:auto;right:calc(6px + env(safe-area-inset-right));top:auto;
+    bottom:calc(58px + env(safe-area-inset-bottom));display:grid;
+    grid-template-columns:repeat(2,46px);gap:6px}
+  #actions .act{width:46px;min-width:0;min-height:46px;padding:0;justify-content:center;border-radius:12px}
+  #actions .act-txt{display:none}
+
+  #diag{left:calc(6px + env(safe-area-inset-left));bottom:calc(58px + env(safe-area-inset-bottom));
+    width:200px;transform:scale(.8);transform-origin:bottom left}
+
+  #prompt{left:50%;right:auto;bottom:calc(218px + env(safe-area-inset-bottom));
+    transform:translateX(-50%);text-align:center;max-width:min(560px,88vw)}
+  #toasts{top:auto;left:50%;right:auto;bottom:calc(260px + env(safe-area-inset-bottom));
+    transform:translateX(-50%);width:min(480px,88vw);align-items:center}
+  /* owner chip sits on the left, above the diagnostics, clear of the toasts */
+  .admin-fab{right:auto;left:calc(6px + env(safe-area-inset-left));
+    bottom:calc(140px + env(safe-area-inset-bottom))}
+
+  #stick{left:calc(10px + env(safe-area-inset-left));top:auto;
+    bottom:calc(60px + env(safe-area-inset-bottom))}
+}
+
+/* landscape phones: same frame, but the cluster becomes a single row so the road
+   stays visible and the hotbar keeps the full bottom edge to itself */
+@media (max-height:560px) and (pointer:coarse){
+  #hotbar{gap:3px}
+  #hotbar .hot-slot{flex:0 1 40px;width:40px;height:38px;border-radius:9px}
+  /* six buttons (enter/exit + attack are injected on touch) fit in one row */
+  #actions{bottom:calc(52px + env(safe-area-inset-bottom));
+    grid-template-columns:repeat(6,40px);gap:5px}
+  #actions .act{width:40px;min-height:40px;border-radius:10px}
+  #diag{bottom:calc(52px + env(safe-area-inset-bottom));width:186px;transform:scale(.72)}
+  #prompt{bottom:calc(102px + env(safe-area-inset-bottom));max-width:78vw;font-size:10px;padding:6px 12px}
+  #toasts{top:auto;left:auto;right:calc(8px + env(safe-area-inset-right));transform:none;
+    bottom:calc(140px + env(safe-area-inset-bottom));width:min(360px,64vw);align-items:flex-end}
+  .admin-fab{right:auto;left:calc(8px + env(safe-area-inset-left));
+    bottom:calc(140px + env(safe-area-inset-bottom))}
+  #stick{width:96px;height:96px;bottom:calc(56px + env(safe-area-inset-bottom))}
+
+  /* portrait-only chrome would eat the road */
+  #chat{top:calc(8px + env(safe-area-inset-top));width:170px}
+  #party{top:calc(52px + env(safe-area-inset-top))}
+}
