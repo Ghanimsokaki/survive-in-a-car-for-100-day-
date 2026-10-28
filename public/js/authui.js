@@ -113,7 +113,7 @@ export class AuthUI {
     if (connect) connect.textContent = can ? 'SUPABASE CONNECTED' : 'CONNECT SUPABASE';
     if (guestBtn) guestBtn.style.display = 'inline-block';
     if (!can) {
-      this.setHint('No Supabase project connected yet — play as guest, or tap CONNECT SUPABASE.');
+      this.setHint(`No Supabase project connected yet — play as guest, or tap CONNECT SUPABASE. ${this.account.describeConfig?.() || ''}`.trim());
       const submit = $('authSubmit');
       if (submit && !this.busy) submit.innerHTML = 'ACCOUNTS OFFLINE <span>▸</span>';
     } else {
@@ -163,10 +163,42 @@ export class AuthUI {
     const el = $('sbSetup');
     if (!el) return;
     el.classList.add('show');
-    const hint = $('sbError');
-    if (hint) hint.textContent = this.account.configSource === 'server'
-      ? 'This server already supplies Supabase credentials from its environment.'
-      : '';
+    this.renderSetupStatus();
+  }
+
+  /** Shows exactly what the deployment sees, so env-var problems are visible on a phone. */
+  renderSetupStatus() {
+    const box = $('sbStatus');
+    if (!box) return;
+    const account = this.account;
+    const report = account.configReport || {};
+    const env = report.server?.env;
+    const ok = (flag) => (flag ? '<b class="st-ok">✓</b>' : '<b class="st-no">✗</b>');
+
+    if (account.canUseAccounts) {
+      const source = { server: 'server env', build: 'build-time config', local: 'this device', inline: 'inline config' }[account.configSource] || account.configSource;
+      box.innerHTML = `<div class="st-row st-good">CONNECTED — credentials from ${source}</div>`;
+      return;
+    }
+
+    const rows = [];
+    if (env) {
+      rows.push(`<div class="st-row">VERCEL / SERVER ENV — URL ${ok(env.hasUrl)} · ANON KEY ${ok(env.hasKey)}</div>`);
+      if (env.hasKey && env.keyKind === 'secret') {
+        rows.push('<div class="st-row st-bad">That key is a service_role/secret key. Use the anon public key instead.</div>');
+      }
+    } else if (report.server?.error) {
+      rows.push(`<div class="st-row st-bad">Server config unreachable: ${report.server.error}</div>`);
+    } else {
+      rows.push('<div class="st-row st-bad">No /api/config endpoint — this looks like a static host.</div>');
+    }
+    if (report.build) rows.push(`<div class="st-row">BUILD CONFIG.JSON ${ok(report.build.found)}</div>`);
+    if (report.local) rows.push(`<div class="st-row">THIS DEVICE ${ok(report.local.found)}</div>`);
+
+    const problems = [...(report.server?.problems || []), ...(report.build?.problems || [])];
+    for (const p of problems.slice(0, 3)) rows.push(`<div class="st-row st-bad">${p}</div>`);
+
+    box.innerHTML = rows.join('');
   }
 
   saveSetup() {

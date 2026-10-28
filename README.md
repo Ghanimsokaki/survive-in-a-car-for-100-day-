@@ -45,9 +45,42 @@ cp .env.example .env
 npm start
 ```
 
-On a static host (Vercel, Netlify, GitHub Pages) there is no server to read `.env`, so either set the same
-two variables in the host's environment (Vercel does this through `api/config.js`), or tap
-**CONNECT SUPABASE** on the sign-in screen and paste the URL + anon key once — it is stored on that device.
+### How the credentials reach the browser
+
+Three delivery paths, tried in order — so Vercel env vars work whether or not functions run:
+
+| Order | Source | When it applies |
+| --- | --- | --- |
+| 1 | `GET /api/config` | Vercel serverless function or the Node relay, reading the live environment |
+| 2 | `GET ./config.json` | baked by `npm run build` from the same env vars (static hosts) |
+| 3 | `localStorage` | the URL + key you pasted into **CONNECT SUPABASE** on that device |
+
+A fourth inline fallback (`dist/supabase-config.js`) is injected into the built HTML for hosts that block
+JSON fetches. All of them carry only the anon key; a `service_role` / `sb_secret_` key is detected and
+**refused** rather than shipped.
+
+**Accepted variable names** (Vercel, Supabase integration, Next.js and Vite all differ):
+
+* URL: `SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_URL`, `VITE_SUPABASE_URL`, `PUBLIC_SUPABASE_URL`,
+  `NUXT_PUBLIC_SUPABASE_URL`, `SUPABASE_PROJECT_URL`
+* Key: `SUPABASE_ANON_KEY`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `VITE_SUPABASE_ANON_KEY`,
+  `PUBLIC_SUPABASE_ANON_KEY`, `NUXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_PUBLISHABLE_KEY`,
+  `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_PUBLIC_KEY`, `SUPABASE_KEY`
+
+Missing pieces are tolerated: with only the key set, the project URL is derived from the key's `ref` claim.
+
+### Checking it worked (from your phone)
+
+Open the game and tap **CONNECT SUPABASE** — the panel prints a live diagnostic:
+
+```
+VERCEL / SERVER ENV — URL ✓ · ANON KEY ✓
+BUILD CONFIG.JSON ✓
+```
+
+`✗` next to a value means that variable was not visible to the deployment (wrong name, saved to the wrong
+environment, or not redeployed). When accounts work, the same panel shows
+`CONNECTED — credentials from server env (SUPABASE_URL + SUPABASE_ANON_KEY)`.
 
 The anon key is safe to expose; it can only do what the RLS policies allow.
 
@@ -144,8 +177,11 @@ vercel            # framework preset: Other
 
 `vercel.json` sets `buildCommand: npm run build` (copies `public/` → `dist/`), ships `api/room`,
 `api/health` and `api/config`, and disables caching on the API. Add `SUPABASE_URL` and
-`SUPABASE_ANON_KEY` in *Project → Settings → Environment Variables*. Online play on Vercel uses the
-polling lane; for low-latency WebSocket rooms host `server.mjs` and pass `?relay=`.
+`SUPABASE_ANON_KEY` in *Project → Settings → Environment Variables* (all three environments), then
+**redeploy** — env changes only apply to new deployments. The build log prints
+`supabase accounts: configured (url from SUPABASE_URL)` when they were picked up, and
+`dist/config.json` is generated from them as a fallback. Online play on Vercel uses the polling lane; for
+low-latency WebSocket rooms host `server.mjs` and pass `?relay=`.
 
 ## 🗂 Project layout
 
@@ -199,3 +235,6 @@ The first iteration — a single-file, top-down canvas version — is preserved 
 * License: Apache-2.0 (see `LICENSE`).
 
 Stay on the asphalt. The wind does not care.
+
+See `docs/DEPLOY-VERCEL.md` for the phone-friendly Vercel walkthrough (including how to read the
+`CONNECT SUPABASE` diagnostic).
