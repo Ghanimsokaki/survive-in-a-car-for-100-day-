@@ -106,6 +106,7 @@ class Builder {
     this.roof = new Map();    // roof pieces, hidden when the player is inside
     this.colliders = [];      // local AABB wall rects
     this.loot = [];           // local loot crate positions
+    this.leaves = [];         // hinged door panels: { key, w, h, d, x, y, z }
   }
 
   _bucket(key, roof) {
@@ -155,6 +156,15 @@ class Builder {
 
   lootAt(x, z) { this.loot.push({ x, z }); }
 
+  /**
+   * A hinged panel. x/z is the hinge line; the panel extends along +Z when
+   * dir is 1 and along -Z when dir is -1, so a wide opening gets two leaves.
+   */
+  doorLeaf(key, w, h, d, x, y, z, dir = 1) {
+    this.leaves.push({ key, w, h, d, x, y, z, dir });
+    return this;
+  }
+
   build() {
     const group = new THREE.Group();
     for (const [key, geos] of this.solid) {
@@ -173,7 +183,23 @@ class Builder {
       geos.forEach((g) => g.dispose?.());
     }
     group.add(roofGroup);
-    return { group, roofGroup };
+
+    // Each panel gets its own pivot group so it can swing without a second draw call.
+    const leaves = this.leaves.map(({ key, w, h, d, x, y, z, dir }) => {
+      const pivot = new THREE.Group();
+      pivot.position.set(x, y, z);
+      pivot.userData.dir = dir;
+      pivot.rotation.y = dir === 1 ? 0 : Math.PI;
+      const panel = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat(key));
+      panel.position.set(0, 0, d / 2);
+      panel.castShadow = true;
+      panel.receiveShadow = true;
+      pivot.add(panel);
+      group.add(pivot);
+      return pivot;
+    });
+
+    return { group, roofGroup, leaves };
   }
 }
 
@@ -196,6 +222,20 @@ function shell(b, { w, d, h, wallKey, floorKey, doorWidth = 2.6, doorHeight = 2.
   b.box(wallKey, t, h - doorHeight, doorWidth, frontX, doorHeight + (h - doorHeight) / 2, 0);
   b.wall(wallKey, w, h, t, 0, h / 2, -d / 2 + t / 2);
   b.wall(wallKey, w, h, t, 0, h / 2, d / 2 - t / 2);
+
+  // hinged door panels — double doors on the wide garage openings
+  const leafKey = h > 3.2 ? 'metalDark' : 'woodDark';
+  const panelH = doorHeight - 0.18;
+  const leafY = panelH / 2 + 0.08;
+  if (doorWidth > 3.6) {
+    const half = doorWidth / 2 - 0.06;
+    b.doorLeaf(leafKey, 0.11, panelH, half, frontX + 0.07, leafY, -doorWidth / 2, 1);
+    b.doorLeaf(leafKey, 0.11, panelH, half, frontX + 0.07, leafY, doorWidth / 2, -1);
+  } else {
+    b.doorLeaf(leafKey, 0.11, panelH, doorWidth - 0.12, frontX + 0.07, leafY, -doorWidth / 2 + 0.06, 1);
+  }
+  // handle on the free edge of the single leaf
+  if (doorWidth <= 3.6) b.box('metalDark', 0.1, 0.1, 0.3, frontX + 0.16, 1.06, doorWidth / 2 - 0.5);
 
   // door frame + threshold
   b.box('trim', t + 0.08, doorHeight + 0.12, 0.16, frontX, (doorHeight + 0.12) / 2, -doorWidth / 2 - 0.06);
@@ -560,7 +600,7 @@ export function createBuilding(kind, { x = 0, z = 0, facing = 1, scale = 1 } = {
   const builder = new Builder();
   const build = KINDS[kind] || KINDS.house;
   const meta = build(builder);
-  const { group, roofGroup } = builder.build();
+  const { group, roofGroup, leaves } = builder.build();
 
   const s = scale;
   group.scale.setScalar(s);
@@ -577,6 +617,8 @@ export function createBuilding(kind, { x = 0, z = 0, facing = 1, scale = 1 } = {
     height: meta.h * s,
     // local-space snapshot: everything below is derived from this on every move
     local: { w: meta.w, d: meta.d, colliders: builder.colliders, loot: builder.loot },
+    leaves,
+    doorAngle: 0,
     scavengeReady: true,
     cooldown: 0,
     roofHidden: false,
@@ -615,6 +657,23 @@ export function placeBuilding(b, { x = b.x, z = b.z, facing = b.facing } = {}) {
   b.door = toWorld(-b.local.w / 2 - 0.9, 0);
   if (b.roof) b.roof.visible = !b.roofHidden;
   return b;
+}
+
+/**
+ * Swings the door panels. `near` is whether the player is at the threshold, so
+ * every building can be animated from a single distance check per frame.
+ */
+export function updateDoor(b, near, dt, { openAngle = 1.32 } = {}) {
+  if (!b.leaves?.length) return;
+  const target = near ? openAngle : 0;
+  const k = near ? 7.5 : 4.5;
+  b.doorAngle += (target - b.doorAngle) * Math.min(1, dt * k);
+  if (Math.abs(b.doorAngle) < 0.001) b.doorAngle = 0;
+  for (const pivot of b.leaves) {
+    const dir = pivot.userData.dir === -1 ? -1 : 1;
+    // rotate toward +X (into the building) so you never walk into a slab
+    pivot.rotation.y = dir === 1 ? b.doorAngle : Math.PI - b.doorAngle;
+  }
 }
 
 /** Hides the roof while the player is indoors (roof is its own group). */

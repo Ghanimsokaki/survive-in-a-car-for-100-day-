@@ -166,7 +166,9 @@ How it plays:
   collect anything (driving over drops works too). Loot scales with the building type and an indoor
   bonus, then the place is picked clean for 32 s. Cars cannot drive through a building; only people
   fit through the doorway.
-* Interiors are lit by the world sun, so a midday raid is safe and a night raid is genuinely dark.
+* Interiors are lit by the world sun, so a midday raid is safe and a night raid is genuinely dark;
+* **hinged doors** swing open as you step onto the porch and shut behind you — wide warehouses
+  get double leaves, and the panels open inward so a doorway is never blocked.
 
 ## 🎒 Loot, backpack and hotbar
 

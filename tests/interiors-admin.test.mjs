@@ -7,7 +7,7 @@ import { handleAdminRequest, verifyAdmin, usernameFromUser, isOwnerName } from '
 installDOM({ width: 1280, height: 720 });
 
 const { Game } = await import('./app/js/game.js');
-const { createBuilding, BUILDING_KINDS, pointInside, hitsWalls, placeBuilding, setRoofVisible } = await import('./app/js/buildings.js');
+const { createBuilding, BUILDING_KINDS, pointInside, hitsWalls, placeBuilding, setRoofVisible, updateDoor } = await import('./app/js/buildings.js');
 const { isOwnerUsername, mountAdmin, AdminPanel, ownerAccess } = await import('./app/js/admin.js');
 const { ZONES } = await import('./app/js/world.js');
 
@@ -100,6 +100,40 @@ console.log('\nwalking inside');
   for (let i = 0; i < 260; i++) g.updateFoot(1 / 60);
   check('player can walk back out', g.world.buildingAt(g.pos.x, g.pos.z) === null);
   check('roof returns after leaving', b.roof.visible === true);
+}
+
+console.log('\nhinged doors');
+{
+  const withLeaves = BUILDING_KINDS.map((k) => createBuilding(k, { x: 40, z: 0 }));
+  check('every archetype hangs a door leaf',
+    withLeaves.every((b) => b.leaves.length >= 1), withLeaves.map((b) => b.leaves.length).join(','));
+  const wide = createBuilding('warehouse', { x: 40, z: 0 });
+  check('wide garage openings get double doors', wide.leaves.length === 2, `${wide.leaves.length}`);
+  check('doors start shut', wide.doorAngle === 0
+    && wide.leaves.every((p) => Math.abs(p.rotation.y % Math.PI) < 1e-6));
+
+  updateDoor(wide, true, 0.5);
+  check('standing on the porch swings them open', wide.doorAngle > 0.5, wide.doorAngle.toFixed(2));
+  // both leaves must clear the doorway: their free edges move toward +X (indoors)
+  const tipX = (pivot, dir) => pivot.position.x + Math.sin(dir > 0 ? wide.doorAngle : Math.PI - wide.doorAngle) * 1;
+  check('each leaf opens into the building',
+    wide.leaves.every((p) => tipX(p, p.userData.dir) > p.position.x + 0.3));
+
+  for (let i = 0; i < 120; i++) updateDoor(wide, false, 1 / 60);
+  check('doors shut again once you walk away', wide.doorAngle < 0.02, wide.doorAngle.toFixed(3));
+
+  // the world animates every building from the player distance alone
+  const b = g.world.buildings[0];
+  g.inCar = false;
+  g.pos.set(b.door.x, 0, b.door.z);
+  g.avatar.root.position.copy(g.pos);
+  for (let i = 0; i < 40; i++) g.world.update(1 / 60, g.pos, g.zone);
+  check('the nearest door opens while you stand at it', b.doorAngle > 0.6, b.doorAngle.toFixed(2));
+  g.pos.set(b.door.x + 60, 0, b.door.z);
+  for (let i = 0; i < 120; i++) g.world.update(1 / 60, g.pos, g.zone);
+  check('and closes when you leave', b.doorAngle < 0.05, b.doorAngle.toFixed(3));
+  g.pos.set(7, 0, 30);
+  g.avatar.root.position.set(7, 0, 30);
 }
 
 console.log('\ninterior looting');

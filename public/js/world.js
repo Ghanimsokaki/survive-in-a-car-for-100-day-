@@ -1,6 +1,6 @@
 import * as THREE from '../vendor/three.module.js';
 import { rand, randInt, pick, clamp, lerp, canvasTex, mulberry32 } from './utils.js';
-import { createBuilding, placeBuilding, setRoofVisible, pointInside, hitsWalls, hitsFootprint, BUILDING_KINDS } from './buildings.js';
+import { createBuilding, placeBuilding, setRoofVisible, updateDoor, pointInside, hitsWalls, hitsFootprint, BUILDING_KINDS } from './buildings.js';
 
 export const ZONES = [
   { name: 'OAKHAVEN OUTSKIRTS', short: 'OUTSKIRTS', ground: 0x6b6153, road: 0x2b2d33, fog: 0xb9a68a, sky: 0xc0a984, sun: 0xffd9a0, amb: 0x8f96a8, night: 0.0, desc: 'DAY 1–15 · CAR MAINTENANCE & FUEL' },
@@ -641,6 +641,9 @@ export class World {
         b.cooldown -= dt;
         if (b.cooldown <= 0) b.scavengeReady = true;
       }
+      // doors swing open as you step onto the porch
+      const door = b.door;
+      updateDoor(b, Math.hypot(focus.x - door.x, focus.z - door.z) < 4.6, dt);
     }
   }
 
