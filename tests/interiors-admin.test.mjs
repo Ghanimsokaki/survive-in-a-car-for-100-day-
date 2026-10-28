@@ -20,9 +20,9 @@ const check = (label, cond, extra = '') => {
 // ---------------------------------------------------------------- buildings
 console.log('\nenterable locations');
 {
-  check('eleven building archetypes', BUILDING_KINDS.length >= 11, BUILDING_KINDS.join(','));
+  check('thirteen building archetypes', BUILDING_KINDS.length >= 13, BUILDING_KINDS.join(','));
   check('clinics, depots and farmhouses exist',
-    ['clinic', 'depot', 'farmhouse'].every((k) => BUILDING_KINDS.includes(k)));
+    ['clinic', 'depot', 'farmhouse', 'motel', 'roadhouse'].every((k) => BUILDING_KINDS.includes(k)));
   check('houses are included', BUILDING_KINDS.includes('house'));
 
   for (const kind of BUILDING_KINDS) {

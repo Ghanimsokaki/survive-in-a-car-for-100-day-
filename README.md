@@ -140,7 +140,7 @@ running around by everyone else in the room.
 
 ## 🏚 Enterable buildings
 
-The shoulders are lined with **16 enterable structures** that recycle as you drive. Every one has a real
+The shoulders are lined with **18 enterable structures** that recycle as you drive. Every one has a real
 interior: walls you collide with, a doorway you walk through, loot crates and a roof that peels away the
 moment you step inside.
 
@@ -156,6 +156,8 @@ moment you step inside.
 | `clinic` | ×2.0 | exam tables, IV stands, drug cabinets — best chem loot |
 | `depot` | ×1.6 | bus garage: wrecked van, luggage racks, two loot spots |
 | `farmhouse` | ×1.4 | wood stove, long table, pantry shelves |
+| `motel` | ×1.35 | row of rooms, made beds, reception desk, back-alley dumpster |
+| `roadhouse` | ×1.5 | bar counter, bottle shelf, booths, neon over the bar |
 | `bunker` | ×1.8 | concrete, sandbags, military crates |
 
 How it plays:
@@ -166,7 +168,8 @@ How it plays:
   collect anything (driving over drops works too). Loot scales with the building type and an indoor
   bonus, then the place is picked clean for 32 s. Cars cannot drive through a building; only people
   fit through the doorway.
-* Interiors are lit by the world sun, so a midday raid is safe and a night raid is genuinely dark;
+* Interiors are lit by the world sun plus a warm fill light that fades in as you cross the threshold,
+  so a midday raid is safe and a night raid is tense instead of pitch black;
 * **hinged doors** creak open as you step onto the porch and shut behind you — wide warehouses
   get double leaves, and the panels open inward so a doorway is never blocked.
 
@@ -294,7 +297,7 @@ docs/DESIGN.md        game design document
   controls, stick input, workbench, run-end hook.
 * **signed-in friends UI** — session restore, account chip, friend rows with room/day, JOIN, add/remove
   through the DOM, presence heartbeat, sign-out.
-* **interiors + owner console** — all eleven building archetypes enterable, doorways walkable, walls solid,
+* **interiors + owner console** — all thirteen building archetypes enterable, doorways walkable, walls solid,
   roof hide/restore, interior looting + cooldown, and the admin gate: owner token verifies, a normal
   player's token is refused, the shipped anon key cannot unlock admin, forged ban calls return 403.
 * **loot + inventory + recipes** — 1000 generated recipes unique and browsable, drops only bank when you

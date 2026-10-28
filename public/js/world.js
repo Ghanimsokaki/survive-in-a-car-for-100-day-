@@ -483,7 +483,7 @@ export class World {
     const pool = [
       'house', 'store', 'garage', 'warehouse', 'house', 'clinic',
       'barn', 'church', 'shack', 'bunker', 'farmhouse', 'house',
-      'depot', 'warehouse', 'store', 'farmhouse',
+      'depot', 'warehouse', 'store', 'farmhouse', 'motel', 'roadhouse',
     ];
     const count = this.lowEnd ? 10 : pool.length;
     this.buildings = [];

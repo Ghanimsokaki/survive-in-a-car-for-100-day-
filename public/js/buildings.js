@@ -249,6 +249,11 @@ function shell(b, { w, d, h, wallKey, floorKey, doorWidth = 2.6, doorHeight = 2.
   b.sphere('lamp', 0.17, frontX - 1.15, 2.16, -(doorWidth / 2 + 1.25), 8);
   b.box('metalDark', 0.3, 0.08, 0.3, frontX - 1.15, 2.24, -(doorWidth / 2 + 1.25));
 
+  // mailbox by the door and a lit sign plate over the lintel
+  b.box('metalDark', 0.1, 1.05, 0.1, frontX - 0.75, 0.52, -(doorWidth / 2 + 0.7));
+  b.box('metal', 0.34, 0.36, 0.52, frontX - 0.75, 1.12, -(doorWidth / 2 + 0.7));
+  b.box('neon', 0.1, 0.22, Math.min(2.4, doorWidth - 0.3), frontX + 0.02, doorHeight + 0.42, 0);
+
   // corner posts
   [[-w / 2 + t / 2, -d / 2 + t / 2], [w / 2 - t / 2, -d / 2 + t / 2], [-w / 2 + t / 2, d / 2 - t / 2], [w / 2 - t / 2, d / 2 - t / 2]]
     .forEach(([x, z]) => b.box('trim', t + 0.1, h, t + 0.1, x, h / 2, z));
@@ -291,6 +296,36 @@ function lamp(b, x, z, h) {
   b.roofCyl('metalDark', 0.03, 0.03, 0.9, 5, x, h - 0.45, z);
   b.roofSphere('lamp', 0.14, x, h - 0.92, z, 8);
   b.roofBox('metalDark', 0.42, 0.06, 0.42, x, h - 0.03, z);
+}
+
+/** Steel dumpster with a skewed lid — a second loot spot right by the porch. */
+function dumpster(b, x, z, rot = 0) {
+  const w = 2.1, h = 1.3, d = 1.25;
+  b.box('metalDark', w, h, d, x, h / 2 + 0.05, z, rot);
+  b.box('oil', w + 0.08, 0.1, d + 0.08, x, h + 0.12, z, rot + 0.06);
+  b.box('metalDark', 0.1, 0.34, d - 0.2, x - w / 2 + 0.4, h + 0.32, z, rot);
+  for (const sx of [-1, 1]) {
+    b.box('metalDark', w - 0.3, 0.09, 0.09, x, 0.12, z + sx * (d / 2 - 0.1), rot);
+  }
+  b.lootAt(x, z);
+}
+
+/** Stripped wreck left on the driveway: body, cabin, four bald tyres. */
+function parkedWreck(b, x, z, rot = 0) {
+  const bx = 3.6, bz = 1.7;
+  b.box('rust', bx, 0.62, bz, x, 0.52, z, rot);
+  b.box('metalDark', 1.9, 0.6, bz - 0.16, x - 0.15, 1.06, z, rot);
+  b.box('glass', 1.7, 0.42, bz - 0.3, x - 0.15, 1.12, z, rot);
+  b.box('rust', 0.5, 0.34, bz + 0.06, x + bx / 2 - 0.2, 0.72, z, rot);
+  const cos = Math.cos(rot), sin = Math.sin(rot);
+  for (const [dx, dz] of [[-1.15, -0.82], [1.15, -0.82], [-1.15, 0.82], [1.15, 0.82]]) {
+    const wx = x + dx * cos - dz * sin;
+    const wz = z + dx * sin + dz * cos;
+    b.cyl('tyre', 0.36, 0.36, 0.26, 10, wx, 0.36, wz);
+  }
+  // open bonnet propped on a stick
+  b.box('metalDark', 1.3, 0.08, bz - 0.3, x + bx / 2 - 0.9, 1.05, z, rot);
+  b.lootAt(x - 1.4 * cos, z - 1.4 * sin);
 }
 
 /* ---------------------------------------------------------------- archetypes */
@@ -396,7 +431,7 @@ const KINDS = {
 
   store(b) {
     const w = 15, d = 11, h = 3.8;
-    shell(b, { w, d, h, wallKey: 'plaster', floorKey: 'floorTile', doorWidth: 3.2, doorHeight: 3.0 });
+    const { frontX } = shell(b, { w, d, h, wallKey: 'plaster', floorKey: 'floorTile', doorWidth: 3.2, doorHeight: 3.0 });
     // checkout counter
     b.box('woodPale', 4.2, 1.0, 1.2, -w / 2 + 3.4, 0.55, 0);
     b.box('metal', 0.8, 0.5, 0.7, -w / 2 + 2.2, 1.25, 0);
@@ -421,12 +456,14 @@ const KINDS = {
     lamp(b, 3.0, 1.6, h);
     crateStack(b, w / 2 - 2.4, d / 2 - 2.2, 2);
     b.lootAt(-w / 2 + 3.0, -d / 2 + 2.4);
+    parkedWreck(b, frontX - 3.6, 2.2, 0.18);
+    dumpster(b, frontX - 1.8, -3.4);
     return { w, d, h, label: 'GENERAL STORE', lootMult: 1.45 };
   },
 
   garage(b) {
     const w = 14, d = 11, h = 4.2;
-    shell(b, { w, d, h, wallKey: 'concreteDark', floorKey: 'floorConcrete', doorWidth: 5, doorHeight: 3.6, windows: false });
+    const { frontX } = shell(b, { w, d, h, wallKey: 'concreteDark', floorKey: 'floorConcrete', doorWidth: 5, doorHeight: 3.6, windows: false });
     // lift + tool bench
     b.box('metalDark', 5.0, 0.16, 2.6, 1.6, 0.24, 1.2);
     b.box('metal', 0.3, 1.6, 0.3, -0.6, 0.85, 0.1);
@@ -447,6 +484,7 @@ const KINDS = {
     lamp(b, 0, 0, h);
     crateStack(b, w / 2 - 2.6, -d / 2 + 2.4, 2);
     b.lootAt(-w / 2 + 2.4, 1.4);
+    parkedWreck(b, frontX - 4.0, -2.0, -0.25);
     return { w, d, h, label: 'AUTO GARAGE', lootMult: 1.5 };
   },
 
@@ -567,6 +605,62 @@ const KINDS = {
     b.lootAt(-w / 2 + 3.4, -d / 2 + 3.2);
     b.lootAt(w / 2 - 2.2, 1.2);
     return { w, d, h, label: 'FARMHOUSE', lootMult: 1.4 };
+  },
+
+  motel(b) {
+    const w = 19, d = 9, h = 3.4;
+    shell(b, { w, d, h, wallKey: 'sidingPale', floorKey: 'carpet', doorWidth: 3.0, doorHeight: 3.0 });
+    // a row of rooms: beds on the back wall, lamps between them
+    for (let i = 0; i < 4; i++) {
+      const x = -w / 2 + 3.1 + i * 4.2;
+      b.box('metalDark', 2.2, 0.18, 1.1, x, 0.42, d / 2 - 2.4);
+      b.box('bedding', 2.0, 0.22, 1.0, x, 0.6, d / 2 - 2.4);
+      b.box('fabricPale', 0.8, 0.16, 0.5, x - 0.5, 0.78, d / 2 - 2.4);
+      b.box('woodDark', 0.9, 0.7, 0.9, x, 0.36, d / 2 - 3.7);
+      b.box('metalDark', 0.07, 0.7, 0.07, x + 1.2, 0.35, d / 2 - 3.3);
+      b.box('lamp', 0.16, 0.2, 0.16, x + 1.2, 0.76, d / 2 - 3.3);
+      if (i < 3) b.box('woodDark', 0.28, h - 0.4, d - 0.6, x + 2.1, (h - 0.4) / 2, 0);
+    }
+    // reception desk near the door
+    b.box('woodPale', 3.4, 1.05, 1.0, -w / 2 + 2.4, 0.55, -d / 2 + 2.6);
+    b.box('metal', 0.5, 0.42, 0.4, -w / 2 + 1.6, 1.28, -d / 2 + 2.6);
+    for (let i = 0; i < 3; i++) lamp(b, -4 + i * 4, -1.4, h);
+    crateStack(b, w / 2 - 2.2, -d / 2 + 2.2, 2);
+    dumpster(b, -w / 2 - 1.6, 2.6);
+    b.lootAt(-w / 2 + 2.6, -d / 2 + 2.0);
+    return { w, d, h, label: 'DESERT MOTEL', lootMult: 1.35 };
+  },
+
+  roadhouse(b) {
+    const w = 16, d = 12, h = 3.9;
+    shell(b, { w, d, h, wallKey: 'brick', floorKey: 'floorTile', doorWidth: 3.4, doorHeight: 3.0 });
+    // bar counter + stools + back shelf of bottles
+    b.box('woodDark', 6.4, 1.1, 1.1, -1.2, 0.58, -d / 2 + 3.0);
+    b.box('metal', 6.6, 0.1, 1.2, -1.2, 1.16, -d / 2 + 3.0);
+    for (let i = 0; i < 4; i++) {
+      const x = -3.0 + i * 1.6;
+      b.cyl('metalDark', 0.09, 0.09, 0.7, 8, x, 0.35, -d / 2 + 4.4);
+      b.cyl('fabric', 0.26, 0.26, 0.12, 10, x, 0.76, -d / 2 + 4.4);
+    }
+    b.box('woodDark', 6.2, 2.0, 0.4, -1.2, 1.0, -d / 2 + 1.6);
+    for (let i = 0; i < 7; i++) {
+      b.cyl(pick(['goodsA', 'glassLit', 'oil']), 0.1, 0.1, rand(0.28, 0.42), 7, -4.0 + i * 0.85, rand(1.3, 1.7), -d / 2 + 1.75);
+    }
+    // booths along the window wall
+    for (let i = 0; i < 2; i++) {
+      const z = -1.4 + i * 3.4;
+      b.box('woodPale', 2.0, 0.1, 1.4, w / 2 - 3.0, 0.8, z);
+      b.box('metalDark', 0.12, 0.8, 0.12, w / 2 - 3.0, 0.4, z);
+      b.box('fabric', 0.5, 0.7, 1.5, w / 2 - 3.9, 0.72, z);
+      b.box('fabric', 0.5, 0.7, 1.5, w / 2 - 2.1, 0.72, z);
+    }
+    // neon over the bar
+    b.box('neon', 5.0, 0.34, 0.1, -1.2, 2.9, -d / 2 + 2.4);
+    lamp(b, 1.0, 1.0, h);
+    lamp(b, -4.0, 0.0, h);
+    crateStack(b, w / 2 - 2.2, d / 2 - 2.2, 2);
+    b.lootAt(w / 2 - 2.6, -d / 2 + 3.4);
+    return { w, d, h, label: 'ROADHOUSE DINER', lootMult: 1.5 };
   },
 
   bunker(b) {
