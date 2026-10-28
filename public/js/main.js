@@ -3,6 +3,7 @@ import { buildAvatar } from './avatar.js';
 import { Game } from './game.js';
 import { Account } from './account.js';
 import { AuthUI } from './authui.js';
+import { mountAdmin } from './admin.js';
 import { BODY_COLORS, CAR_COLORS, hexToInt } from './palette.js';
 
 const $ = (id) => document.getElementById(id);
@@ -30,6 +31,7 @@ try {
 // ------------------------------------------------------------------ account
 const account = new Account();
 let game = null;
+let admin = null;
 let authUI = null;
 let starting = false;
 
@@ -330,6 +332,7 @@ async function startRun() {
     game.hud.toast('DAY 1 · OAKHAVEN OUTSKIRTS', 'warn');
     setTimeout(() => game?.hud.toast(isPhone ? 'LEFT STICK DRIVES · TAP ⚓ TO ANCHOR' : 'COLLECT FUEL · REACH THE HIGHWAY', ''), 1800);
     if (account.signedIn) account.setPresence({ status: 'playing', room: state.room, day: 1 });
+    admin = mountAdmin({ game, account, onBan: (u) => game?.hud.toast(`@${u} BANNED FROM THE ROOM`, 'warn') });
   } catch (err) {
     console.error(err);
     $('loading').classList.add('gone');
@@ -487,4 +490,4 @@ async function boot() {
 
 boot();
 
-window.__outrun = { state, account, get game() { return game; }, startRun };
+window.__outrun = { state, account, get game() { return game; }, get admin() { return admin; }, startRun };

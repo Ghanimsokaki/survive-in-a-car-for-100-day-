@@ -158,3 +158,82 @@ create or replace function public.prune_presence()
 returns void language sql security definer set search_path = public as $$
   delete from public.presence where updated_at < now() - interval '1 day';
 $$;
+
+-- =====================================================================
+-- OWNER / ADMIN LAYER  (account @ghanimz)
+-- ---------------------------------------------------------------------
+-- The admin console in the game is gated by username on the client, which
+-- is only cosmetic. These policies are the real gate: even if someone
+-- flips `window.__outrun.admin` in devtools, PostgREST refuses the writes
+-- because they are not the owner account.
+-- =====================================================================
+
+-- The single owner username. Change it here (and in lib/admin-auth.mjs)
+-- if you ever hand the console to somebody else.
+create or replace function public.owner_username()
+returns text language sql immutable as $$ select 'ghanimz'::text $$;
+
+/** True when the caller is the signed-in owner account. */
+create or replace function public.is_owner()
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (
+    select 1 from public.profiles p
+     where p.id = auth.uid()
+       and p.username = public.owner_username()
+  );
+$$;
+
+grant execute on function public.is_owner() to authenticated, anon;
+
+-- Optional explicit allow-list, for extra owners later.
+create table if not exists public.admins (
+  user_id    uuid primary key references auth.users(id) on delete cascade,
+  created_at timestamptz not null default now()
+);
+alter table public.admins enable row level security;
+
+drop policy if exists "admins read self" on public.admins;
+create policy "admins read self" on public.admins
+  for select using (user_id = auth.uid() or public.is_owner());
+
+drop policy if exists "owner writes admins" on public.admins;
+create policy "owner writes admins" on public.admins
+  for all using (public.is_owner()) with check (public.is_owner());
+
+-- Keep the owner row present so joins never fail.
+insert into public.admins (user_id)
+select p.id from public.profiles p
+ where p.username = public.owner_username()
+on conflict (user_id) do nothing;
+
+-- ------------------------------------------------------------------ bans
+create table if not exists public.bans (
+  username   text primary key,
+  reason     text not null default 'banned by owner',
+  banned_by  text not null default 'ghanimz',
+  created_at timestamptz not null default now()
+);
+alter table public.bans enable row level security;
+
+-- Everyone may read the list (the lobby needs it to keep banned players out),
+-- but the owner is the only account that can insert / delete.
+drop policy if exists "bans readable" on public.bans;
+create policy "bans readable" on public.bans
+  for select using (true);
+
+drop policy if exists "owner writes bans" on public.bans;
+create policy "owner writes bans" on public.bans
+  for all using (public.is_owner()) with check (public.is_owner());
+
+-- Owner-only RPC used by older clients / scripts.
+create or replace function public.ban_player(target_username text, why text default 'banned by owner')
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not public.is_owner() then raise exception 'not_owner'; end if;
+  insert into public.bans (username, reason, banned_by)
+  values (lower(trim(target_username)), coalesce(why, 'banned by owner'), public.owner_username())
+  on conflict (username) do update set reason = excluded.reason, banned_by = excluded.banned_by;
+end;
+$$;
+
+grant execute on function public.ban_player(text, text) to authenticated;

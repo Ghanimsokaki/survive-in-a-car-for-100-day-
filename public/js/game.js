@@ -60,7 +60,7 @@ export const RECIPES = [
   { id: 'bench4', name: 'TITANIUM FORGE', tab: 'upgrades', tier: 4, tierReq: 3, cost: { titanium: 5, cores: 1 }, desc: 'Upgrade the car workbench to Tier 4.', upgrade: 'bench' },
 ];
 
-const WEATHERS = {
+export const WEATHERS = {
   clear: { label: 'CLEAR', danger: false },
   dust: { label: 'DUST STORM', danger: true },
   heat: { label: 'HEATWAVE 41°C', danger: true },
@@ -199,6 +199,8 @@ export class Game {
     this.paused = false;
     this.inCar = true;
     this.dayTimer = 0;
+    this.insideBuilding = null;
+    this.world?.focusInterior?.(null);
     this.weather = 'clear';
     this.stormCat = 0;
     this.finalTimer = 0;
@@ -582,7 +584,9 @@ export class Game {
       this.hud.drawRadar(this.radarBlips(), this.inCar ? this.car.yaw : this.avatar.root.rotation.y, 350);
       this.hud.setParty(this.partyRows());
       const stop = this.world.nearestPitStop(this.pos.x, this.pos.z, 20);
-      this.hud.setScavengeReady(!!stop && stop.scavengeReady, stop ? stop.kind.toUpperCase() : '');
+      const build = this.insideBuilding || this.world.nearestBuilding(this.pos.x, this.pos.z, 14);
+      if (build) this.hud.setScavengeReady(Boolean(build.scavengeReady), build.label);
+      else this.hud.setScavengeReady(!!stop && stop.scavengeReady, stop ? stop.kind.toUpperCase() : '');
     }
 
     // multiplayer broadcast
@@ -685,10 +689,12 @@ export class Game {
     const speed = sprint ? 8.4 : 4.9;
     const pos = this.avatar.root.position;
 
-    const nx = pos.x + move.x * speed * dt;
+    const nx = clamp(pos.x + move.x * speed * dt, -220, 220);
     const nz = pos.z + move.z * speed * dt;
-    const cx = clamp(nx, -220, 220);
-    if (!this.world.collide(cx, nz, 0.55)) { pos.x = cx; pos.z = nz; }
+    // slide along walls: resolve each axis separately so doorways stay enterable
+    if (!this.world.collideFoot(nx, pos.z, 0.5)) pos.x = nx;
+    if (!this.world.collideFoot(pos.x, nz, 0.5)) pos.z = nz;
+    this.trackInterior();
 
     // jump
     if (this.keys.jump && pos.y <= 0.001) { this.vy = 5.4; this.keys.jump = false; }
@@ -711,6 +717,22 @@ export class Game {
     }
   }
 
+  /** Detects entering/leaving a building interior and swaps the roof state. */
+  trackInterior() {
+    const pos = this.avatar.root.position;
+    const b = this.inCar ? null : this.world.buildingAt(pos.x, pos.z);
+    if (b === this.insideBuilding) return;
+    const previous = this.insideBuilding;
+    this.insideBuilding = b || null;
+    this.world.focusInterior(this.insideBuilding);
+    if (this.insideBuilding) {
+      this.hud.toast(`INSIDE ${this.insideBuilding.label} · [G] SEARCH`, 'good');
+      this.audio?.step?.();
+    } else if (previous) {
+      this.hud.toast(`LEFT ${previous.label}`, 'warn');
+    }
+  }
+
   updateCamera(dt) {
     const focus = this.inCar ? this.car.pos : this.avatar.root.position;
     const wantFocus = new THREE.Vector3(focus.x, focus.y + (this.inCar ? 1.5 : 1.55), focus.z);
@@ -719,6 +741,12 @@ export class Game {
       this.camYaw = angleLerp(this.camYaw, this.car.yaw, 1 - Math.exp(-2.4 * dt));
       this.camPitch = damp(this.camPitch, 0.24, 2, dt);
       this.camDist = damp(this.camDist, 13 + clamp(this.car.kmh / 22, 0, 3), 1.6, dt);
+    }
+    // tighter, higher camera indoors so walls never swallow the view
+    if (!this.inCar) {
+      const want = this.insideBuilding ? 7.4 : 9.6;
+      this.camDist = damp(this.camDist, want, 4, dt);
+      if (this.insideBuilding) this.camPitch = damp(this.camPitch, 0.52, 3, dt);
     }
     const dist = this.camDist;
     const cy = Math.cos(this.camPitch);
@@ -766,6 +794,7 @@ export class Game {
       this.avatar.root.rotation.y = this.car.yaw;
       this.avatar.root.visible = true;
       this.car.toggleAnchor(false);
+      this.trackInterior();
       this.audio.blip(300, 0.1, 'square', 0.1);
     } else {
       if (dist2(this.avatar.root.position, this.car.pos) > 6.5) { this.hud.toast('TOO FAR FROM THE RIG', 'warn'); return; }
@@ -773,6 +802,7 @@ export class Game {
       this.inCar = true;
       this.car.occupied = true;
       this.avatar.root.visible = false;
+      this.trackInterior();
       this.audio.blip(520, 0.1, 'square', 0.1);
     }
   }
@@ -879,6 +909,8 @@ export class Game {
 
   scavenge() {
     if (this.paused || this.dead) return;
+    const build = this.insideBuilding || this.world.nearestBuilding(this.pos.x, this.pos.z, 12);
+    if (build) { this.searchBuilding(build); return; }
     const stop = this.world.nearestPitStop(this.pos.x, this.pos.z, 20);
     if (!stop) { this.hud.toast('NOTHING TO SCAVENGE — FIND A PIT-STOP', 'warn'); return; }
     if (!stop.scavengeReady || stop.cooldown > 0) { this.hud.toast('THIS STOP IS PICKED CLEAN', 'warn'); return; }
@@ -907,6 +939,39 @@ export class Game {
     this.hud.toast(`SCAVENGED: ${txt}`, 'good');
     this.audio.pickup();
     this.effects.emit(new THREE.Vector3(stop.x, 1.2, stop.z), 16, { color: 0x9dffb8, spread: 2.4, up: 3.4, life: 0.8, gravity: 6 });
+  }
+
+  /** Interior looting: richer the deeper you go, boosted by the building type. */
+  searchBuilding(b) {
+    if (!b.scavengeReady || b.cooldown > 0) {
+      this.hud.toast(`${b.label} IS PICKED CLEAN — TRY ANOTHER HOUSE`, 'warn');
+      return;
+    }
+    const z = this.zone;
+    const m = b.lootMult * (b.inside ? 1.25 : 0.8);
+    const roll = (n) => Math.round(n * m);
+    const loot = {
+      scrap: roll(randInt(3, 6 + z)),
+      steel: roll(randInt(0, 1 + z)),
+      leather: roll(randInt(0, 2)),
+      chem: roll(randInt(0, 1 + Math.floor(z / 2))),
+      titanium: z >= 1 ? roll(randInt(0, 1)) : 0,
+      carbon: z >= 1 ? roll(randInt(0, 1)) : 0,
+      cores: Math.random() < 0.06 * m ? 1 : 0,
+      fuel: b.kind === 'garage' || b.kind === 'warehouse' ? randInt(4, 11) : randInt(0, 4),
+    };
+    Object.entries(loot).forEach(([k, v]) => {
+      if (k === 'fuel') { this.car.fuel = clamp(this.car.fuel + v, 0, this.car.maxFuel); return; }
+      if (v > 0) this.materials[k] = (this.materials[k] || 0) + v;
+    });
+    b.scavengeReady = false;
+    b.cooldown = 32;
+    const txt = Object.entries(loot).filter(([, v]) => v > 0)
+      .map(([k, v]) => `${v} ${k === 'fuel' ? 'L FUEL' : k.toUpperCase()}`).join(' · ');
+    this.hud.toast(`${b.label} LOOTED: ${txt || 'NOTHING USEFUL'}`, txt ? 'good' : 'warn');
+    this.audio.pickup();
+    this.effects.emit(new THREE.Vector3(b.x, b.height * 0.5, b.z), 18, { color: 0xffd98a, spread: 3.2, up: 2.6, life: 0.9, gravity: 7 });
+    this.net.event('loot', { x: b.x, z: b.z });
   }
 
   onKill(e) {
@@ -1146,23 +1211,108 @@ export class Game {
     };
     for (let i = this.hollows.length - 1; i >= 0; i--) {
       const h = this.hollows[i];
+      const px = h.group ? h.group.position.x : h.pos.x;
+      const pz = h.group ? h.group.position.z : h.pos.z;
       h.update(dt, target, hooks);
+      // solid walls: shove scavengers back out instead of letting them phase through
+      const hx = h.group ? h.group.position.x : h.pos.x;
+      const hz = h.group ? h.group.position.z : h.pos.z;
+      if (this.world.collideFoot(hx, hz, 0.45)) {
+        if (h.group) h.group.position.set(px, h.group.position.y, pz);
+        else { h.pos.x = px; h.pos.z = pz; }
+      }
       if (Math.hypot(h.pos.x - this.pos.x, h.pos.z - this.pos.z) > 420) { h.die(); this.hollows.splice(i, 1); }
     }
     for (const r of this.raiders) r.update(dt, target, raiderHooks);
   }
 
+  // ------------------------------------------------------------------ admin
+  /** Moves the rig (or the avatar on foot) to a world position. Owner panel only. */
+  teleport(x, z, { keepHeading = true } = {}) {
+    const tx = clamp(Number(x) || 0, -220, 220);
+    const tz = Number(z) || 0;
+    this.car.pos.x = tx;
+    this.car.pos.z = tz;
+    this.car.speed = 0;
+    this.car.lateral = 0;
+    if (!keepHeading) this.car.yaw = 0;
+    this.avatar.root.position.set(tx, 0, tz);
+    this.pos.set(tx, 0, tz);
+    this.camPos.set(tx + 8, 8, tz + 14);
+    this.hud.toast(`TELEPORTED TO ${tx.toFixed(0)} / ${tz.toFixed(0)}`, 'good');
+    return true;
+  }
+
+  healAll() {
+    this.hp = 100;
+    this.car.engine = 100;
+    this.car.chassis = 100;
+    this.car.tires = 100;
+    this.car.dead = false;
+    this.car.fuel = this.car.maxFuel;
+    this.hud.toast('RIG + SURVIVOR RESTORED', 'good');
+  }
+
+  spawnHollow(count = 1, radius = 22) {
+    const out = [];
+    for (let i = 0; i < count; i++) {
+      const a = rand(0, Math.PI * 2);
+      const h = new Hollow(this.scene, this.pos.x + Math.cos(a) * radius, this.pos.z + Math.sin(a) * radius, this.day);
+      this.hollows.push(h);
+      out.push(h);
+    }
+    this.hud.toast(`${count} HOLLOW${count > 1 ? 'S' : ''} SUMMONED`, 'warn');
+    return out;
+  }
+
+  spawnRaider(boss = false) {
+    const a = rand(0, Math.PI * 2);
+    const r = new RaiderCar(this.scene, this.pos.x + Math.cos(a) * 70, this.pos.z + Math.sin(a) * 70, this.day + (boss ? 10 : 0), boss);
+    this.raiders.push(r);
+    this.hud.toast(boss ? 'BOSS RIG DEPLOYED' : 'RAIDER RIG DEPLOYED', 'bad');
+    return r;
+  }
+
+  clearHostiles() {
+    [...this.hollows].forEach((h) => { h.die?.(); });
+    [...this.raiders].forEach((r) => { r.die?.(); });
+    this.hollows.length = 0;
+    this.raiders.length = 0;
+    this.hud.toast('AREA CLEARED', 'good');
+  }
+
+  clearStorms() {
+    [...this.tornadoes].forEach((t) => { t.die?.(); this.scene.remove?.(t.group); });
+    this.tornadoes.length = 0;
+    this.stormCat = 0;
+    this.hud.storm(null);
+    this.hud.toast('STORMS DISSIPATED', 'good');
+  }
+
   updateInteraction() {
     if (this.paused || this.dead) return;
-    if (this.inCar) this.hud.prompt('');
-    else {
-      const d = dist2(this.avatar.root.position, this.car.pos);
-      if (d < 6.5) this.hud.prompt('[E] ENTER THE RIG');
-      else {
-        const stop = this.world.nearestPitStop(this.pos.x, this.pos.z, 20);
-        this.hud.prompt(stop ? `[G] SCAVENGE ${stop.label}` : '');
-      }
+    if (this.inCar) {
+      const b = this.world.nearestBuilding(this.pos.x, this.pos.z, 26);
+      this.hud.prompt(b ? `${b.label} AHEAD · STOP & SEARCH ON FOOT` : '');
+      return;
     }
+
+    const d = dist2(this.avatar.root.position, this.car.pos);
+    if (d < 6.5 && !this.insideBuilding) { this.hud.prompt('[E] ENTER THE RIG'); return; }
+
+    if (this.insideBuilding) {
+      const b = this.insideBuilding;
+      this.hud.prompt(b.scavengeReady ? `[G] SEARCH ${b.label}` : `${b.label} · PICKED CLEAN`);
+      return;
+    }
+
+    const build = this.world.nearestBuilding(this.pos.x, this.pos.z, 18);
+    if (build) {
+      this.hud.prompt(build.scavengeReady ? `[G] SEARCH ${build.label}` : `[WALK IN] ${build.label}`);
+      return;
+    }
+    const stop = this.world.nearestPitStop(this.pos.x, this.pos.z, 20);
+    this.hud.prompt(stop ? `[G] SCAVENGE ${stop.label}` : '');
   }
 
   radarBlips() {
@@ -1172,6 +1322,9 @@ export class Game {
     this.raiders.forEach((r) => blips.push({ x: r.pos.x - px, z: r.pos.z - pz, kind: 'enemy', size: 3.4 }));
     this.tornadoes.forEach((t) => blips.push({ x: t.pos.x - px, z: t.pos.z - pz, kind: 'tornado' }));
     this.world.pitStops.forEach((s) => blips.push({ x: s.x - px, z: s.z - pz, kind: 'pit' }));
+    this.world.buildings.forEach((b) => blips.push({
+      x: b.x - px, z: b.z - pz, kind: 'house', size: 3.2, inside: b === this.insideBuilding,
+    }));
     this.net.peers.forEach((p) => {
       if (typeof p.x !== 'number' || typeof p.z !== 'number') return;
       blips.push({ x: p.x - px, z: p.z - pz, kind: 'peer', color: '#' + (p.color || 0x5ff0ff).toString(16).padStart(6, '0') });
@@ -1192,6 +1345,7 @@ export class Game {
   // ------------------------------------------------------------------ damage
   hurt(amount, reason = '') {
     if (this.dead || this.won) return;
+    if (this.godMode) return;
     if (this.invuln > 0 && amount < 8) return;
     this.hp -= amount;
     if (amount >= 3) {
@@ -1309,6 +1463,10 @@ export class Game {
       if (d < 60) this.audio.crash();
     } else if (e.kind === 'kill') {
       this.effects.blood(new THREE.Vector3(e.x, 1.2, e.z), new THREE.Vector3(0, 1, 0));
+    } else if (e.kind === 'admin-kick' && e.target === this.net.id) {
+      this.hud.toast('REMOVED BY THE OWNER', 'bad');
+      this.audio.alarm();
+      setTimeout(() => this.onQuit?.(), 1200);
     }
   }
 

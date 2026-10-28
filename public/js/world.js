@@ -1,5 +1,6 @@
 import * as THREE from '../vendor/three.module.js';
 import { rand, randInt, pick, clamp, lerp, canvasTex, mulberry32 } from './utils.js';
+import { createBuilding, placeBuilding, setRoofVisible, pointInside, hitsWalls, hitsFootprint, BUILDING_KINDS } from './buildings.js';
 
 export const ZONES = [
   { name: 'OAKHAVEN OUTSKIRTS', short: 'OUTSKIRTS', ground: 0x6b6153, road: 0x2b2d33, fog: 0xb9a68a, sky: 0xc0a984, sun: 0xffd9a0, amb: 0x8f96a8, night: 0.0, desc: 'DAY 1–15 · CAR MAINTENANCE & FUEL' },
@@ -38,6 +39,78 @@ function asphaltTexture() {
     }
   });
 }
+
+/* ------------------------------------------------------------ ground textures
+ * One procedural detail texture per biome (soil, cracked asphalt, sand, slag).
+ */
+function groundTexture(zone) {
+  const palette = [
+    { base: '#6b6153', a: '#7a705f', b: '#585043', grit: '#8a8069' }, // outskirts soil
+    { base: '#4b5350', a: '#556060', b: '#3e4746', grit: '#6b7a78' }, // sunken mud
+    { base: '#4e4740', a: '#5b534a', b: '#3c3630', grit: '#75695c' }, // industrial slag
+    { base: '#9a7350', a: '#a97f59', b: '#8a6544', grit: '#c09a6c' }, // canyon sand
+    { base: '#39464b', a: '#445256', b: '#2c3639', grit: '#5b6c72' }, // coastal rock
+  ][zone] || { base: '#6b6153', a: '#7a705f', b: '#585043', grit: '#8a8069' };
+
+  return canvasTex(256, 256, (ctx, w, h) => {
+    ctx.fillStyle = palette.base;
+    ctx.fillRect(0, 0, w, h);
+    for (let i = 0; i < 900; i++) {
+      ctx.fillStyle = Math.random() < 0.5 ? palette.a : palette.b;
+      const r = rand(1, 4);
+      ctx.globalAlpha = rand(0.15, 0.5);
+      ctx.fillRect(rand(0, w), rand(0, h), r, r);
+    }
+    // pebbles / gravel
+    for (let i = 0; i < 220; i++) {
+      ctx.globalAlpha = rand(0.25, 0.7);
+      ctx.fillStyle = palette.grit;
+      ctx.beginPath();
+      ctx.ellipse(rand(0, w), rand(0, h), rand(0.7, 1.9), rand(0.5, 1.4), rand(0, 3), 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // dry cracks
+    ctx.globalAlpha = 0.35;
+    ctx.strokeStyle = '#2b271f';
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 12; i++) {
+      ctx.beginPath();
+      let x = rand(0, w), y = rand(0, h);
+      ctx.moveTo(x, y);
+      for (let s2 = 0; s2 < 4; s2++) { x += rand(-20, 20); y += rand(-20, 20); ctx.lineTo(x, y); }
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  });
+}
+
+const SKY_VERT = `
+  varying vec3 vDir;
+  void main() {
+    vDir = normalize(position);
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const SKY_FRAG = `
+  uniform vec3 topColor;
+  uniform vec3 horizonColor;
+  uniform vec3 groundColor;
+  uniform vec3 sunDir;
+  uniform vec3 sunColor;
+  uniform float sunIntensity;
+  varying vec3 vDir;
+  void main() {
+    float h = clamp(vDir.y, -1.0, 1.0);
+    float up = smoothstep(-0.05, 0.65, h);
+    vec3 col = mix(horizonColor, topColor, up);
+    col = mix(groundColor, col, smoothstep(-0.35, 0.02, h));
+    float sun = pow(max(dot(normalize(vDir), normalize(sunDir)), 0.0), 220.0);
+    float glow = pow(max(dot(normalize(vDir), normalize(sunDir)), 0.0), 6.0) * 0.35;
+    col += sunColor * (sun * 2.2 + glow) * sunIntensity;
+    gl_FragColor = vec4(col, 1.0);
+  }
+`;
 
 export class World {
   constructor(scene, seed = 1) {
@@ -134,11 +207,54 @@ export class World {
     this.dust.visible = false;
 
     this.textures = { asphalt: tex };
+
+    // ---------------------------------------------------------- ground detail
+    this.groundTextures = [0, 1, 2, 3, 4].map((i) => {
+      const t = new THREE.CanvasTexture(groundTexture(i));
+      t.wrapS = t.wrapT = THREE.RepeatWrapping;
+      t.repeat.set(46, 140);
+      t.anisotropy = 4;
+      t.colorSpace = THREE.SRGBColorSpace;
+      return t;
+    });
+    this.groundTex = this.groundTextures[0];
+    this.groundMat.color.setHex(0xffffff);
+    this.groundMat.map = this.groundTex;
+    this.groundMat.needsUpdate = true;
+
+    // ------------------------------------------------------------- sky dome
+    this.skyUniforms = {
+      topColor: { value: new THREE.Color(0x5b8fc4) },
+      horizonColor: { value: new THREE.Color(0xc0a984) },
+      groundColor: { value: new THREE.Color(0x5a5245) },
+      sunDir: { value: new THREE.Vector3(0.35, 0.42, -0.84).normalize() },
+      sunColor: { value: new THREE.Color(0xffe0ad) },
+      sunIntensity: { value: 1.0 },
+    };
+    this.sky = new THREE.Mesh(
+      new THREE.SphereGeometry(880, 32, 20),
+      new THREE.ShaderMaterial({
+        uniforms: this.skyUniforms,
+        vertexShader: SKY_VERT,
+        fragmentShader: SKY_FRAG,
+        side: THREE.BackSide,
+        depthWrite: false,
+        fog: false,
+      })
+    );
+    this.sky.frustumCulled = false;
+    this.sky.renderOrder = -1;
+    this.scene.add(this.sky);
+    this.scene.background = null;
+
+    this.textures = { asphalt: tex };
     const coarse = window.matchMedia?.('(pointer: coarse)')?.matches;
     const lowEnd = Boolean(coarse && (Math.min(window.innerWidth, window.innerHeight) < 640 || (navigator.hardwareConcurrency || 8) <= 4));
     this.propBudget = lowEnd ? 56 : 88;
+    this.lowEnd = lowEnd;
     this.buildProps();
     this.buildPitStops();
+    this.buildBuildings();
   }
 
   makeWeather(count, color, size, spread) {
@@ -360,10 +476,52 @@ export class World {
     };
   }
 
+  // ------------------------------------------------------------- buildings
+  buildBuildings() {
+    // A fixed pool of enterable interiors, cycled as the player drives.
+    // Every kind gets at least one slot so the road keeps changing.
+    const pool = [
+      'house', 'store', 'garage', 'warehouse', 'house',
+      'barn', 'church', 'shack', 'bunker', 'house',
+      'warehouse', 'store',
+    ];
+    const count = this.lowEnd ? 8 : pool.length;
+    this.buildings = [];
+    for (let i = 0; i < count; i++) {
+      const kind = pool[i % pool.length];
+      const b = createBuilding(kind, { x: 0, z: 0, facing: 1 });
+      this.scene.add(b.group);
+      b.slot = i;
+      this.placeBuilding(b, -320 + i * 300, i % 2 === 0 ? -1 : 1);
+      this.buildings.push(b);
+    }
+  }
+
+  placeBuilding(b, z, side) {
+    const facing = side > 0 ? 1 : -1;           // door always looks at the road
+    const dist = rand(34, 62) + (b.kind === 'warehouse' || b.kind === 'barn' ? 14 : 0);
+    // don't stack a house on top of a pit-stop on the same shoulder
+    for (let guard = 0; guard < 6; guard++) {
+      const clash = this.pitStops.some((s) => Math.sign(s.x) === side && Math.abs(s.z - z) < 46);
+      if (!clash) break;
+      z += 118;
+    }
+    placeBuilding(b, { x: side * dist, z, facing });
+    b.scavengeReady = true;
+    b.cooldown = 0;
+    b.inside = false;
+    setRoofVisible(b, true);
+  }
+
   // --------------------------------------------------------------- queries
   isOffroad(x) { return Math.abs(x) > 13.4; }
 
   collide(x, z, r) {
+    // vehicle path: buildings are solid blocks (no driving through doorways)
+    for (const b of this.buildings) {
+      if (Math.abs(b.z - z) > b.halfD + 8) continue;
+      if (hitsFootprint(b, x, z, r + 0.6)) return b;
+    }
     for (const p of this.props) {
       if (Math.abs(p.z - z) < 6 && Math.abs(p.x - x) < 6) {
         const dx = p.x - x, dz = p.z - z;
@@ -376,6 +534,42 @@ export class World {
       if (dx * dx + dz * dz < (r + 8) * (r + 8)) return s;
     }
     return null;
+  }
+
+  /** On-foot collision: walls only, so the doorway stays walkable. */
+  collideFoot(x, z, r = 0.5) {
+    for (const p of this.props) {
+      if (Math.abs(p.z - z) < 6 && Math.abs(p.x - x) < 6) {
+        const dx = p.x - x, dz = p.z - z;
+        if (dx * dx + dz * dz < (p.radius + r) * (p.radius + r)) return p;
+      }
+    }
+    for (const b of this.buildings) {
+      if (Math.abs(b.z - z) > b.halfD + 2 || Math.abs(b.x - x) > b.halfW + 2) continue;
+      if (hitsWalls(b, x, z, r)) return b;
+    }
+    return null;
+  }
+
+  /** Building whose interior currently contains the point, if any. */
+  buildingAt(x, z, margin = 0) {
+    for (const b of this.buildings) {
+      if (pointInside(b, x, z, margin)) return b;
+    }
+    return null;
+  }
+
+  /** Closest building the player can interact with (door or interior). */
+  nearestBuilding(x, z, maxDist = 14) {
+    let best = null, bd = maxDist;
+    for (const b of this.buildings) {
+      const d = Math.min(
+        Math.hypot(b.door.x - x, b.door.z - z) - 2,
+        Math.hypot(b.x - x, b.z - z) - Math.max(b.halfW, b.halfD)
+      );
+      if (d < bd) { bd = d; best = b; }
+    }
+    return best;
   }
 
   nearestPitStop(x, z, maxDist = 16) {
@@ -394,6 +588,8 @@ export class World {
     this.ground.position.set(0, -0.01, focus.z);
     this.mountains.position.z = focus.z;
     this.roadTex.offset.y = (focus.z / 2800) * 210;
+    this.groundTex.offset.y = focus.z / 20;
+    this.sky.position.set(focus.x, 0, focus.z);
     this.stars.position.set(focus.x, 0, focus.z);
     this.sun.position.set(focus.x + 32, 48, focus.z + 26);
     this.sun.target.position.set(focus.x, 0, focus.z);
@@ -425,11 +621,39 @@ export class World {
         if (s.cooldown <= 0) { s.scavengeReady = true; s.crates.visible = true; }
       }
     }
+
+    // recycle buildings + their scavenge cooldowns
+    for (const b of this.buildings) {
+      if (b.inside) continue;                      // never teleport a building around the player
+      if (b.z - focus.z > 460) this.placeBuilding(b, focus.z - 540 - rand(0, 220), b.facing);
+      else if (focus.z - b.z > 560) this.placeBuilding(b, focus.z + 520 + rand(0, 220), b.facing);
+      if (b.cooldown > 0) {
+        b.cooldown -= dt;
+        if (b.cooldown <= 0) b.scavengeReady = true;
+      }
+    }
+  }
+
+  /** Roof peeling / reveal for the interior the player is standing in. */
+  focusInterior(build) {
+    for (const b of this.buildings) {
+      const active = b === build;
+      if (b.inside !== active) {
+        b.inside = active;
+        setRoofVisible(b, !active);
+      }
+    }
   }
 
   setZone(index, immediate = false) {
-    const z = ZONES[clamp(index, 0, ZONES.length - 1)];
-    this.groundMat.color.setHex(z.ground);
+    const zi = clamp(index, 0, ZONES.length - 1);
+    const z = ZONES[zi];
+    if (this.groundMat.map !== this.groundTextures[zi]) {
+      this.groundMat.map = this.groundTextures[zi];
+      this.groundTex = this.groundTextures[zi];
+      this.groundMat.needsUpdate = true;
+    }
+    this.groundMat.color.setHex(0xffffff);
     this.hemi.color.setHex(z.sky);
     this.hemi.groundColor.setHex(z.ground);
     this.sun.color.setHex(z.sun);
@@ -438,6 +662,20 @@ export class World {
     this.scene.background = new THREE.Color(z.sky);
     this.scene.fog.color.setHex(z.fog);
     if (immediate) this.scene.fog.near = 90;
+    this.applySky(z, this.nightFactor || 0);
+  }
+
+  /** Pushes zone + night colours into the sky dome uniforms. */
+  applySky(z, night = 0) {
+    if (!this.skyUniforms) return;
+    const top = new THREE.Color(z.sky).lerp(new THREE.Color(0x0b1526), night * 0.9);
+    const horizon = new THREE.Color(z.fog).lerp(new THREE.Color(0x121d2c), night * 0.82);
+    const ground = new THREE.Color(z.ground).lerp(new THREE.Color(0x0a1016), night * 0.88);
+    this.skyUniforms.topColor.value.copy(top);
+    this.skyUniforms.horizonColor.value.copy(horizon);
+    this.skyUniforms.groundColor.value.copy(ground);
+    this.skyUniforms.sunColor.value.setHex(z.sun).lerp(new THREE.Color(0x7fa6d8), night * 0.7);
+    this.skyUniforms.sunIntensity.value = lerp(1, 0.22, night);
   }
 
   setNight(t) {
@@ -449,6 +687,7 @@ export class World {
     this.hemi.intensity = lerp(1.15, 0.42, t);
     this.fill.intensity = lerp(0.45, 0.22, t);
     const zone = ZONES[this.zoneIndex];
+    this.applySky(zone, t);
     const sky = new THREE.Color(zone.sky).lerp(new THREE.Color(0x0a1220), t * 0.86);
     this.scene.background = sky;
     if (this.scene.fog) {

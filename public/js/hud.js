@@ -163,6 +163,17 @@ export class HUD {
       } else if (b.kind === 'pit') {
         ctx.fillStyle = '#6dffa8';
         ctx.fillRect(px - size, py - size, size * 2, size * 2);
+      } else if (b.kind === 'house') {
+        // roofed buildings: little square with a lid
+        ctx.fillStyle = b.inside ? '#ffd98a' : '#c9b48e';
+        ctx.fillRect(px - size, py - size, size * 2, size * 2);
+        ctx.strokeStyle = 'rgba(28,22,16,.65)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(px - size - 1, py - size);
+        ctx.lineTo(px, py - size - 3);
+        ctx.lineTo(px + size + 1, py - size);
+        ctx.stroke();
       } else if (b.kind === 'enemy') {
         ctx.fillStyle = '#ff9a3c';
         ctx.beginPath(); ctx.arc(px, py, size, 0, Math.PI * 2); ctx.fill();

@@ -134,8 +134,34 @@ running around by everyone else in the room.
 * **Milestones** at days 7, 15, 20, 30, 40, 45, 55, 65, 70, 78, 85, 90, 95 and 100 — boss rigs, workbench
   unlocks and the Category 5 Hypercane finale (survive 2 minutes in it to win).
 * **Pit-stops** every ~240 m: gas stations, diners, motels, military checkpoints, wreck yards.
+* **Roadside buildings you can walk into** (see below) — houses, stores, garages, barns and more.
 * **Weather:** dust storms, EMP thunderstorms, acid rain (eats hull and blades), heatwaves, gale winds,
   and drifting **tornadoes (Cat 1–5)** that pull and lift anything not anchored.
+
+## 🏚 Enterable buildings
+
+The shoulders are lined with **12 enterable structures** that recycle as you drive. Every one has a real
+interior: walls you collide with, a doorway you walk through, loot crates and a roof that peels away the
+moment you step inside.
+
+| Building | Loot multiplier | Notes |
+| --- | --- | --- |
+| `house` | ×1.35 | living room, kitchen counter, bedroom |
+| `shack` | ×1.0 | one room, thin walls — quick snatch and go |
+| `barn` | ×1.25 | big open floor, hay bales, tractor junk |
+| `warehouse` | ×1.7 | racks, pallets, the best industrial loot |
+| `store` | ×1.45 | shelves and a counter, plenty of small items |
+| `garage` | ×1.5 | lift, tool bench, **extra fuel** |
+| `church` | ×1.3 | pews, altar, candles |
+| `bunker` | ×1.8 | concrete, sandbags, military crates |
+
+How it plays:
+
+* Park, press `E` to step out, walk through the door. The roof lifts, the camera tightens and the
+  minimap marks the house you are standing in.
+* `G` searches the room — loot scales with the building type **and** an indoor bonus, then the place is
+  picked clean for 32 s. Cars cannot drive through a building; only people fit through the doorway.
+* Interiors are lit by the world sun, so a midday raid is safe and a night raid is genuinely dark.
 
 ## ⚓ Anchors and tornado physics
 
@@ -195,7 +221,9 @@ public/
   js/supabase.js      tiny Supabase client (auth + PostgREST + RPC), no SDK
   js/palette.js       body / rig colour palette
   js/game.js          run state, day cycle, crafting, combat, camera, touch
-  js/world.js         infinite highway, biomes, props, pit-stops, weather FX
+  js/world.js         infinite highway, biomes, props, pit-stops, buildings, sky, weather FX
+  js/buildings.js     enterable building factory: merged geometry, wall colliders, loot spots
+  js/admin.js         owner console UI (players, spawns, weather, teleport, bans)
   js/vehicle.js       rig mesh + arcade driving physics + anchors + damage
   js/avatar.js        blocky survivor rig, face, name tag, weapons, walk cycle
   js/enemies.js       hollows, raider cars, boss rig
@@ -204,8 +232,9 @@ public/
   js/hud.js           HUD, radar scope, workbench UI, chat, toasts
   js/effects.js       pooled particle bursts (budgeted per device)
   js/audio.js         procedural WebAudio engine/wind/impacts
-api/                  Vercel functions: /api/room, /api/health, /api/config
-supabase/schema.sql   tables, RLS policies, friend RPCs, signup trigger
+api/                  Vercel functions: /api/room, /api/health, /api/config, /api/admin
+lib/admin-auth.mjs    server-side owner check (Supabase token → username → allow-list)
+supabase/schema.sql   tables, RLS policies, friend RPCs, owner gate, bans, signup trigger
 server.mjs            static + WebSocket + polling relay + config endpoint
 tests/                headless suites (npm test)
 docs/DESIGN.md        game design document
@@ -223,6 +252,33 @@ docs/DESIGN.md        game design document
   controls, stick input, workbench, run-end hook.
 * **signed-in friends UI** — session restore, account chip, friend rows with room/day, JOIN, add/remove
   through the DOM, presence heartbeat, sign-out.
+* **interiors + owner console** — all eight building archetypes enterable, doorways walkable, walls solid,
+  roof hide/restore, interior looting + cooldown, and the admin gate: owner token verifies, a normal
+  player's token is refused, the shipped anon key cannot unlock admin, forged ban calls return 403.
+
+## ⌘ Owner console (`ghanimz`)
+
+Sign in as **`ghanimz`** and a `⌘ OWNER` button appears in the HUD (or press the backquote key).
+It is invisible for every other account.
+
+What it does: set the day, scrub time of day, force weather and biome, teleport to a pit-stop or the next
+house, heal/refuel the rig, god mode, +50 of every material, unlock workbench tier 4, spawn hollows,
+raider rigs, boss rigs and Cat 1/3/5 tornadoes, clear hostiles or storms, and inspect live stats
+(fps, entities, position, relay mode). The **players in room** list lets you teleport to, kick or ban
+anyone connected; the **ban list** is stored in Supabase and can be lifted again.
+
+It is gated twice:
+
+1. **Client** — `public/js/admin.js` only mounts for the owner username.
+2. **Server** — every privileged call (`/api/admin?action=verify|bans|ban|unban`) resends your Supabase
+   access token; the function resolves it against Supabase `/auth/v1/user` and refuses unless the
+   username is the owner. The `bans` table is protected by RLS (`public.is_owner()`), so a forged
+   client cannot read or write it even with devtools open.
+
+After pulling this version, re-run `supabase/schema.sql` once — it adds `public.admins`,
+`public.bans`, `public.owner_username()`, `public.is_owner()`, `public.ban_player()` and their policies.
+Want a second owner? Change the username in `owner_username()` **and** in `lib/admin-auth.mjs`
+(or set an `ADMIN_USERNAME` env var on Vercel).
 
 ## Legacy 2D build
 
