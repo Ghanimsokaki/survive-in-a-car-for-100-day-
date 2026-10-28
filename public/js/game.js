@@ -202,6 +202,7 @@ export class Game {
     this.dayTimer = 0;
     this.insideBuilding = null;
     this.world?.focusInterior?.(null);
+    this.world?.buildings?.forEach((b) => { b._doorOpen = false; });
     this.perks = { maxhp: 0, maxfuel: 0, armor: 0, dmg: 0, scav: 0, magnet: 0 };
     this.hpMax = 100;
     this.inventory?.items.clear();
@@ -1368,7 +1369,15 @@ export class Game {
       }
       if (Math.hypot(h.pos.x - this.pos.x, h.pos.z - this.pos.z) > 420) { h.die(); this.hollows.splice(i, 1); }
     }
-    for (const r of this.raiders) r.update(dt, target, raiderHooks);
+    for (const r of this.raiders) {
+      const px = r.pos.x, pz = r.pos.z;
+      r.update(dt, target, raiderHooks);
+      // raiders are vehicles: they may not drive through a house either
+      if (!this.world.collide(r.pos.x, r.pos.z, 1.7)) continue;
+      if (!this.world.collide(r.pos.x, pz, 1.7)) r.pos.z = pz;
+      else if (!this.world.collide(px, r.pos.z, 1.7)) r.pos.x = px;
+      else { r.pos.x = px; r.pos.z = pz; }
+    }
   }
 
   // -------------------------------------------------------------- inventory
