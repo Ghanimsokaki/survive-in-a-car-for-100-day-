@@ -423,7 +423,8 @@ export class Game {
     s.style.left = '18px';
     s.style.top = 'auto';
     s.style.bottom = 'calc(148px + env(safe-area-inset-bottom))';
-    s.style.opacity = '0.34';
+    // parked hint stays invisible: a faded ring used to sit on top of the hotbar
+    s.style.opacity = '0';
     this.stickKnob.style.left = '35px';
     this.stickKnob.style.top = '35px';
   }
