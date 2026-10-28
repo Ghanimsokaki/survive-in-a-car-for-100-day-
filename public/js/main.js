@@ -18,14 +18,18 @@ const state = {
   carColor: CAR_COLORS[0],
   room: 'highway-01',
   guest: true,
+  quality: 'auto',
 };
 
 const saveLocal = () => {
-  try { localStorage.setItem('outrun-profile', JSON.stringify({ room: state.room })); } catch {}
+  try {
+    localStorage.setItem('outrun-profile', JSON.stringify({ room: state.room, quality: state.quality }));
+  } catch {}
 };
 try {
   const saved = JSON.parse(localStorage.getItem('outrun-profile') || '{}');
   if (saved.room) state.room = saved.room;
+  if (['auto', 'low', 'medium', 'high'].includes(saved.quality)) state.quality = saved.quality;
 } catch {}
 
 // ------------------------------------------------------------------ account
@@ -318,6 +322,7 @@ async function startRun() {
       mount: $('app'),
       profile: { name: state.name, color: hexToInt(state.color), carColor: hexToInt(state.carColor) },
       room: state.room,
+      quality: state.quality,
       onQuit: () => location.reload(),
       onRunEnd: (stats) => {
         account.recordRun(stats);
@@ -446,6 +451,22 @@ async function boot() {
     $('roomInput').value = state.room;
     saveLocal();
   });
+  // graphics quality: persisted, applied on the next launch
+  const qualityRow = $('qualityRow');
+  const paintQuality = () => {
+    qualityRow?.querySelectorAll('[data-quality]').forEach((b) => {
+      b.classList.toggle('on', b.dataset.quality === state.quality);
+    });
+  };
+  qualityRow?.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-quality]');
+    if (!btn) return;
+    state.quality = btn.dataset.quality;
+    paintQuality();
+    saveLocal();
+  });
+  paintQuality();
+
   $('playBtn')?.addEventListener('click', startRun);
   [$('nameInput'), $('roomInput')].forEach((el) => el?.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') startRun();

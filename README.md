@@ -138,6 +138,11 @@ running around by everyone else in the room.
 * **Weather:** dust storms, EMP thunderstorms, acid rain (eats hull and blades), heatwaves, gale winds,
   and drifting **tornadoes (Cat 1–5)** that pull and lift anything not anchored.
 
+## ⚙️ Graphics setting
+The lobby has a **GRAPHICS** switch — `AUTO / LOW / MED / HIGH` — remembered across sessions. LOW drops the
+resolution cap, shadows and half the scenery detail; HIGH forces full density and shadows. AUTO keeps the
+old device heuristics (coarse pointer + core count + screen size).
+
 ## 🏚 Enterable buildings
 
 The shoulders are lined with **18 enterable structures** that recycle as you drive. Every one has a real

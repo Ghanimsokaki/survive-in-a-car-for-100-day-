@@ -786,3 +786,10 @@ body.touch{-webkit-user-select:none;user-select:none;overscroll-behavior:none}
   .hot-slot{min-width:40px}
   .bench-tabs button,.recipe-pager button{min-height:36px}
 }
+
+/* graphics quality segmented control in the lobby */
+#qualityRow.seg{display:flex;gap:5px}
+#qualityRow.seg button{flex:1;padding:9px 0;border-radius:7px;background:#12161f;
+  border:1px solid rgba(255,255,255,.1);color:#8d96a6;font-size:9px;letter-spacing:1.6px;cursor:pointer}
+#qualityRow.seg button:hover{border-color:rgba(255,179,71,.45);color:#e6ecf6}
+#qualityRow.seg button.on{background:rgba(255,179,71,.14);border-color:var(--amber);color:var(--amber)}

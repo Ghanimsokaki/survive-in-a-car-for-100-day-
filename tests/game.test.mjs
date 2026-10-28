@@ -152,6 +152,32 @@ g.day = 100; g.won = false; g.dead = false; g.paused = false;
 g.win();
 check('surviving day 100 wins', g.won);
 
+// manual graphics quality overrides the auto-detect
+{
+  const quiet = new Game({
+    mount: new El('div', 'app'),
+    profile: { name: 'LOW', color: 0xffb347, carColor: 0xd24a2b },
+    room: 'low-room',
+    quality: 'low',
+    onQuit: () => {},
+  });
+  check('LOW quality is honoured', quiet.quality === 'low' && quiet.pixelCap === 1, `${quiet.quality}/${quiet.pixelCap}`);
+  check('LOW quality thins the scenery', quiet.world.lowEnd === true);
+  quiet.net.close();
+  quiet.dispose?.();
+
+  const strong = new Game({
+    mount: new El('div', 'app'),
+    profile: { name: 'HIGH', color: 0xffb347, carColor: 0xd24a2b },
+    room: 'high-room',
+    quality: 'high',
+    onQuit: () => {},
+  });
+  check('HIGH quality keeps the scenery dense', strong.quality === 'high' && strong.world.lowEnd === false);
+  strong.net.close();
+  strong.dispose?.();
+}
+
 // weather has real handling costs
 {
   const { Vehicle } = await import('./app/js/vehicle.js');

@@ -113,8 +113,9 @@ const SKY_FRAG = `
 `;
 
 export class World {
-  constructor(scene, seed = 1) {
+  constructor(scene, seed = 1, quality = 'auto') {
     this.scene = scene;
+    this.quality = quality;
     this.rng = mulberry32(seed);
     this.zoneIndex = 0;
     this.props = [];
@@ -249,7 +250,9 @@ export class World {
 
     this.textures = { asphalt: tex };
     const coarse = window.matchMedia?.('(pointer: coarse)')?.matches;
-    const lowEnd = Boolean(coarse && (Math.min(window.innerWidth, window.innerHeight) < 640 || (navigator.hardwareConcurrency || 8) <= 4));
+    const lowEnd = this.quality === 'low' ? true
+      : this.quality === 'high' ? false
+      : Boolean(coarse && (Math.min(window.innerWidth, window.innerHeight) < 640 || (navigator.hardwareConcurrency || 8) <= 4));
     this.propBudget = lowEnd ? 56 : 88;
     this.lowEnd = lowEnd;
     this.buildProps();

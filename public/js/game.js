@@ -60,7 +60,7 @@ export const WEATHERS = {
 };
 
 export class Game {
-  constructor({ mount, profile, room, onQuit, onRunEnd }) {
+  constructor({ mount, profile, room, onQuit, onRunEnd, quality }) {
     this.mount = mount;
     this.profile = profile;
     this.onQuit = onQuit;
@@ -80,8 +80,9 @@ export class Game {
     this.dragLook = 0;
     this.touchMode = ('ontouchstart' in window) || navigator.maxTouchPoints > 1;
 
+    this.qualityOption = quality || 'auto';
     this.setupGraphics();
-    this.world = new World(this.scene, 1337);
+    this.world = new World(this.scene, 1337, this.quality);
     if (this.quality !== 'high') {
       this.world.sun.castShadow = this.quality === 'medium';
       this.world.sun.shadow.mapSize.set(512, 512);
@@ -141,13 +142,17 @@ export class Game {
     const smallest = Math.min(window.innerWidth, window.innerHeight);
     const cores = navigator.hardwareConcurrency || 4;
     const lowEnd = Boolean(coarse && (smallest < 640 || cores <= 4));
-    this.quality = lowEnd ? 'low' : coarse ? 'medium' : 'high';
-    this.pixelCap = lowEnd ? 1 : coarse ? 1.4 : 1.85;
+    // a manual setting always wins over the heuristics
+    this.qualityChoice = ['low', 'medium', 'high'].includes(this.qualityOption) ? this.qualityOption : 'auto';
+    this.quality = this.qualityChoice === 'auto'
+      ? (lowEnd ? 'low' : coarse ? 'medium' : 'high')
+      : this.qualityChoice;
+    this.pixelCap = this.quality === 'low' ? 1 : this.quality === 'medium' ? 1.4 : 1.85;
 
-    this.renderer = new THREE.WebGLRenderer({ antialias: !lowEnd, powerPreference: 'high-performance' });
+    this.renderer = new THREE.WebGLRenderer({ antialias: this.quality !== 'low', powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.pixelCap));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.shadowMap.enabled = !lowEnd;
+    this.renderer.shadowMap.enabled = this.quality !== 'low';
     this.renderer.shadowMap.type = this.quality === 'high' ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
