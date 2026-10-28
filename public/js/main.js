@@ -370,16 +370,26 @@ setInterval(() => {
 function phoneSetup() {
   if (isTouch || isCoarse) document.body.classList.add('touch');
   const rotate = $('rotateHint');
+  // Show the "rotate for a wider road" hint ONCE per session. Dismissing it
+  // used to be undone by the polling loop, which made the game unplayable in
+  // portrait; the portrait HUD is now usable on its own.
+  let rotateSeen = false;
+  let rotateDismissed = false;
   const sync = () => {
     if (!isPhone || !rotate) return;
+    if (rotateDismissed || rotateSeen) { rotate.classList.remove('show'); return; }
     const portrait = window.innerHeight > window.innerWidth;
-    const playing = game && game.started;
-    rotate.classList.toggle('show', Boolean(portrait && playing));
+    const playing = game && game.started && !game.dead && !game.won && !game.paused;
+    if (portrait && playing) { rotateSeen = true; rotate.classList.add('show'); }
+    else rotate.classList.remove('show');
   };
   window.addEventListener('orientationchange', () => setTimeout(sync, 220));
   window.addEventListener('resize', sync);
   setInterval(sync, 1200);
-  $('rotateDismiss')?.addEventListener('click', () => rotate?.classList.remove('show'));
+  $('rotateDismiss')?.addEventListener('click', () => {
+    rotateDismissed = true;
+    rotate?.classList.remove('show');
+  });
   if (isPhone) {
     document.querySelector('meta[name="viewport"]')
       ?.setAttribute('content', 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover');

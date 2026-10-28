@@ -12,6 +12,9 @@
  */
 import { ZONES } from './world.js';
 import { BUILDING_KINDS } from './buildings.js';
+import { ITEMS, itemName } from './items.js';
+
+const ITEM_IDS = Object.keys(ITEMS).filter((id) => ITEMS[id].kind !== 'material');
 import { WEATHERS } from './game.js';
 
 export const ADMIN_USERNAME = 'ghanimz';
@@ -122,6 +125,14 @@ export class AdminPanel {
               <button data-act="give" type="button">+50 EVERY MATERIAL</button>
               <button data-act="fuel" type="button">+60 L FUEL</button>
               <button data-act="tier" type="button">UNLOCK WORKBENCH T4</button>
+            </div>
+            <div class="admin-row">
+              <label class="wide">GIVE ITEM
+                <select id="admItem">
+                  ${ITEM_IDS.map((id) => `<option value="${id}">${itemName(id)}</option>`).join('')}
+                </select>
+              </label>
+              <button data-act="giveItem" type="button">GIVE ×5</button>
             </div>
           </section>
 
@@ -348,6 +359,12 @@ export class AdminPanel {
         g.hud.toast('+50 OF EVERY MATERIAL', 'good');
         break;
       }
+      case 'giveItem': {
+        const id = this.el.querySelector('#admItem')?.value || 'medkit';
+        const stored = g.inventory.add(id, 5);
+        g.hud.toast(stored ? `+${stored}× ${itemName(id)}` : 'PACK FULL', stored ? 'good' : 'warn');
+        break;
+      }
       case 'fuel': {
         g.car.fuel = Math.min(g.car.maxFuel, g.car.fuel + 60);
         g.hud.toast('+60 L FUEL', 'good');
@@ -485,6 +502,8 @@ export class AdminPanel {
         ['RELAY', g.netStatus?.mode || '—'],
         ['OWNER GATE', this.verifyReason],
         ['BUILDING POOL', `${g.world.buildings.length} live`],
+        ['DROPS ON GROUND', String(g.loot?.count || 0)],
+        ['BACKPACK', `${g.inventory?.slotsUsed ?? 0}/${g.inventory?.capacity ?? 0}`],
       ];
       s.innerHTML = rows.map(([k, v]) => `<div class="adm-stat"><span>${k}</span><b>${v}</b></div>`).join('');
     }

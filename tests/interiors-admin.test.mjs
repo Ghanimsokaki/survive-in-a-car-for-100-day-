@@ -109,13 +109,19 @@ console.log('\ninterior looting');
   g.pos.copy(g.avatar.root.position);
   g.trackInterior();
   check('standing indoors is detected', g.insideBuilding === b);
-  const before = g.materials.scrap || 0;
+  const haul = () => Object.values(g.materials).reduce((a, c) => a + (c || 0), 0)
+    + g.inventory.list().reduce((a, i) => a + i.qty, 0);
+  const before = haul();
   g.scavenge();
-  check('interior search yields materials', (g.materials.scrap || 0) > before, `scrap ${before} → ${g.materials.scrap}`);
+  check('interior search scatters drops', g.loot.count > 0, `${g.loot.count} drops`);
+  check('nothing is banked until it is picked up', haul() === before);
+  g.loot.drops.forEach((d) => d.group.position.set(g.pos.x, 0, g.pos.z));
+  g.updateLoot(1 / 60);
+  check('walking over the drops collects them', haul() > before, `${before} → ${haul()}`);
   check('building goes on cooldown', b.scavengeReady === false && b.cooldown > 0);
-  const second = g.materials.scrap || 0;
+  const second = haul();
   g.scavenge();
-  check('a picked-clean building yields nothing more', (g.materials.scrap || 0) === second);
+  check('a picked-clean building yields nothing more', haul() === second);
 }
 
 // --------------------------------------------------------------- admin gate

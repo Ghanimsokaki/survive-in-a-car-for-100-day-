@@ -162,9 +162,34 @@ How it plays:
 
 * Park, press `E` to step out, walk through the door. The roof lifts, the camera tightens and the
   minimap marks the house you are standing in.
-* `G` searches the room — loot scales with the building type **and** an indoor bonus, then the place is
-  picked clean for 32 s. Cars cannot drive through a building; only people fit through the doorway.
+* `G` searches the room and **scatters physical drops** on the floor — you have to walk over them to
+  collect anything (driving over drops works too). Loot scales with the building type and an indoor
+  bonus, then the place is picked clean for 32 s. Cars cannot drive through a building; only people
+  fit through the doorway.
 * Interiors are lit by the world sun, so a midday raid is safe and a night raid is genuinely dark.
+
+## 🎒 Loot, backpack and hotbar
+
+Everything you scavenge exists in the world first:
+
+* crates bust open and spill **stacks on the ground** — scrap, steel, medkits, fuel cans, flares, gear;
+* drops bob, glow and drift toward you, then land in your pack when you actually touch them
+  (auto-collect radius grows with the `magnet` upgrade perk);
+* materials (scrap / steel / titanium / carbon / leather / chem / cores) feed the workbench;
+* items live in a **30-slot backpack** (`I` or the 🎒 button) and an **8-slot hotbar**;
+* tap an item in the backpack to pin it to a hotbar slot, then press **1–8** to use it —
+  medkits heal, fuel cans refuel, repair kits patch the hull, flares light the road.
+
+## 🛠 1000 crafting recipes
+
+The workbench holds **1,015 recipes**: the original 17 hand-tuned staples plus **1,000 procedurally
+generated ones** across five tabs — WEAPONS · REPAIRS & FUEL · RIG UPGRADES · GEAR · CONSUMABLES.
+Generation is seeded, so recipe `gen-0500` is the same on every device.
+
+* **search** by name or effect, **page** through 24 cards at a time, filter by tab;
+* generated upgrades install **permanent perks**: `+MAX HP`, `+TANK`, `+DAMAGE RESIST`, `+WEAPON DAMAGE`,
+  `+SCAVENGE YIELD`, `+PICKUP RANGE` (each capped, shown as MAXED when full);
+* generated repairs/fuel/consumables resolve immediately or drop items into your pack.
 
 ## ⚓ Anchors and tornado physics
 
@@ -232,7 +257,11 @@ public/
   js/enemies.js       hollows, raider cars, boss rig
   js/tornado.js       funnel visuals, swirl debris, pull/lift force field
   js/net.js           multi-transport multiplayer client
-  js/hud.js           HUD, radar scope, workbench UI, chat, toasts
+  js/hud.js           HUD, radar scope, paginated workbench, chat, toasts
+  js/items.js         item + drop-table catalogue (materials, medkits, fuel cans, gear)
+  js/loot.js          physical loot drops: meshes, magnet drift, pickup, expiry
+  js/inventory.js     backpack model + hotbar/backpack UI
+  js/recipes.js       15 staples + 1000 generated recipes (seeded, effects)
   js/effects.js       pooled particle bursts (budgeted per device)
   js/audio.js         procedural WebAudio engine/wind/impacts
 api/                  Vercel functions: /api/room, /api/health, /api/config, /api/admin
@@ -255,9 +284,12 @@ docs/DESIGN.md        game design document
   controls, stick input, workbench, run-end hook.
 * **signed-in friends UI** — session restore, account chip, friend rows with room/day, JOIN, add/remove
   through the DOM, presence heartbeat, sign-out.
-* **interiors + owner console** — all eight building archetypes enterable, doorways walkable, walls solid,
+* **interiors + owner console** — all eleven building archetypes enterable, doorways walkable, walls solid,
   roof hide/restore, interior looting + cooldown, and the admin gate: owner token verifies, a normal
   player's token is refused, the shipped anon key cannot unlock admin, forged ban calls return 403.
+* **loot + inventory + recipes** — 1000 generated recipes unique and browsable, drops only bank when you
+  stand on them, magnet/expiry behaviour, stack caps, hotbar pinning, medkit/fuel/repair use, 24-per-page
+  workbench paging + search, and every one of the 1,015 recipes crafting without an error.
 
 ## ⌘ Owner console (`ghanimz`)
 

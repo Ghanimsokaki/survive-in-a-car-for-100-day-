@@ -65,9 +65,16 @@ check('boss rig appears on day 40', g.raiders.some((r) => r.boss));
 const stop = g.world.pitStops[0];
 g.car.pos.set(stop.x + 6, 0, stop.z + 6);
 step(3);
-const scrapBefore = g.materials.scrap;
+// scavenging now scatters physical drops — they only count once picked up
+const haul = () => Object.values(g.materials).reduce((a, b) => a + (b || 0), 0)
+  + g.inventory.list().reduce((a, i) => a + i.qty, 0);
+const haulBefore = haul();
 g.scavenge();
-check('scavenging yields loot', g.materials.scrap > scrapBefore, `${g.materials.scrap} scrap`);
+check('scavenging scatters drops (nothing banked yet)', g.loot.count > 0 && haul() === haulBefore, `${g.loot.count} drops`);
+const grab = g.inCar ? g.car.pos : g.avatar.root.position;
+g.loot.drops.forEach((d) => d.group.position.set(grab.x, 0, grab.z));
+g.updateLoot(1 / 60);
+check('picking the drops up fills the pack', haul() > haulBefore, `${haulBefore} → ${haul()}`);
 
 g.materials = { scrap: 99, steel: 99, titanium: 99, carbon: 99, leather: 99, chem: 99, cores: 99 };
 g.benchTier = 4;
