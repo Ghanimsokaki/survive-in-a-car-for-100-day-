@@ -332,7 +332,18 @@ async function startRun() {
     game.hud.toast('DAY 1 · OAKHAVEN OUTSKIRTS', 'warn');
     setTimeout(() => game?.hud.toast(isPhone ? 'LEFT STICK DRIVES · TAP ⚓ TO ANCHOR' : 'COLLECT FUEL · REACH THE HIGHWAY', ''), 1800);
     if (account.signedIn) account.setPresence({ status: 'playing', room: state.room, day: 1 });
-    admin = mountAdmin({ game, account, onBan: (u) => game?.hud.toast(`@${u} BANNED FROM THE ROOM`, 'warn') });
+    admin = mountAdmin({
+      game,
+      account,
+      survivorName: state.name,
+      onBan: (u) => game?.hud.toast(`@${u} BANNED FROM THE ROOM`, 'warn'),
+    });
+    if (admin) {
+      game.hud.toast(
+        admin.mode === 'guest' ? 'OWNER CONSOLE READY — PRESS ⌘ OWNER OR THE BACKQUOTE KEY' : 'OWNER CONSOLE UNLOCKED',
+        'good'
+      );
+    }
   } catch (err) {
     console.error(err);
     $('loading').classList.add('gone');

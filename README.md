@@ -140,7 +140,7 @@ running around by everyone else in the room.
 
 ## 🏚 Enterable buildings
 
-The shoulders are lined with **12 enterable structures** that recycle as you drive. Every one has a real
+The shoulders are lined with **16 enterable structures** that recycle as you drive. Every one has a real
 interior: walls you collide with, a doorway you walk through, loot crates and a roof that peels away the
 moment you step inside.
 
@@ -153,6 +153,9 @@ moment you step inside.
 | `store` | ×1.45 | shelves and a counter, plenty of small items |
 | `garage` | ×1.5 | lift, tool bench, **extra fuel** |
 | `church` | ×1.3 | pews, altar, candles |
+| `clinic` | ×2.0 | exam tables, IV stands, drug cabinets — best chem loot |
+| `depot` | ×1.6 | bus garage: wrecked van, luggage racks, two loot spots |
+| `farmhouse` | ×1.4 | wood stove, long table, pantry shelves |
 | `bunker` | ×1.8 | concrete, sandbags, military crates |
 
 How it plays:
@@ -260,6 +263,11 @@ docs/DESIGN.md        game design document
 
 Sign in as **`ghanimz`** and a `⌘ OWNER` button appears in the HUD (or press the backquote key).
 It is invisible for every other account.
+
+**No Supabase configured yet?** The game then has no accounts at all, so it falls back to the local
+survivor name: type `ghanimz` in the lobby name field and the console opens in *local owner* mode
+(badge reads `LOCAL OWNER · NO ACCOUNTS`). The moment Supabase credentials exist, that shortcut is
+disabled and only the real `ghanimz` account — server-verified — can open it.
 
 What it does: set the day, scrub time of day, force weather and biome, teleport to a pit-stop or the next
 house, heal/refuel the rig, god mode, +50 of every material, unlock workbench tier 4, spawn hollows,

@@ -139,6 +139,14 @@ class Builder {
     return this._push(key, new THREE.BoxGeometry(w, h, d), x, y, z, ry, true);
   }
 
+  roofCyl(key, rt, rb, h, seg, x, y, z) {
+    return this._push(key, new THREE.CylinderGeometry(rt, rb, h, seg), x, y, z, 0, true);
+  }
+
+  roofSphere(key, r, x, y, z, seg = 8) {
+    return this._push(key, new THREE.SphereGeometry(r, seg, Math.max(4, seg / 2)), x, y, z, 0, true);
+  }
+
   /** Wall slab + matching collider (local space). */
   wall(key, w, h, d, x, y, z) {
     this.box(key, w, h, d, x, y, z);
@@ -195,6 +203,12 @@ function shell(b, { w, d, h, wallKey, floorKey, doorWidth = 2.6, doorHeight = 2.
   b.box('trim', 0.1, doorHeight, doorWidth, frontX - t / 2 - 0.02, doorHeight / 2, 0);
   b.box('concrete', 1.6, 0.14, doorWidth + 0.9, frontX - 0.9, 0.07, 0);
 
+  // driveway slab + a door light so buildings read from the road at night
+  b.box('concrete', 5.2, 0.08, doorWidth + 1.4, frontX - 2.9, 0.04, 0);
+  b.box('metalDark', 0.12, 2.15, 0.12, frontX - 1.15, 1.08, -(doorWidth / 2 + 1.25));
+  b.sphere('lamp', 0.17, frontX - 1.15, 2.16, -(doorWidth / 2 + 1.25), 8);
+  b.box('metalDark', 0.3, 0.08, 0.3, frontX - 1.15, 2.24, -(doorWidth / 2 + 1.25));
+
   // corner posts
   [[-w / 2 + t / 2, -d / 2 + t / 2], [w / 2 - t / 2, -d / 2 + t / 2], [-w / 2 + t / 2, d / 2 - t / 2], [w / 2 - t / 2, d / 2 - t / 2]]
     .forEach(([x, z]) => b.box('trim', t + 0.1, h, t + 0.1, x, h / 2, z));
@@ -229,9 +243,14 @@ function crateStack(b, x, z, n = 2) {
   b.lootAt(x, z);
 }
 
+/**
+ * Hanging work lamp. Built into the roof group so it disappears together with
+ * the ceiling when the player steps inside — no floating lamps from above.
+ */
 function lamp(b, x, z, h) {
-  b.cyl('metalDark', 0.03, 0.03, 0.9, 5, x, h - 0.45, z);
-  b.sphere('lamp', 0.14, x, h - 0.92, z, 8);
+  b.roofCyl('metalDark', 0.03, 0.03, 0.9, 5, x, h - 0.45, z);
+  b.roofSphere('lamp', 0.14, x, h - 0.92, z, 8);
+  b.roofBox('metalDark', 0.42, 0.06, 0.42, x, h - 0.03, z);
 }
 
 /* ---------------------------------------------------------------- archetypes */
@@ -415,6 +434,99 @@ const KINDS = {
     crateStack(b, w / 2 - 2.4, d / 2 - 2.4, 1);
     b.lootAt(w / 2 - 2.4, 0);
     return { w, d, h, label: 'CHAPEL', lootMult: 1.3 };
+  },
+
+  clinic(b) {
+    const w = 13.5, d = 10, h = 3.4;
+    shell(b, { w, d, h, wallKey: 'sidingPale', floorKey: 'floorTile', doorWidth: 3.0, doorHeight: 3.0 });
+    // reception + waiting chairs
+    b.box('trim', 4.4, 1.05, 0.9, -1.0, 0.58, -1.2);
+    b.box('woodPale', 0.45, 0.9, 0.45, 2.1, 0.5, -1.2);
+    for (let i = 0; i < 3; i++) {
+      b.box('fabric', 0.6, 0.1, 1.4, -3.0 + i * 0.8, 0.55, 1.6);
+      b.box('fabric', 0.6, 0.55, 0.12, -3.0 + i * 0.8, 0.85, 2.25);
+    }
+    // examination tables with IV stands
+    for (let i = 0; i < 2; i++) {
+      const z = 2.4 - i * 3.4;
+      b.box('metal', 2.4, 0.16, 0.9, w / 2 - 2.4, 0.72, z);
+      b.box('bedding', 2.2, 0.14, 0.8, w / 2 - 2.4, 0.86, z);
+      [-1.0, 1.0].forEach((dx) => b.box('metalDark', 0.1, 0.68, 0.1, w / 2 - 2.4 + dx, 0.36, z));
+      b.cyl('metal', 0.04, 0.04, 1.9, 6, w / 2 - 3.9, 0.98, z);
+      b.sphere('glassLit', 0.16, w / 2 - 3.9, 1.96, z, 6);
+    }
+    // supply cabinet + medical cross
+    b.box('metal', 0.9, 2.2, 2.6, -w / 2 + 1.1, 1.1, -d / 2 + 2.4);
+    b.box('glassLit', 0.1, 1.5, 2.0, -w / 2 + 1.6, 1.25, -d / 2 + 2.4);
+    b.box('neonCyan', 0.9, 0.26, 0.1, 0, 2.55, -d / 2 + 0.55);
+    b.box('neonCyan', 0.26, 0.9, 0.1, 0, 2.55, -d / 2 + 0.55);
+    lamp(b, 1.2, 0.6, h);
+    lamp(b, -2.0, 2.6, h);
+    crateStack(b, w / 2 - 1.8, d / 2 - 2.0, 1);
+    b.lootAt(-w / 2 + 2.4, 0.2);
+    return { w, d, h, label: 'FIELD CLINIC', lootMult: 2.0 };
+  },
+
+  depot(b) {
+    const w = 18, d = 13, h = 5.0;
+    shell(b, { w, d, h, wallKey: 'concrete', floorKey: 'floorConcrete', doorWidth: 7, doorHeight: 4.4, windows: false });
+    // parked maintenance van (hollow shell, you can walk around it)
+    b.box('metalDark', 4.6, 1.9, 2.4, 2.4, 1.35, -d / 2 + 3.2);
+    b.box('rust', 2.6, 1.4, 2.36, 4.4, 1.2, -d / 2 + 3.2);
+    b.box('glass', 1.5, 0.8, 2.42, 0.6, 1.9, -d / 2 + 3.2);
+    [-1.2, 1.2].forEach((dz) => {
+      [-1.4, 1.6, 4.2].forEach((dx) => {
+        b.cyl('tyre', 0.52, 0.52, 0.36, 10, 2.4 + dx, 0.52, -d / 2 + 3.2 + dz);
+      });
+    });
+    // luggage racks + pallet stacks
+    for (let i = 0; i < 3; i++) {
+      b.box('metal', 3.6, 0.12, 1.2, -w / 2 + 3.2, 0.6 + i * 0.8, -d / 2 + 2.0);
+      b.box('metalDark', 0.1, 0.8, 0.1, -w / 2 + 1.6, 0.4 + i * 0.8, -d / 2 + 2.0);
+      b.box('metalDark', 0.1, 0.8, 0.1, -w / 2 + 4.8, 0.4 + i * 0.8, -d / 2 + 2.0);
+    }
+    for (let i = 0; i < 3; i++) b.box('woodPale', 1.6, 0.16, 1.4, -w / 2 + 3.4 + i * 0.2, 0.1 + i * 0.17, d / 2 - 3.0);
+    // inspection pit + tool wall
+    b.box('oil', 4.0, 0.05, 2.0, 1.0, 0.1, 2.6);
+    b.box('woodPale', 4.4, 0.9, 0.2, -6.0, 1.4, -d / 2 + 0.6);
+    for (let i = 0; i < 6; i++) b.box('metal', 0.1, 0.5, 0.12, -7.9 + i * 0.62, 1.45, -d / 2 + 0.72);
+    // overhead strip lights
+    for (let i = 0; i < 3; i++) b.roofBox('lamp', 3.0, 0.1, 0.3, -5.0 + i * 5.0, h - 0.35, 0);
+    lamp(b, 0, 0, h);
+    crateStack(b, w / 2 - 2.2, d / 2 - 2.2, 3);
+    b.lootAt(w / 2 - 2.2, -d / 2 + 3.0);
+    b.lootAt(-w / 2 + 3.4, d / 2 - 3.4);
+    return { w, d, h, label: 'BUS DEPOT', lootMult: 1.6 };
+  },
+
+  farmhouse(b) {
+    const w = 14, d = 10.5, h = 3.6;
+    shell(b, { w, d, h, wallKey: 'woodDark', floorKey: 'floorWood', doorWidth: 3.0, doorHeight: 3.0 });
+    // long kitchen table + benches
+    b.box('woodPale', 3.6, 0.12, 1.4, 0.6, 0.76, 1.2);
+    [-0.6, 1.6].forEach((dx) => [-0.15, 0.5].forEach((dz) =>
+      b.box('wood', 0.12, 0.72, 0.12, 0.6 + dx, 0.36, 1.2 + dz * 2)));
+    b.box('woodPale', 3.2, 0.1, 0.5, 0.6, 0.44, 0.1);
+    b.box('woodPale', 3.2, 0.1, 0.5, 0.6, 0.44, 2.3);
+    // wood stove with flue
+    b.box('rust', 1.5, 1.3, 1.3, -w / 2 + 1.6, 0.66, -d / 2 + 1.6);
+    b.box('metalDark', 1.1, 0.5, 1.34, -w / 2 + 1.6, 0.72, -d / 2 + 1.6);
+    b.cyl('metalDark', 0.14, 0.14, 2.2, 8, -w / 2 + 1.6, 2.1, -d / 2 + 1.6);
+    // pantry shelves + hanging pots
+    b.box('wood', 3.0, 0.08, 0.6, w / 2 - 2.4, 0.9, -d / 2 + 0.9);
+    b.box('wood', 3.0, 0.08, 0.6, w / 2 - 2.4, 1.6, -d / 2 + 0.9);
+    for (let i = 0; i < 4; i++) b.box(pick(['goodsC', 'crate', 'goodsA']), 0.34, 0.3, 0.3, w / 2 - 3.6 + i * 0.7, 1.05, -d / 2 + 0.9);
+    for (let i = 0; i < 3; i++) b.roofSphere('metalDark', 0.13, -1.0 + i * 1.1, h - 0.85, -1.0, 8);
+    // bed + wardrobe
+    b.box('woodDark', 2.0, 0.42, 1.6, w / 2 - 2.2, 0.3, d / 2 - 2.0);
+    b.box('bedding', 1.9, 0.22, 1.5, w / 2 - 2.2, 0.6, d / 2 - 2.0);
+    b.box('woodDark', 1.4, 2.0, 0.6, w / 2 - 0.9, 1.05, d / 2 - 3.6);
+    lamp(b, 0.8, 1.0, h);
+    lamp(b, -2.6, -2.0, h);
+    crateStack(b, -w / 2 + 2.2, d / 2 - 2.0, 2);
+    b.lootAt(-w / 2 + 3.4, -d / 2 + 3.2);
+    b.lootAt(w / 2 - 2.2, 1.2);
+    return { w, d, h, label: 'FARMHOUSE', lootMult: 1.4 };
   },
 
   bunker(b) {

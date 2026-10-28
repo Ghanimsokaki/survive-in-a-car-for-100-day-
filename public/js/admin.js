@@ -11,6 +11,7 @@
  * Open with the `⌘ ADMIN` button or the backquote key.
  */
 import { ZONES } from './world.js';
+import { BUILDING_KINDS } from './buildings.js';
 import { WEATHERS } from './game.js';
 
 export const ADMIN_USERNAME = 'ghanimz';
@@ -20,15 +21,31 @@ export function isOwnerUsername(username) {
   return String(username || '').trim().toLowerCase() === ADMIN_USERNAME;
 }
 
+/**
+ * Decides how (if at all) this player may open the console.
+ *   'account' → signed in as the owner; the server re-verifies the token
+ *   'guest'   → no account system configured at all, and the local survivor
+ *               name is the owner's — single-player/offline builds only
+ * Never both: as soon as Supabase is configured, only the real account counts.
+ */
+export function ownerAccess(account, survivorName) {
+  if (isOwnerUsername(account?.username)) return 'account';
+  const accountsOff = account ? account.canUseAccounts === false : true;
+  if (accountsOff && isOwnerUsername(survivorName)) return 'guest';
+  return null;
+}
+
 const MATERIALS = ['scrap', 'steel', 'titanium', 'carbon', 'leather', 'chem', 'cores'];
 
 const html = (strings, ...values) => strings.reduce((out, s, i) => out + s + (values[i] ?? ''), '');
 
 export class AdminPanel {
-  constructor({ game, account, onBan }) {
+  constructor({ game, account, onBan, survivorName }) {
     this.game = game;
     this.account = account;
     this.onBan = onBan || (() => {});
+    this.survivorName = survivorName || '';
+    this.mode = ownerAccess(account, this.survivorName);
     this.open = false;
     this.verified = false;
     this.verifyReason = 'checking';
@@ -125,6 +142,14 @@ export class AdminPanel {
               <button data-act="clearStorms" type="button">CLEAR STORMS</button>
               <button data-act="nextBuilding" type="button">RESHUFFLE BUILDINGS</button>
             </div>
+            <div class="admin-row">
+              <label class="wide">DROP A BUILDING
+                <select id="admBuildingKind">
+                  ${BUILDING_KINDS.map((k) => `<option value="${k}">${k.toUpperCase()}</option>`).join('')}
+                </select>
+              </label>
+              <button data-act="placeBuilding" type="button">PLACE AHEAD</button>
+            </div>
           </section>
 
           <section class="admin-sec">
@@ -191,8 +216,13 @@ export class AdminPanel {
 
   /** Confirms with the server that the signed-in account really is the owner. */
   async verify() {
-    const name = this.account?.username;
-    if (!isOwnerUsername(name)) {
+    if (this.mode === 'guest') {
+      this.verified = true;
+      this.verifyReason = 'guest_owner';
+      this.setBadge('LOCAL OWNER · NO ACCOUNTS', 'warn');
+      return true;
+    }
+    if (!this.mode) {
       this.verifyReason = 'not_owner';
       this.verified = false;
       this.setBadge('WRONG ACCOUNT', 'bad');
@@ -233,7 +263,7 @@ export class AdminPanel {
   async toggle() { return this.open ? this.hide() : this.show(); }
 
   async show() {
-    if (!isOwnerUsername(this.account?.username)) {
+    if (!this.mode) {
       // silent for everyone else — no console hint that a panel exists
       return false;
     }
@@ -292,6 +322,13 @@ export class AdminPanel {
       case 'skipToBuilding': {
         const b = g.world.buildings.reduce((a, c) => (Math.abs(c.z - g.pos.z) < Math.abs(a.z - g.pos.z) ? c : a));
         if (b) g.teleport(b.door.x - 6, b.door.z);
+        break;
+      }
+      case 'placeBuilding': {
+        const kind = this.el.querySelector('#admBuildingKind')?.value || 'house';
+        const side = g.pos.x >= 0 ? 1 : -1;
+        const b = g.world.spawnBuilding(kind, g.pos.x + side * 26, g.pos.z + 18, side);
+        g.hud.toast(`${b.label} PLACED — WALK IN AND SEARCH`, 'good');
         break;
       }
       case 'nextBuilding': {
@@ -447,6 +484,7 @@ export class AdminPanel {
         ['ROOM', g.net.room || '—'],
         ['RELAY', g.netStatus?.mode || '—'],
         ['OWNER GATE', this.verifyReason],
+        ['BUILDING POOL', `${g.world.buildings.length} live`],
       ];
       s.innerHTML = rows.map(([k, v]) => `<div class="adm-stat"><span>${k}</span><b>${v}</b></div>`).join('');
     }
@@ -490,9 +528,10 @@ export class AdminPanel {
 }
 
 /** Mounts the console only for the owner account; returns null for everyone else. */
-export function mountAdmin({ game, account, onBan }) {
-  if (!isOwnerUsername(account?.username)) return null;
-  const panel = new AdminPanel({ game, account, onBan });
+export function mountAdmin({ game, account, onBan, survivorName }) {
+  const mode = ownerAccess(account, survivorName);
+  if (!mode) return null;
+  const panel = new AdminPanel({ game, account, onBan, survivorName });
   document.body.classList.add('owner');
   const fab = document.getElementById('adminBtn');
   if (fab) {

@@ -481,11 +481,11 @@ export class World {
     // A fixed pool of enterable interiors, cycled as the player drives.
     // Every kind gets at least one slot so the road keeps changing.
     const pool = [
-      'house', 'store', 'garage', 'warehouse', 'house',
-      'barn', 'church', 'shack', 'bunker', 'house',
-      'warehouse', 'store',
+      'house', 'store', 'garage', 'warehouse', 'house', 'clinic',
+      'barn', 'church', 'shack', 'bunker', 'farmhouse', 'house',
+      'depot', 'warehouse', 'store', 'farmhouse',
     ];
-    const count = this.lowEnd ? 8 : pool.length;
+    const count = this.lowEnd ? 10 : pool.length;
     this.buildings = [];
     for (let i = 0; i < count; i++) {
       const kind = pool[i % pool.length];
@@ -499,18 +499,28 @@ export class World {
 
   placeBuilding(b, z, side) {
     const facing = side > 0 ? 1 : -1;           // door always looks at the road
-    const dist = rand(34, 62) + (b.kind === 'warehouse' || b.kind === 'barn' ? 14 : 0);
-    // don't stack a house on top of a pit-stop on the same shoulder
-    for (let guard = 0; guard < 6; guard++) {
-      const clash = this.pitStops.some((s) => Math.sign(s.x) === side && Math.abs(s.z - z) < 46);
-      if (!clash) break;
-      z += 118;
+    const big = b.kind === 'warehouse' || b.kind === 'barn' || b.kind === 'depot' || b.kind === 'church';
+    const dist = rand(34, 62) + (big ? 14 : 0);
+    // don't stack a house on a pit-stop or another house on the same shoulder
+    for (let guard = 0; guard < 8; guard++) {
+      const hitsStop = this.pitStops.some((s) => Math.sign(s.x) === side && Math.abs(s.z - z) < 46);
+      const hitsHouse = this.buildings.some((o) => o !== b && Math.sign(o.x) === side && Math.abs(o.z - z) < 78);
+      if (!hitsStop && !hitsHouse) break;
+      z += 104;
     }
     placeBuilding(b, { x: side * dist, z, facing });
     b.scavengeReady = true;
     b.cooldown = 0;
     b.inside = false;
     setRoofVisible(b, true);
+  }
+
+  /** Owner-console helper: drops a fresh building beside the player. */
+  spawnBuilding(kind, x, z, facing = 1) {
+    const b = createBuilding(kind, { x, z, facing });
+    this.scene.add(b.group);
+    this.buildings.push(b);
+    return b;
   }
 
   // --------------------------------------------------------------- queries

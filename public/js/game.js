@@ -1323,7 +1323,8 @@ export class Game {
     this.tornadoes.forEach((t) => blips.push({ x: t.pos.x - px, z: t.pos.z - pz, kind: 'tornado' }));
     this.world.pitStops.forEach((s) => blips.push({ x: s.x - px, z: s.z - pz, kind: 'pit' }));
     this.world.buildings.forEach((b) => blips.push({
-      x: b.x - px, z: b.z - pz, kind: 'house', size: 3.2, inside: b === this.insideBuilding,
+      x: b.x - px, z: b.z - pz, kind: 'house', size: 3.2,
+      inside: b === this.insideBuilding, ready: b.scavengeReady,
     }));
     this.net.peers.forEach((p) => {
       if (typeof p.x !== 'number' || typeof p.z !== 'number') return;

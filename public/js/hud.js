@@ -165,7 +165,7 @@ export class HUD {
         ctx.fillRect(px - size, py - size, size * 2, size * 2);
       } else if (b.kind === 'house') {
         // roofed buildings: little square with a lid
-        ctx.fillStyle = b.inside ? '#ffd98a' : '#c9b48e';
+        ctx.fillStyle = b.inside ? '#ffd98a' : b.ready === false ? '#6f6455' : '#c9b48e';
         ctx.fillRect(px - size, py - size, size * 2, size * 2);
         ctx.strokeStyle = 'rgba(28,22,16,.65)';
         ctx.lineWidth = 1;

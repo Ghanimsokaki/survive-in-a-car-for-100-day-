@@ -8,7 +8,7 @@ installDOM({ width: 1280, height: 720 });
 
 const { Game } = await import('./app/js/game.js');
 const { createBuilding, BUILDING_KINDS, pointInside, hitsWalls, placeBuilding, setRoofVisible } = await import('./app/js/buildings.js');
-const { isOwnerUsername, mountAdmin, AdminPanel } = await import('./app/js/admin.js');
+const { isOwnerUsername, mountAdmin, AdminPanel, ownerAccess } = await import('./app/js/admin.js');
 const { ZONES } = await import('./app/js/world.js');
 
 const problems = [];
@@ -20,7 +20,9 @@ const check = (label, cond, extra = '') => {
 // ---------------------------------------------------------------- buildings
 console.log('\nenterable locations');
 {
-  check('eight building archetypes', BUILDING_KINDS.length >= 8, BUILDING_KINDS.join(','));
+  check('eleven building archetypes', BUILDING_KINDS.length >= 11, BUILDING_KINDS.join(','));
+  check('clinics, depots and farmhouses exist',
+    ['clinic', 'depot', 'farmhouse'].every((k) => BUILDING_KINDS.includes(k)));
   check('houses are included', BUILDING_KINDS.includes('house'));
 
   for (const kind of BUILDING_KINDS) {
@@ -123,6 +125,16 @@ console.log('\nowner gate (client)');
   check('casing does not matter', isOwnerUsername('GhanimZ'));
   check('everyone else is refused', !isOwnerUsername('ghanimz2') && !isOwnerUsername('survivor') && !isOwnerUsername('') && !isOwnerUsername(null));
   check('shared helper agrees', isOwnerName('ghanimz') && !isOwnerName('bob'));
+
+  // offline builds: the local survivor name is the only identity there is
+  check('guest owner works when accounts are off',
+    ownerAccess({ canUseAccounts: false, username: 'GUEST' }, 'ghanimz') === 'guest');
+  check('guest owner is refused once accounts exist',
+    ownerAccess({ canUseAccounts: true, username: 'GUEST' }, 'ghanimz') === null);
+  check('signed-in owner uses the account path',
+    ownerAccess({ canUseAccounts: true, username: 'ghanimz' }, 'WANDERER') === 'account');
+  check('a guest called something else gets nothing',
+    ownerAccess({ canUseAccounts: false, username: 'GUEST' }, 'WANDERER') === null);
 }
 
 console.log('\nowner gate (server)');
@@ -230,6 +242,11 @@ console.log('\nowner console UI');
   const godBefore = Boolean(g.godMode);
   panel.act('god');
   check('console toggles god mode', g.godMode === !godBefore);
+  const buildingsBefore = g.world.buildings.length;
+  panel.act('placeBuilding');
+  check('console drops a building', g.world.buildings.length === buildingsBefore + 1,
+    `${buildingsBefore} → ${g.world.buildings.length}`);
+
   panel.act('clearHostiles');
   panel.act('heal');
   check('console heals the rig', g.car.chassis === 100);
