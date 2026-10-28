@@ -315,6 +315,28 @@ console.log('\ntossing loot back on the ground');
   g.avatar.root.position.set(7, 0, 30);
 }
 
+console.log('\nnight is worth the risk');
+{
+  g.world.setNight(0);
+  check('daylight pays normally', g.nightBonus === 1);
+  g.world.setNight(1);
+  check('searching after dark pays 25% more', g.nightBonus === 1.25, `${g.nightBonus}`);
+  const b = g.world.buildings[2];
+  b.scavengeReady = true; b.cooldown = 0;
+  g.loot.clear();
+  g.inCar = false;
+  g.pos.set(b.x, 0, b.z);
+  g.avatar.root.position.copy(g.pos);
+  g.insideBuilding = b;
+  g.scavenge();
+  check('night haul still lands on the floor', g.loot.count > 0, `${g.loot.count} drops`);
+  g.world.setNight(0);
+  g.insideBuilding = null;
+  g.loot.clear();
+  g.pos.set(7, 0, 30);
+  g.avatar.root.position.set(7, 0, 30);
+}
+
 console.log('\nco-op loot');
 {
   g.loot.clear();

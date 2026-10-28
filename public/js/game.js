@@ -990,7 +990,7 @@ export class Game {
     const stacks = rollLoot(Math.random, {
       zone: this.zone,
       kind: stop.kind,
-      lootMult: 1 + (this.perks?.scav || 0),
+      lootMult: (1 + (this.perks?.scav || 0)) * this.nightBonus,
       rolls: 3,
     });
     this.scatterLoot(stop.x, stop.z, stacks, { spread: 4.2 });
@@ -1000,6 +1000,11 @@ export class Game {
     this.hud.toast(`CRATES BUSTED OPEN — GRAB THE ${stacks.length} DROPS`, 'warn');
     this.audio.pickup();
     this.effects.emit(new THREE.Vector3(stop.x, 1.2, stop.z), 16, { color: 0x9dffb8, spread: 2.4, up: 3.4, life: 0.8, gravity: 6 });
+  }
+
+  /** Searching after dark pays 25% more — the storm is the price. */
+  get nightBonus() {
+    return (this.world?.nightFactor || 0) > 0.55 ? 1.25 : 1;
   }
 
   /**
@@ -1093,7 +1098,7 @@ export class Game {
     const stacks = rollLoot(Math.random, {
       zone: this.zone,
       kind: b.kind,
-      lootMult: b.lootMult * (indoors ? 1.2 : 0.7) * (1 + (this.perks?.scav || 0)),
+      lootMult: b.lootMult * (indoors ? 1.2 : 0.7) * this.nightBonus * (1 + (this.perks?.scav || 0)),
       inside: indoors,
       rolls: 3,
     });
@@ -1108,7 +1113,8 @@ export class Game {
     });
     b.scavengeReady = false;
     b.cooldown = 32;
-    this.hud.toast(`${b.label} TURNED OVER — ${stacks.length} DROPS ${indoors ? 'ON THE FLOOR' : 'ON THE PORCH'}`, 'warn');
+    const bonus = this.nightBonus > 1 ? ' · NIGHT BONUS' : '';
+    this.hud.toast(`${b.label} TURNED OVER — ${stacks.length} DROPS ${indoors ? 'ON THE FLOOR' : 'ON THE PORCH'}${bonus}`, 'warn');
     this.audio.pickup();
     this.effects.emit(new THREE.Vector3(b.x, b.height * 0.5, b.z), 14, { color: 0xffd98a, spread: 3.2, up: 2.6, life: 0.9, gravity: 7 });
     this.net.event('loot', { x: b.x, z: b.z });
@@ -1120,19 +1126,21 @@ export class Game {
     if (e instanceof RaiderCar || e.boss) {
       this.effects.explosion(at, e.boss ? 1.8 : 1);
       this.audio.explosion ? this.audio.explosion() : this.audio.crash();
-      this.materials.steel = (this.materials.steel || 0) + randInt(2, 4);
-      this.materials.scrap = (this.materials.scrap || 0) + randInt(2, 5);
-      if (Math.random() < 0.3) this.materials.titanium = (this.materials.titanium || 0) + 1;
-      if (Math.random() < 0.16) this.materials.carbon = (this.materials.carbon || 0) + 1;
-      if (Math.random() < 0.12) this.materials.cores = (this.materials.cores || 0) + 1;
-      this.hud.toast('RAIDER RIG DESTROYED · SALVAGE COLLECTED', 'good');
+      // wrecks leave a haul on the tarmac — you still have to drive over it
+      const haul = rollLoot(Math.random, {
+        zone: this.zone, kind: e.boss ? 'boss' : 'raider', lootMult: e.boss ? 2.2 : 1.5, rolls: e.boss ? 4 : 3,
+      });
+      haul.push({ id: 'steel', qty: randInt(2, 4) }, { id: 'scrap', qty: randInt(2, 5) });
+      this.scatterLoot(e.pos.x, e.pos.z, haul, { spread: 3.2, grace: 0.8 });
+      this.hud.toast(e.boss ? 'BOSS RIG DOWN — HAUL ON THE ROAD' : 'RAIDER RIG DESTROYED — GRAB THE SALVAGE', 'good');
       this.net.event('boom', { x: e.pos.x, z: e.pos.z });
       const idx = this.raiders.indexOf(e);
       if (idx >= 0) this.raiders.splice(idx, 1);
     } else {
       this.effects.blood(at, new THREE.Vector3(0, 1, 0));
-      if (Math.random() < 0.55) this.materials.scrap = (this.materials.scrap || 0) + randInt(1, 2);
-      if (Math.random() < 0.2) this.materials.leather = (this.materials.leather || 0) + 1;
+      // scavengers carried something; the corpse drops it on the ground
+      const haul = rollLoot(Math.random, { zone: this.zone, kind: 'hollow', lootMult: 1, rolls: 2 });
+      this.scatterLoot(e.pos.x, e.pos.z, haul, { spread: 2.0, grace: 0.6 });
       this.net.event('kill', { x: e.pos.x, z: e.pos.z });
       const idx = this.hollows.indexOf(e);
       if (idx >= 0) this.hollows.splice(idx, 1);

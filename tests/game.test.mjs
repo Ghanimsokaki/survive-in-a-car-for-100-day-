@@ -104,6 +104,25 @@ g.avatar.root.rotation.y = Math.PI / 2;
 g.weapon = 'broadsword'; g.syncWeapon(); g.durability.broadsword = 350;
 for (let i = 0; i < 6; i++) { g.time += 1; g.lastAttack = 0; g.attack(); step(4); }
 check('broadsword kills a hollow', h.dead);
+check('the corpse spills loot instead of banking it', g.loot.count > 0, `${g.loot.count} drops`);
+{
+  const banked = () => Object.values(g.materials).reduce((a, c) => a + (c || 0), 0)
+    + g.inventory.list().reduce((a, i) => a + i.qty, 0);
+  const before = banked();
+  g.loot.drops.forEach((d) => d.group.position.set(g.avatar.root.position.x, 0, g.avatar.root.position.z));
+  for (let i = 0; i < 50; i++) g.updateLoot(1 / 60);
+  check('standing on the corpse loot banks it', banked() > before, `${before} → ${banked()}`);
+}
+// a boss rig pays out a better haul
+{
+  const boss = new Hollow(g.scene, 0, 0, 6);
+  boss.boss = true;
+  g.loot.clear();
+  g.onKill(boss);
+  const ids = g.loot.drops.map((d) => d.item);
+  check('boss wrecks drop boss-grade loot', ids.includes('cores') && ids.includes('blueprint'), ids.join(','));
+  g.loot.clear();
+}
 g.toggleCar();
 check('player re-enters the rig', g.inCar);
 

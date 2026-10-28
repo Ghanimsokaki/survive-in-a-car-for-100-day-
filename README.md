@@ -178,7 +178,10 @@ How it plays:
 Everything you scavenge exists in the world first:
 
 * crates bust open and spill **stacks on the ground** — scrap, steel, medkits, fuel cans, flares, gear;
-* search a house from the **doorstep** and the haul spills onto the porch (interiors pay more);
+* search a house from the **doorstep** and the haul spills onto the porch (interiors pay more, and
+  searching after dark pays a **25% night bonus** — the storm is the price);
+* corpses are lootable too: hollows drop **dogtags**, raiders leave **ammo/fuel/repair kits**,
+  boss rigs pay **cores, blueprints and titanium** — all as physical drops you drive over;
   off the porch you cannot reach it, so the drops always stay walkable;
 * drops bob, glow and drift toward you, then land in your pack when you actually touch them
   (auto-collect radius grows with the `magnet` upgrade perk);

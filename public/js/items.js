@@ -116,5 +116,22 @@ export function rollLoot(rng = Math.random, { zone = 0, kind = '', lootMult = 1,
   }
   // a garage/warehouse always pays a little fuel out
   if (kind === 'garage' || kind === 'depot' || kind === 'gas') out.set('fuelcan', (out.get('fuelcan') || 0) + 1);
+  // corpses are a different table: what a survivor was carrying when they went down
+  if (kind === 'hollow') {
+    out.set('dogtag', (out.get('dogtag') || 0) + 1);
+    if (rng() < 0.45) out.set('bandage', (out.get('bandage') || 0) + 1);
+    if (rng() < 0.2) out.set('medkit', (out.get('medkit') || 0) + 1);
+  }
+  if (kind === 'raider') {
+    out.set('ammo', (out.get('ammo') || 0) + 2);
+    if (rng() < 0.5) out.set('fuelcan', (out.get('fuelcan') || 0) + 1);
+    if (rng() < 0.35) out.set('repairkit', (out.get('repairkit') || 0) + 1);
+    if (rng() < 0.25) out.set('tirepatch', (out.get('tirepatch') || 0) + 1);
+  }
+  if (kind === 'boss') {
+    out.set('cores', (out.get('cores') || 0) + 1);
+    out.set('blueprint', (out.get('blueprint') || 0) + 1);
+    out.set('titanium', (out.get('titanium') || 0) + 2);
+  }
   return [...out].map(([id, qty]) => ({ id, qty }));
 }
