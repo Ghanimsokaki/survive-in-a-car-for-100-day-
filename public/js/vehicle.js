@@ -213,7 +213,9 @@ export class Vehicle {
     this.chassis = clamp(this.chassis + 12, 0, 100);
   }
 
-  update(dt, ctrl, world, onScrape) {
+  update(dt, ctrl, world, onScrape, env = {}) {
+    const grip = clamp(env.grip ?? 1, 0.4, 1);
+    const wind = env.wind || 0;
     const throttle = ctrl.forward;
     const braking = ctrl.back;
     this.hitTimer = Math.max(0, this.hitTimer - dt);
@@ -261,13 +263,16 @@ export class Vehicle {
     const steerAuthority = clamp(1.35 - speedAbs / 42, 0.42, 1.3) * clamp(speedAbs / 4, 0, 1) * Math.sign(this.speed || 1);
     const targetSteer = steerIn * steerAuthority;
     this.steer = damp(this.steer, targetSteer, 8, dt);
-    this.yaw += this.steer * 1.55 * dt;
-    this.lateral = damp(this.lateral, -this.steer * speedAbs * 0.06, 4, dt);
+    // wet / dusty / icy tarmac: less of the input reaches the road and the tail steps out more
+    this.yaw += this.steer * 1.55 * grip * dt;
+    this.lateral = damp(this.lateral, -this.steer * speedAbs * (0.06 / grip), 4 - (1 - grip) * 1.4, dt);
 
     // apply motion
     const fwd = this.forward;
     this.pos.x += (fwd.x * this.speed + Math.cos(this.yaw) * this.lateral) * dt;
     this.pos.z += (fwd.z * this.speed - Math.sin(this.yaw) * this.lateral) * dt;
+    // crosswind shoves the rig sideways; you have to steer into it
+    if (wind) this.pos.x += wind * dt;
     this.distance += Math.abs(this.speed) * dt;
 
     // keep on the map

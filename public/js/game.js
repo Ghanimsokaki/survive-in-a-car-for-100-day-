@@ -48,13 +48,15 @@ const MILESTONES = {
 };
 
 export const WEATHERS = {
-  clear: { label: 'CLEAR', danger: false },
-  dust: { label: 'DUST STORM', danger: true },
-  heat: { label: 'HEATWAVE 41°C', danger: true },
-  rain: { label: 'DRIVING RAIN', danger: false },
-  acid: { label: 'ACID RAIN', danger: true },
-  storm: { label: 'EMP THUNDERSTORM', danger: true },
-  gale: { label: 'GALE WINDS', danger: true },
+  // grip  = how much of your steering the tyres actually deliver
+  // wind  = sideways push in m/s² (gales shove the rig toward the shoulder)
+  clear: { label: 'CLEAR', danger: false, grip: 1, wind: 0 },
+  dust: { label: 'DUST STORM', danger: true, grip: 0.86, wind: 1.1 },
+  heat: { label: 'HEATWAVE 41°C', danger: true, grip: 0.97, wind: 0 },
+  rain: { label: 'DRIVING RAIN', danger: false, grip: 0.82, wind: 0.4 },
+  acid: { label: 'ACID RAIN', danger: true, grip: 0.74, wind: 0.5 },
+  storm: { label: 'EMP THUNDERSTORM', danger: true, grip: 0.88, wind: 1.6 },
+  gale: { label: 'GALE WINDS', danger: true, grip: 0.9, wind: 3.2 },
 };
 
 export class Game {
@@ -540,10 +542,15 @@ export class Game {
     // controls
     const throttle = clamp(this.keys.forward - this.keys.back, -1, 1);
     if (this.inCar) {
+      const wx = WEATHERS[this.weather] || WEATHERS.clear;
       this.car.update(dt, {
         forward: this.keys.forward, back: this.keys.back,
         left: this.keys.left, right: this.keys.right, boost: this.keys.boost,
-      }, this.world, (dmg) => this.onCarScrape(dmg));
+      }, this.world, (dmg) => this.onCarScrape(dmg), {
+        grip: wx.grip,
+        // gusting sideways push; bigger when you are already fast
+        wind: (wx.wind || 0) * (0.6 + 0.4 * Math.sin(this.time * 0.7)) * clamp(0.35 + this.car.kmh / 90, 0.35, 1.4),
+      });
       this.pos.copy(this.car.pos);
       this.pos.y = 0;
       this.distance = this.car.distance;
@@ -688,6 +695,9 @@ export class Game {
     this.world.setWeather(kind);
     this.hud.setWeather(info.label, info.danger);
     if (kind === 'acid') this.hud.toast('ACID RAIN — HULL AND BLADES DEGRADING', 'bad');
+    if (kind === 'gale') this.hud.toast('GALE WINDS — HOLD THE WHEEL', 'warn');
+    if (kind === 'rain') this.hud.toast('WET ASPHALT — LONGER BRAKING', 'warn');
+    if (kind === 'dust') this.hud.toast('DUST STORM — VISIBILITY DROPPING', 'warn');
   }
 
   spawnTornado(category) {

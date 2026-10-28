@@ -152,6 +152,33 @@ g.day = 100; g.won = false; g.dead = false; g.paused = false;
 g.win();
 check('surviving day 100 wins', g.won);
 
+// weather has real handling costs
+{
+  const { Vehicle } = await import('./app/js/vehicle.js');
+  const drive = (env, { left = 0, frames = 60 } = {}) => {
+    const v = new Vehicle({ color: 0xffffff });
+    v.pos.set(0, 0, 0);
+    for (let i = 0; i < frames; i++) {
+      v.update(1 / 60, { forward: 1, back: 0, left, right: 0, boost: 0 }, g.world, () => {}, env);
+    }
+    return v;
+  };
+  const dry = drive({ grip: 1, wind: 0 });
+  check('a straight run stays on the centre line when it is calm', Math.abs(dry.pos.x) < 0.01, `${dry.pos.x.toFixed(2)}`);
+  const blown = drive({ grip: 1, wind: 3 });
+  check('a gale pushes the rig sideways', blown.pos.x > 1.5, `${blown.pos.x.toFixed(2)}`);
+
+  const gripDry = drive({ grip: 1, wind: 0 }, { left: 1 });
+  const gripWet = drive({ grip: 0.72, wind: 0 }, { left: 1 });
+  const turned = (v) => Math.abs(v.yaw - Math.PI);
+  check('wet tarmac turns in less than dry tarmac', turned(gripWet) < turned(gripDry),
+    `${turned(gripWet).toFixed(2)} vs ${turned(gripDry).toFixed(2)}`);
+
+  g.setWeather('gale');
+  check('weather changes grip for the live rig', g.weather === 'gale');
+  g.setWeather('clear');
+}
+
 // fuzz: random input + actions for 8k frames
 g.resetRun();
 let fuzzErr = '';
