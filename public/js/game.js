@@ -70,6 +70,8 @@ export class Game {
     this.dead = false;
     this.won = false;
     this.kills = 0;
+    this.itemsLooted = 0;
+    this.craftedCount = 0;
     this.shakeAmt = 0;
     this.time = 0;
     this.hudTimer = 0;
@@ -190,6 +192,8 @@ export class Game {
     this.durability = {};
     this.hp = 100;
     this.kills = 0;
+    this.itemsLooted = 0;
+    this.craftedCount = 0;
     this.dead = false;
     this.won = false;
     this.paused = false;
@@ -1009,6 +1013,7 @@ export class Game {
             this.loot.spawn(pos.x, pos.z, [{ id: stack.id, qty: stack.qty - stored }], { spread: 0.6 });
           }
         }
+        this.itemsLooted += 1;
         this.notePickup(stack.id, stack.qty);
       }
       this.hud.inv = this.materials;
@@ -1123,6 +1128,7 @@ export class Game {
     }
 
     for (const [k, v] of Object.entries(r.cost)) this.materials[k] -= v;
+    this.craftedCount += 1;
 
     if (r.weapon) {
       this.owned.add(r.weapon);
@@ -1538,10 +1544,15 @@ export class Game {
       { k: 'DAYS SURVIVED', v: this.day },
       { k: 'DISTANCE', v: `${(this.distance / 1000).toFixed(1)} KM` },
       { k: 'SCAVENGERS DOWN', v: this.kills },
+      { k: 'ITEMS LOOTED', v: this.itemsLooted },
+      { k: 'ITEMS CRAFTED', v: this.craftedCount },
       { k: 'ZONE REACHED', v: ZONES[this.zone].short },
     ]);
     this.net.event('boom', { x: this.pos.x, z: this.pos.z });
-    this.onRunEnd?.({ day: this.day, distance: Math.round(this.distance), kills: this.kills, won: false });
+    this.onRunEnd?.({
+      day: this.day, distance: Math.round(this.distance), kills: this.kills,
+      itemsLooted: this.itemsLooted, crafted: this.craftedCount, won: false,
+    });
   }
 
   win() {
@@ -1555,10 +1566,15 @@ export class Game {
       { k: 'DAYS SURVIVED', v: 100 },
       { k: 'DISTANCE', v: `${(this.distance / 1000).toFixed(1)} KM` },
       { k: 'SCAVENGERS DOWN', v: this.kills },
+      { k: 'ITEMS LOOTED', v: this.itemsLooted },
+      { k: 'ITEMS CRAFTED', v: this.craftedCount },
       { k: 'STATUS', v: 'ESCAPED' },
     ]);
     this.net.event('win', { x: this.pos.x, z: this.pos.z });
-    this.onRunEnd?.({ day: 100, distance: Math.round(this.distance), kills: this.kills, won: true });
+    this.onRunEnd?.({
+      day: 100, distance: Math.round(this.distance), kills: this.kills,
+      itemsLooted: this.itemsLooted, crafted: this.craftedCount, won: true,
+    });
   }
 
   // ------------------------------------------------------------ multiplayer

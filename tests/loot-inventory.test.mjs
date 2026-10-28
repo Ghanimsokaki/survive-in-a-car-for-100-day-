@@ -173,6 +173,15 @@ console.log('\nworkbench with 1000 recipes');
     try { g.craft(r.id); } catch (e) { err = `${r.id}: ${e.message}`; break; }
   }
   check('all 1000+ recipes craft without errors', !err, err);
+  check('the workbench counted the crafts that landed', g.craftedCount > 0,
+    `${g.craftedCount} of ${ALL_RECIPES.length} attempts`);
+  // one guaranteed craft must move the tally by exactly one
+  Object.keys(g.materials).forEach((k) => { g.materials[k] = 9999; });
+  g.benchTier = 4;
+  const tally = g.craftedCount;
+  const freebie = ALL_RECIPES.find((r) => !r.weapon && !r.upgrade && r.effect?.type === 'give');
+  g.craft(freebie.id);
+  check('a successful craft increments the tally once', g.craftedCount === tally + 1, freebie.id);
   g.toggleBench(false);
 }
 
@@ -246,6 +255,19 @@ console.log('\nsearching a house from the doorstep');
   check('you cannot rummage a house from across the road', g.loot.count === before && b2.scavengeReady === true);
   g.pos.set(7, 0, 30);
   g.avatar.root.position.set(7, 0, 30);
+}
+
+console.log('\nrun summary');
+{
+  g.dead = false; g.won = false;
+  g.die();
+  const summary = g.hud.el.goStats.innerHTML;
+  check('the wreck screen reports looted items', /ITEMS LOOTED/.test(summary));
+  check('the wreck screen reports crafted items', /ITEMS CRAFTED/.test(summary));
+  check('the pack and bench are stowed on death', g.invUI.open === false && g.hud.benchOpen === false);
+  g.dead = false; g.won = false; g.paused = false;
+  g.hud.hideGameOver?.();
+  g.hp = 100;
 }
 
 console.log('\nbackpack filters');
