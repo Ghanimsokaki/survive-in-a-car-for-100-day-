@@ -20,6 +20,7 @@ const suites = [
   ['account.test.mjs', 'ACCOUNTS + FRIENDS'],
   ['app.test.mjs', 'GUEST UI FLOW'],
   ['app-auth.test.mjs', 'SIGNED-IN FRIENDS UI'],
+  ['hud-frame.test.mjs', 'HUD FRAME + ORIENTATION'],
 ];
 
 await run(process.execPath, ['build.mjs']);

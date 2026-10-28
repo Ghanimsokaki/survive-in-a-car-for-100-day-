@@ -310,6 +310,15 @@ async function startRun() {
   saveLocal();
   account.saveProfile({ display_name: state.name, body_color: state.color, car_color: state.carColor });
 
+  // phones: go fullscreen + lock to landscape before the world is measured,
+  // so the HUD lays itself out for the orientation the player will actually use
+  if (isPhone && !landscapeTried) {
+    await Promise.race([
+      goLandscape(),
+      new Promise((resolve) => setTimeout(() => resolve(false), 700)),
+    ]);
+  }
+
   const btn = $('playBtn');
   if (btn) btn.innerHTML = 'WARMING THE ENGINE…';
   $('lobby').classList.remove('show');
@@ -372,6 +381,31 @@ setInterval(() => {
 }, 21_000);
 
 // ------------------------------------------------------------ phone handling
+/**
+ * Best-effort landscape lock. Android Chrome / Samsung Internet only allow
+ * `screen.orientation.lock()` while the page is fullscreen, so we ask for both;
+ * iOS refuses both and falls back to the rotate hint. Never throws, never blocks.
+ */
+let landscapeTried = false;
+async function goLandscape() {
+  if (!isPhone) return false;
+  landscapeTried = true;
+  try {
+    const el = document.documentElement;
+    if (!document.fullscreenElement && el?.requestFullscreen) {
+      await el.requestFullscreen({ navigationUI: 'hide' });
+    }
+  } catch {}
+  try {
+    const orientation = typeof screen !== 'undefined' ? screen.orientation : null;
+    if (orientation?.lock) {
+      await orientation.lock('landscape');
+      return true;
+    }
+  } catch {}
+  return false;
+}
+
 function phoneSetup() {
   if (isTouch || isCoarse) document.body.classList.add('touch');
   const rotate = $('rotateHint');
@@ -394,6 +428,13 @@ function phoneSetup() {
   $('rotateDismiss')?.addEventListener('click', () => {
     rotateDismissed = true;
     rotate?.classList.remove('show');
+  });
+  $('rotateLock')?.addEventListener('click', async () => {
+    const locked = await goLandscape();
+    if (locked || window.innerWidth > window.innerHeight) {
+      rotateDismissed = true;
+      rotate?.classList.remove('show');
+    }
   });
   if (isPhone) {
     document.querySelector('meta[name="viewport"]')
