@@ -315,6 +315,11 @@ export class Game {
       }
     });
 
+    // browsers can leave the audio graph suspended until a gesture — re-arm it
+    const arm = () => { try { this.audio.init(); } catch {} };
+    window.addEventListener('pointerdown', arm, { once: false });
+    window.addEventListener('keydown', arm, { once: false });
+
     if (this.touchMode) this.buildTouchButtons();
   }
 
