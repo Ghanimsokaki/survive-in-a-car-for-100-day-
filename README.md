@@ -173,12 +173,18 @@ How it plays:
 Everything you scavenge exists in the world first:
 
 * crates bust open and spill **stacks on the ground** — scrap, steel, medkits, fuel cans, flares, gear;
+* search a house from the **doorstep** and the haul spills onto the porch (interiors pay more);
+  off the porch you cannot reach it, so the drops always stay walkable;
 * drops bob, glow and drift toward you, then land in your pack when you actually touch them
   (auto-collect radius grows with the `magnet` upgrade perk);
 * materials (scrap / steel / titanium / carbon / leather / chem / cores) feed the workbench;
 * items live in a **30-slot backpack** (`I` or the 🎒 button) and an **8-slot hotbar**;
 * tap an item in the backpack to pin it to a hotbar slot, then press **1–8** to use it —
-  medkits heal, fuel cans refuel, repair kits patch the hull, flares light the road.
+  medkits heal, fuel cans refuel, repair kits patch the hull, flares light the road;
+* the pack sorts itself (usables → gear → raw salvage) and filters by **ALL / USABLE / GEAR / SALVAGE**
+  with live counts, so a full 30-slot pack never turns into a wall of icons;
+* every usable cell carries its own **USE** button — phones never have to hunt for a hotbar slot;
+* **Esc** puts the bench *and* the backpack away and unpauses; opening one stows the other.
 
 ## 🛠 1000 crafting recipes
 

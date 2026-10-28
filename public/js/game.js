@@ -277,7 +277,14 @@ export class Game {
         const slot = Number(e.code.slice(5)) - 1;
         this.invUI?.useSlot(slot);
       }
-      if (e.code === 'Escape') { this.hud.closeBench(); this.paused = false; }
+      if (e.code === 'Escape') {
+        // Escape is the universal "put that away" key: bench, pack, or both.
+        const hadBench = !!this.hud.benchOpen;
+        const hadPack = !!this.invUI?.open;
+        if (hadBench) this.hud.closeBench();
+        if (hadPack) this.invUI.hide();
+        if ((hadBench || hadPack) && !this.dead && !this.won) this.paused = false;
+      }
       if (e.code === 'Enter') { e.preventDefault(); this.focusChat(); }
     });
     window.addEventListener('keyup', (e) => {
@@ -922,8 +929,20 @@ export class Game {
 
   scavenge() {
     if (this.paused || this.dead) return;
-    const build = this.insideBuilding || this.world.nearestBuilding(this.pos.x, this.pos.z, 12);
-    if (build) { this.searchBuilding(build); return; }
+    const build = this.insideBuilding || this.world.nearestBuilding(this.pos.x, this.pos.z, 10);
+    if (build) {
+      // from the road you can only ransack what you can actually reach
+      if (this.insideBuilding !== build) {
+        const door = build.door || build;
+        const reach = dist2(this.pos, door);
+        if (reach > 8) {
+          this.hud.toast(`${build.label} IS OUT OF REACH — WALK UP TO THE DOOR`, 'warn');
+          return;
+        }
+      }
+      this.searchBuilding(build);
+      return;
+    }
     const stop = this.world.nearestPitStop(this.pos.x, this.pos.z, 20);
     if (!stop) { this.hud.toast('NOTHING TO SCAVENGE — FIND A PIT-STOP', 'warn'); return; }
     if (!stop.scavengeReady || stop.cooldown > 0) { this.hud.toast('THIS STOP IS PICKED CLEAN', 'warn'); return; }
@@ -993,7 +1012,7 @@ export class Game {
         this.notePickup(stack.id, stack.qty);
       }
       this.hud.inv = this.materials;
-      this.hud.refreshBench?.();
+      if (this.hud.benchOpen) this.hud.refreshBench?.();
     }
     this.flushPickups(dt);
   }
@@ -1004,22 +1023,26 @@ export class Game {
       this.hud.toast(`${b.label} IS PICKED CLEAN — TRY ANOTHER HOUSE`, 'warn');
       return;
     }
+    const indoors = this.insideBuilding === b;
     const stacks = rollLoot(Math.random, {
       zone: this.zone,
       kind: b.kind,
-      lootMult: b.lootMult * (b.inside ? 1.2 : 0.85) * (1 + (this.perks?.scav || 0)),
-      inside: Boolean(b.inside),
+      lootMult: b.lootMult * (indoors ? 1.2 : 0.7) * (1 + (this.perks?.scav || 0)),
+      inside: indoors,
       rolls: 3,
     });
-    // scatter around the building's loot spots (or across the floor if it has none)
-    const spots = b.lootSpots?.length ? b.lootSpots : [{ x: b.x, z: b.z }];
+    // Rummaging from the doorstep spills everything onto the porch: loot you
+    // cannot walk to is the same as no loot, so the drops stay reachable.
+    const spots = indoors
+      ? (b.lootSpots?.length ? b.lootSpots : [{ x: b.x, z: b.z }])
+      : [{ x: b.door?.x ?? b.x, z: b.door?.z ?? b.z }];
     spots.forEach((spot, i) => {
       const chunk = stacks.filter((_, idx) => idx % spots.length === i);
-      this.scatterLoot(spot.x, spot.z, chunk, { spread: 2.4 });
+      this.scatterLoot(spot.x, spot.z, chunk, { spread: indoors ? 2.4 : 1.8 });
     });
     b.scavengeReady = false;
     b.cooldown = 32;
-    this.hud.toast(`${b.label} TURNED OVER — ${stacks.length} DROPS ON THE FLOOR`, 'warn');
+    this.hud.toast(`${b.label} TURNED OVER — ${stacks.length} DROPS ${indoors ? 'ON THE FLOOR' : 'ON THE PORCH'}`, 'warn');
     this.audio.pickup();
     this.effects.emit(new THREE.Vector3(b.x, b.height * 0.5, b.z), 14, { color: 0xffd98a, spread: 3.2, up: 2.6, life: 0.9, gravity: 7 });
     this.net.event('loot', { x: b.x, z: b.z });
@@ -1507,6 +1530,8 @@ export class Game {
     this.dead = true;
     this.hp = 0;
     this.paused = true;
+    this.invUI?.hide();
+    this.hud.closeBench();
     this.audio.crash();
     this.hud.storm(null);
     this.hud.showGameOver('WRECKED', 'The highway claimed another survivor.', [
@@ -1523,6 +1548,8 @@ export class Game {
     if (this.won || this.dead) return;
     this.won = true;
     this.paused = true;
+    this.invUI?.hide();
+    this.hud.closeBench();
     this.hud.storm(null);
     this.hud.showGameOver('YOU LIVED', '100 days. One rig. The coast is yours.', [
       { k: 'DAYS SURVIVED', v: 100 },

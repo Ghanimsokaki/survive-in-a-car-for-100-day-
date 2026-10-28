@@ -7,7 +7,7 @@
  *   kits, flares, gear.
  * · Eight hotbar slots, bound to keys 1–8 (and tappable on a phone).
  */
-import { ITEMS, MATERIALS, itemName, itemGlyph, itemColor, isUsable } from './items.js';
+import { ITEMS, MATERIALS, itemName, itemGlyph, itemColor, itemKind, isUsable } from './items.js';
 
 export const HOTBAR_SLOTS = 8;
 export const PACK_SLOTS = 30;
@@ -100,6 +100,24 @@ export class Inventory {
 /* ------------------------------------------------------------------ UI ---- */
 const $ = (id) => document.getElementById(id);
 
+/** Backpack tabs — the pack mixes consumables, gear and salvage, so let people narrow it. */
+export const FILTERS = [
+  { id: 'all', label: 'ALL', test: () => true },
+  { id: 'use', label: 'USABLE', test: (it) => isUsable(it.id) },
+  { id: 'gear', label: 'GEAR', test: (it) => itemKind(it.id) === 'gear' },
+  { id: 'mat', label: 'SALVAGE', test: (it) => itemKind(it.id) === 'material' },
+];
+
+const KIND_RANK = { consumable: 0, gear: 1, material: 2 };
+
+/** Usables float to the top of the list, then gear, then raw salvage; ties broken by name. */
+export function sortItems(list) {
+  return [...list].sort((a, b) => {
+    const k = (KIND_RANK[itemKind(a.id)] ?? 3) - (KIND_RANK[itemKind(b.id)] ?? 3);
+    return k || String(a.name).localeCompare(String(b.name));
+  });
+}
+
 export class InventoryUI {
   constructor(inventory, { onUse, getMaterials } = {}) {
     this.inv = inventory;
@@ -107,12 +125,13 @@ export class InventoryUI {
     this.getMaterials = getMaterials || (() => ({}));
     this.selected = 0;
     this.open = false;
+    this.filter = 'all';
     this.el = {
       bar: $('hotbar'),
       panel: $('invPanel'),
       grid: $('invGrid'),
       mats: $('invMats'),
-      mats: $('invMats'),
+      filter: $('invFilter'),
       empty: $('invEmpty'),
       close: $('invClose'),
       weight: $('invCount'),
@@ -125,12 +144,26 @@ export class InventoryUI {
   bind() {
     this.el.close?.addEventListener('click', () => this.hide());
     this.el.panel?.addEventListener('click', (ev) => { if (ev.target === this.el.panel) this.hide(); });
+    this.el.filter?.addEventListener('click', (ev) => {
+      const btn = ev.target.closest('[data-filter]');
+      if (!btn) return;
+      this.filter = btn.dataset.filter;
+      this.render();
+    });
     this.el.bar?.addEventListener('click', (ev) => {
       const slot = ev.target.closest('[data-slot]');
       if (!slot) return;
       this.useSlot(Number(slot.dataset.slot));
     });
     this.el.grid?.addEventListener('click', (ev) => {
+      const useBtn = ev.target.closest('[data-use]');
+      if (useBtn) {
+        ev.stopPropagation?.();
+        const id = useBtn.dataset.use;
+        if (this.onUse(id, -1)) this.inv.remove(id, 1);
+        this.render();
+        return;
+      }
       const cell = ev.target.closest('[data-item]');
       if (!cell) return;
       this.inv.toggleOnHotbar(cell.dataset.item);
@@ -187,8 +220,17 @@ export class InventoryUI {
       }).join('');
     }
 
+    if (this.el.filter) {
+      const all = this.inv.list();
+      this.el.filter.innerHTML = FILTERS.map((f) => {
+        const n = f.id === 'all' ? all.length : all.filter(f.test).length;
+        return `<button class="inv-filter${this.filter === f.id ? ' on' : ''}" data-filter="${f.id}" type="button">
+          ${f.label}<b>${n}</b></button>`;
+      }).join('');
+    }
+
     if (this.el.grid) {
-      const list = this.inv.list();
+      const list = sortItems(this.inv.list().filter(FILTERS.find((f) => f.id === this.filter)?.test || (() => true)));
       this.el.empty?.classList.toggle('hidden', list.length > 0);
       this.el.grid.innerHTML = list.map((it) => {
         const onBar = this.inv.hotbar.includes(it.id);
@@ -197,10 +239,11 @@ export class InventoryUI {
           <span class="inv-glyph">${it.glyph || '▪'}</span>
           <b>${it.qty}</b>
           <span class="inv-name">${it.name}</span>
-          <span class="inv-desc">${it.desc || (onBar ? 'ON HOTBAR' : 'CLICK TO ADD TO HOTBAR')}</span>
+          <span class="inv-desc">${it.desc || (onBar ? 'ON HOTBAR' : 'TAP TO ADD TO HOTBAR')}</span>
+          ${isUsable(it.id) ? `<span class="inv-use" data-use="${it.id}">USE</span>` : ''}
         </button>`;
       }).join('');
-      if (this.el.weight) this.el.weight.textContent = `${list.length}/${this.inv.capacity}`;
+      if (this.el.weight) this.el.weight.textContent = `${this.inv.list().length}/${this.inv.capacity}`;
     }
   }
 }

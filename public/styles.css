@@ -694,6 +694,7 @@ body.touch{-webkit-user-select:none;user-select:none;overscroll-behavior:none}
 .inv-cell b{position:absolute;top:8px;right:10px;font-size:11px;color:#fff}
 .inv-cell .inv-name{font-size:10px;letter-spacing:1px}
 .inv-cell .inv-desc{font-size:8.5px;letter-spacing:.3px;color:#77808f;line-height:1.35}
+.inv-cell:has(.inv-use) .inv-desc{padding-right:54px}
 .inv-empty{margin:18px 0 6px;text-align:center;font-size:10px;letter-spacing:.8px;color:#697282}
 .inv-empty.hidden{display:none}
 
@@ -751,3 +752,16 @@ body.touch{-webkit-user-select:none;user-select:none;overscroll-behavior:none}
 .inv-mat b{font-size:11px;color:#fff}
 .inv-mat em{font-style:normal;margin-left:auto;font-size:7px;letter-spacing:.5px;color:#6f788a}
 .inv-mat.empty{opacity:.45}
+
+/* per-item USE button inside the backpack */
+.inv-cell .inv-use{position:absolute;right:8px;bottom:8px;padding:5px 10px;border-radius:6px;
+  background:#1b2130;border:1px solid rgba(255,255,255,.14);font-size:8px;letter-spacing:1.2px;color:#dfe5ef}
+.inv-cell .inv-use:hover{background:var(--amber);color:#1a0f01;border-color:var(--amber)}
+
+/* backpack filter row */
+.inv-filter-bar{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0 8px}
+.inv-filter{display:flex;align-items:center;gap:6px;padding:6px 10px;border-radius:20px;cursor:pointer;
+  background:#141922;border:1px solid rgba(255,255,255,.1);color:#9aa4b4;font-size:9px;letter-spacing:1.4px}
+.inv-filter b{font-size:9px;color:#6d7688}
+.inv-filter.on{background:rgba(255,178,60,.14);border-color:var(--amber);color:var(--amber)}
+.inv-filter.on b{color:var(--amber)}

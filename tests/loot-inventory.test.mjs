@@ -6,7 +6,7 @@ installDOM({ width: 1280, height: 720 });
 const { Game } = await import('./app/js/game.js');
 const { ALL_RECIPES, RECIPES, GENERATED_RECIPES, RECIPE_COUNT, findRecipe, TABS } = await import('./app/js/recipes.js');
 const { ITEMS, rollLoot, isMaterial } = await import('./app/js/items.js');
-const { Inventory, HOTBAR_SLOTS } = await import('./app/js/inventory.js');
+const { Inventory, InventoryUI, HOTBAR_SLOTS, FILTERS, sortItems } = await import('./app/js/inventory.js');
 const { LootField } = await import('./app/js/loot.js');
 
 const problems = [];
@@ -71,7 +71,9 @@ console.log('\nphysical pickups');
   // walking onto it must
   first.group.position.set(g.car.pos.x, 0, g.car.pos.z);
   const near = g.loot.update(1 / 60, g.car.pos, { radius: 2.5, magnet: 3.4 });
-  check('standing on a drop collects it', near.length === 1, near.map((s) => `${s.qty}×${s.id}`).join(' '));
+  const gotFirst = near.some((s) => s.id === first.item && s.qty >= first.qty);
+  check('standing on a drop collects it', near.length >= 1 && gotFirst,
+    near.map((s) => `${s.qty}×${s.id}`).join(' '));
 }
 
 console.log('\nsimulation wiring');
@@ -182,9 +184,98 @@ console.log('\nhotbar keys');
   window.dispatch('keydown', { code: `Digit${slot + 1}`, preventDefault() {} });
   check('number keys use the hotbar', g.hp > 50 || g.inventory.count('bandage') === 0, `hp ${g.hp}`);
   window.dispatch('keydown', { code: 'KeyI', preventDefault() {} });
-  check('I opens the backpack', g.invUI.open === true);
+  check('I opens the backpack', g.invUI.open === true && g.paused === true);
+  window.dispatch('keydown', { code: 'Escape', preventDefault() {} });
+  check('Escape puts the backpack away and unpauses', g.invUI.open === false && g.paused === false);
+
+  // Tab and I are mutually exclusive: opening one stows the other
+  g.toggleBench(true);
+  check('Tab opens the bench paused', g.hud.benchOpen === true && g.paused === true);
+  g.toggleInventory(true);
+  check('backpack stows the bench', g.hud.benchOpen === false);
+  g.toggleBench(true);
+  check('bench stows the backpack', g.invUI.open === false && g.hud.benchOpen === true);
+  window.dispatch('keydown', { code: 'Escape', preventDefault() {} });
+  check('Escape from the bench resumes play', g.hud.benchOpen === false && g.paused === false);
+
+  // the USE control inside a backpack cell consumes one
+  g.inventory.add('medkit', 2);
+  const before = g.inventory.count('medkit');
+  g.hp = 30;
+  const grid = g.invUI.el.grid;
+  check('usable cells render a USE button', /data-use="medkit"/.test(grid.innerHTML));
+  check('materials never render a USE button', !/data-use="scrap"/.test(grid.innerHTML));
+  // the stub DOM has no tree walk, so hand the handler the target it would see
+  grid.dispatch('click', {
+    target: { closest: (sel) => (sel === '[data-use]' ? { dataset: { use: 'medkit' } } : null) },
+  });
+  check('USE button heals and spends one', g.hp > 30 && g.inventory.count('medkit') === before - 1,
+    `hp ${g.hp} / ${g.inventory.count('medkit')} left`);
   g.toggleInventory(false);
-  check('backpack closes', g.invUI.open === false);
+}
+
+console.log('\nsearching a house from the doorstep');
+{
+  const b = g.world.buildings[0];
+  b.scavengeReady = true;
+  b.cooldown = 0;
+  // stand on the porch, outside, well away from the interior loot spots
+  const door = b.door || { x: b.x, z: b.z };
+  g.inCar = false;
+  g.insideBuilding = null;
+  g.pos.set(door.x - 1.2, 0, door.z);
+  g.avatar.root.position.set(door.x - 1.2, 0, door.z);
+  g.car.pos.set(door.x - 30, 0, door.z - 30);
+  g.loot.clear?.();
+  g.scavenge();
+  const dropped = g.loot.drops || [];
+  const reachable = dropped.filter((d) => Math.hypot(d.group.position.x - g.pos.x, d.group.position.z - g.pos.z) < 4);
+  check('doorstep search drops loot', dropped.length > 0, `${dropped.length} drops`);
+  check('porch loot lands within reach', reachable.length === dropped.length,
+    `${reachable.length}/${dropped.length} within 4u`);
+  check('searching burns the building', b.scavengeReady === false && b.cooldown > 0);
+
+  // far away the same building refuses to hand anything over
+  const b2 = g.world.buildings[1];
+  b2.scavengeReady = true;
+  b2.cooldown = 0;
+  g.pos.set(b2.x + 40, 0, b2.z + 40);
+  g.avatar.root.position.copy(g.pos);
+  const before = g.loot.count;
+  g.scavenge();
+  check('you cannot rummage a house from across the road', g.loot.count === before && b2.scavengeReady === true);
+  g.pos.set(7, 0, 30);
+  g.avatar.root.position.set(7, 0, 30);
+}
+
+console.log('\nbackpack filters');
+{
+  const inv = new Inventory();
+  inv.add('medkit', 1);
+  inv.add('battery', 1);
+  inv.add('wire', 1);
+  const ui = new InventoryUI(inv, { getMaterials: () => ({}) });
+  ui.show();
+  check('every item lands in ALL', /data-item="medkit"/.test(ui.el.grid.innerHTML)
+    && /data-item="battery"/.test(ui.el.grid.innerHTML));
+  check('filter row is rendered with counts', /data-filter="use"/.test(ui.el.filter.innerHTML));
+  ui.el.filter.dispatch('click', {
+    target: { closest: () => ({ dataset: { filter: 'use' } }) },
+  });
+  check('USABLE hides gear', ui.filter === 'use'
+    && /data-item="medkit"/.test(ui.el.grid.innerHTML)
+    && !/data-item="battery"/.test(ui.el.grid.innerHTML));
+  ui.el.filter.dispatch('click', {
+    target: { closest: () => ({ dataset: { filter: 'gear' } }) },
+  });
+  check('GEAR shows gear only', /data-item="battery"/.test(ui.el.grid.innerHTML)
+    && !/data-item="medkit"/.test(ui.el.grid.innerHTML));
+  ui.el.filter.dispatch('click', {
+    target: { closest: () => ({ dataset: { filter: 'all' } }) },
+  });
+  const order = sortItems(inv.list()).map((it) => it.id);
+  check('usables sort above gear', order.indexOf('medkit') < order.indexOf('battery'), order.join(','));
+  ui.hide();
 }
 
 console.log('\nloot field lifecycle');
