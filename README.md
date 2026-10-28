@@ -127,6 +127,12 @@ scripts/build.mjs     dist builder
 docs/DESIGN.md        game design document
 ```
 
+## Legacy 2D build
+
+The first iteration of this project — a single-file, top-down canvas version — is preserved untouched in
+`legacy/index-2d.html` (with its original design doc at `docs/GDD-legacy-2d.md`). Open it directly in a
+browser if you want to see where the highway started.
+
 ## Notes
 
 * Rendering: WebGL2, PCF soft shadows, ACES tone mapping, object recycling for an endless road.
