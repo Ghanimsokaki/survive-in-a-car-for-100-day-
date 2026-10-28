@@ -107,6 +107,24 @@ console.log('\nwalking inside');
     g.interiorLight.intensity.toFixed(3));
 }
 
+console.log('\nloot spots stay reachable');
+{
+  const misplaced = [];
+  for (const kind of BUILDING_KINDS) {
+    for (const facing of [1, -1]) {
+      const b = createBuilding(kind, { x: facing * 40, z: 0, facing });
+      for (const spot of b.lootSpots) {
+        const indoors = pointInside(b, spot.x, spot.z);
+        const porch = Math.hypot(spot.x - b.door.x, spot.z - b.door.z) <= 6;
+        if (!indoors && !porch) misplaced.push(`${kind}@${spot.x.toFixed(0)},${spot.z.toFixed(0)}`);
+      }
+    }
+  }
+  check('every loot spot is indoors or on the porch', misplaced.length === 0, misplaced.join(' '));
+  const b = createBuilding('store', { x: 40, z: 0 });
+  check('shop forecourt props add loot spots', b.lootSpots.length >= 4, `${b.lootSpots.length} spots`);
+}
+
 console.log('\nhinged doors');
 {
   const withLeaves = BUILDING_KINDS.map((k) => createBuilding(k, { x: 40, z: 0 }));
