@@ -83,6 +83,17 @@ console.log('\nlandscape frame');
   check('landscape lifts the prompt clear of the cluster', /bottom:calc\(102px/.test(pick('#prompt')?.body || ''));
 }
 
+console.log('\ninstalled app');
+{
+  const manifest = JSON.parse(readFileSync(`${ROOT}public/manifest.webmanifest`, 'utf8'));
+  check('the manifest forces landscape', manifest.orientation === 'landscape', manifest.orientation);
+  check('the manifest opens fullscreen', manifest.display === 'fullscreen', manifest.display);
+  check('the manifest ships icons', Array.isArray(manifest.icons) && manifest.icons.length >= 2);
+  check('the page links the manifest', /rel="manifest"/.test(html));
+  check('Samsung/Chromium orientation hints are present',
+    /name="screen-orientation" content="landscape"/.test(html));
+}
+
 console.log('\norientation');
 {
   check('the run asks for fullscreen + landscape', /requestFullscreen/.test(mainJs) && /lock\('landscape'\)/.test(mainJs));

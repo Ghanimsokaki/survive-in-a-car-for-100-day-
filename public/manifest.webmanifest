@@ -1,0 +1,17 @@
+{
+  "name": "100 Days Outrun — Highway Survival",
+  "short_name": "100 Days",
+  "description": "3D multiplayer post-apocalyptic highway survival. One rig, 100 days, endless storms.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
+  "orientation": "landscape",
+  "background_color": "#08090d",
+  "theme_color": "#08090d",
+  "categories": ["games", "entertainment"],
+  "icons": [
+    { "src": "./icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "./icon-maskable.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}
