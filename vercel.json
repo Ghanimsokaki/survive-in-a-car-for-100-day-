@@ -56,6 +56,9 @@
     },
     "api/config.js": {
       "maxDuration": 5
+    },
+    "api/admin.js": {
+      "maxDuration": 10
     }
   }
 }

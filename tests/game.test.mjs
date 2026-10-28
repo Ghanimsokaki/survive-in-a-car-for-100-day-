@@ -65,9 +65,16 @@ check('boss rig appears on day 40', g.raiders.some((r) => r.boss));
 const stop = g.world.pitStops[0];
 g.car.pos.set(stop.x + 6, 0, stop.z + 6);
 step(3);
-const scrapBefore = g.materials.scrap;
+// scavenging now scatters physical drops — they only count once picked up
+const haul = () => Object.values(g.materials).reduce((a, b) => a + (b || 0), 0)
+  + g.inventory.list().reduce((a, i) => a + i.qty, 0);
+const haulBefore = haul();
 g.scavenge();
-check('scavenging yields loot', g.materials.scrap > scrapBefore, `${g.materials.scrap} scrap`);
+check('scavenging scatters drops (nothing banked yet)', g.loot.count > 0 && haul() === haulBefore, `${g.loot.count} drops`);
+const grab = g.inCar ? g.car.pos : g.avatar.root.position;
+g.loot.drops.forEach((d) => d.group.position.set(grab.x, 0, grab.z));
+g.updateLoot(1 / 60);
+check('picking the drops up fills the pack', haul() > haulBefore, `${haulBefore} → ${haul()}`);
 
 g.materials = { scrap: 99, steel: 99, titanium: 99, carbon: 99, leather: 99, chem: 99, cores: 99 };
 g.benchTier = 4;
@@ -97,6 +104,25 @@ g.avatar.root.rotation.y = Math.PI / 2;
 g.weapon = 'broadsword'; g.syncWeapon(); g.durability.broadsword = 350;
 for (let i = 0; i < 6; i++) { g.time += 1; g.lastAttack = 0; g.attack(); step(4); }
 check('broadsword kills a hollow', h.dead);
+check('the corpse spills loot instead of banking it', g.loot.count > 0, `${g.loot.count} drops`);
+{
+  const banked = () => Object.values(g.materials).reduce((a, c) => a + (c || 0), 0)
+    + g.inventory.list().reduce((a, i) => a + i.qty, 0);
+  const before = banked();
+  g.loot.drops.forEach((d) => d.group.position.set(g.avatar.root.position.x, 0, g.avatar.root.position.z));
+  for (let i = 0; i < 50; i++) g.updateLoot(1 / 60);
+  check('standing on the corpse loot banks it', banked() > before, `${before} → ${banked()}`);
+}
+// a boss rig pays out a better haul
+{
+  const boss = new Hollow(g.scene, 0, 0, 6);
+  boss.boss = true;
+  g.loot.clear();
+  g.onKill(boss);
+  const ids = g.loot.drops.map((d) => d.item);
+  check('boss wrecks drop boss-grade loot', ids.includes('cores') && ids.includes('blueprint'), ids.join(','));
+  g.loot.clear();
+}
 g.toggleCar();
 check('player re-enters the rig', g.inCar);
 
@@ -125,6 +151,59 @@ check('respawn resets the run', g.day === 1 && g.hp === 100 && g.inCar && g.car.
 g.day = 100; g.won = false; g.dead = false; g.paused = false;
 g.win();
 check('surviving day 100 wins', g.won);
+
+// manual graphics quality overrides the auto-detect
+{
+  const quiet = new Game({
+    mount: new El('div', 'app'),
+    profile: { name: 'LOW', color: 0xffb347, carColor: 0xd24a2b },
+    room: 'low-room',
+    quality: 'low',
+    onQuit: () => {},
+  });
+  check('LOW quality is honoured', quiet.quality === 'low' && quiet.pixelCap === 1, `${quiet.quality}/${quiet.pixelCap}`);
+  check('LOW quality thins the scenery', quiet.world.lowEnd === true);
+  quiet.net.close();
+  quiet.dispose?.();
+
+  const strong = new Game({
+    mount: new El('div', 'app'),
+    profile: { name: 'HIGH', color: 0xffb347, carColor: 0xd24a2b },
+    room: 'high-room',
+    quality: 'high',
+    onQuit: () => {},
+  });
+  check('HIGH quality keeps the scenery dense', strong.quality === 'high' && strong.world.lowEnd === false);
+  strong.net.close();
+  strong.dispose?.();
+}
+
+// weather has real handling costs
+{
+  const { Vehicle } = await import('./app/js/vehicle.js');
+  const drive = (env, { left = 0, frames = 60 } = {}) => {
+    const v = new Vehicle({ color: 0xffffff });
+    v.pos.set(0, 0, 0);
+    for (let i = 0; i < frames; i++) {
+      v.update(1 / 60, { forward: 1, back: 0, left, right: 0, boost: 0 }, g.world, () => {}, env);
+    }
+    return v;
+  };
+  const dry = drive({ grip: 1, wind: 0 });
+  check('a straight run stays on the centre line when it is calm', Math.abs(dry.pos.x) < 0.01, `${dry.pos.x.toFixed(2)}`);
+  const blown = drive({ grip: 1, wind: 3 });
+  check('a gale pushes the rig sideways', blown.pos.x > 1.5, `${blown.pos.x.toFixed(2)}`);
+
+  const gripDry = drive({ grip: 1, wind: 0 }, { left: 1 });
+  const gripWet = drive({ grip: 0.72, wind: 0 }, { left: 1 });
+  const turned = (v) => Math.abs(v.yaw - Math.PI);
+  check('wet tarmac turns in less than dry tarmac', turned(gripWet) < turned(gripDry),
+    `${turned(gripWet).toFixed(2)} vs ${turned(gripDry).toFixed(2)}`);
+
+  g.setWeather('gale');
+  check('weather changes grip for the live rig', g.weather === 'gale');
+  g.setWeather('clear');
+}
 
 // fuzz: random input + actions for 8k frames
 g.resetRun();

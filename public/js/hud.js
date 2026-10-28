@@ -13,6 +13,8 @@ export class HUD {
       chatLog: $('chatLog'), chatInput: $('chatInput'), party: $('party'),
       bench: $('bench'), benchTier: $('benchTier'), inv: $('invList'), recipes: $('recipeGrid'),
       tabs: [...document.querySelectorAll('.tabs button')], benchClose: $('benchClose'),
+      search: $('recipeSearch'), count: $('recipeCount'), page: $('recipePage'),
+      prev: $('recipePrev'), next: $('recipeNext'),
       gameover: $('gameover'), goTitle: $('goTitle'), goSub: $('goSub'), goStats: $('goStats'),
       crosshair: $('crosshair'),
     };
@@ -24,11 +26,22 @@ export class HUD {
     this.tab = 'weapons';
     this.chatOpen = false;
     this.toastTimer = [];
+    this.page = 0;
+    this.pageSize = 24;
+    this.search = '';
     this.el.tabs.forEach((t) => t.addEventListener('click', () => {
       this.tab = t.dataset.tab;
+      this.page = 0;
       this.el.tabs.forEach((x) => x.classList.toggle('on', x === t));
       this.renderRecipes();
     }));
+    this.el.search?.addEventListener('input', () => {
+      this.search = this.el.search.value.trim().toLowerCase();
+      this.page = 0;
+      this.renderRecipes();
+    });
+    this.el.prev?.addEventListener('click', () => { this.page = Math.max(0, this.page - 1); this.renderRecipes(); });
+    this.el.next?.addEventListener('click', () => { this.page += 1; this.renderRecipes(); });
   }
 
   show() { this.el.hud.classList.remove('hidden'); }
@@ -71,7 +84,12 @@ export class HUD {
   setScavengeReady(ready, label) {
     this.el.scavBtn.classList.toggle('ready', ready);
     this.el.scavBtn.disabled = !ready;
-    this.el.scavBtn.querySelector('.act-txt').firstChild.textContent = ready ? `SCAVENGE ${label || ''}`.trim() : 'NO LOOT NEARBY';
+    // keep the label inside the button: building names can be long
+    const clean = String(label || '').replace(/\s+/g, ' ').trim();
+    let text = ready ? `SCAVENGE ${clean}`.trim() : 'NO LOOT NEARBY';
+    if (text.length > 26) text = `${text.slice(0, 25).trimEnd()}…`;
+    const node = this.el.scavBtn.querySelector('.act-txt');
+    if (node && node.firstChild) node.firstChild.textContent = text;
   }
 
   prompt(text) {
@@ -163,6 +181,17 @@ export class HUD {
       } else if (b.kind === 'pit') {
         ctx.fillStyle = '#6dffa8';
         ctx.fillRect(px - size, py - size, size * 2, size * 2);
+      } else if (b.kind === 'house') {
+        // roofed buildings: little square with a lid
+        ctx.fillStyle = b.inside ? '#ffd98a' : b.ready === false ? '#6f6455' : '#c9b48e';
+        ctx.fillRect(px - size, py - size, size * 2, size * 2);
+        ctx.strokeStyle = 'rgba(28,22,16,.65)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(px - size - 1, py - size);
+        ctx.lineTo(px, py - size - 3);
+        ctx.lineTo(px + size + 1, py - size);
+        ctx.stroke();
       } else if (b.kind === 'enemy') {
         ctx.fillStyle = '#ff9a3c';
         ctx.beginPath(); ctx.arc(px, py, size, 0, Math.PI * 2); ctx.fill();
@@ -214,18 +243,38 @@ export class HUD {
 
   renderRecipes() {
     if (!this.recipes) return;
-    const list = this.recipes.filter((r) => r.tab === this.tab);
-    this.el.recipes.innerHTML = list.map((r) => {
+    let list = this.recipes.filter((r) => r.tab === this.tab);
+    if (this.search) {
+      const q = this.search;
+      list = list.filter((r) => r.name.toLowerCase().includes(q) || String(r.desc || '').toLowerCase().includes(q));
+    }
+    const pages = Math.max(1, Math.ceil(list.length / this.pageSize));
+    if (this.page > pages - 1) this.page = pages - 1;
+    if (this.page < 0) this.page = 0;
+    const start = this.page * this.pageSize;
+    const slice = list.slice(start, start + this.pageSize);
+
+    if (this.el.count) this.el.count.textContent = `${list.length} RECIPES`;
+    if (this.el.page) this.el.page.textContent = `PAGE ${this.page + 1} / ${pages}`;
+    if (this.el.prev) this.el.prev.disabled = this.page <= 0;
+    if (this.el.next) this.el.next.disabled = this.page >= pages - 1;
+
+    if (!slice.length) {
+      this.el.recipes.innerHTML = `<p class="recipe-empty">No recipes match “${this.search || this.tab}”.</p>`;
+      return;
+    }
+
+    this.el.recipes.innerHTML = slice.map((r) => {
       const affordable = Object.entries(r.cost).every(([k, v]) => (this.inv[k] || 0) >= v);
       const tierOk = (r.tierReq || 1) <= this.tier;
-      const owned = r.unique && this.ownedWeapons?.includes(r.givesWeapon);
+      const owned = r.unique && this.ownedWeapons?.includes(r.givesWeapon || r.weapon);
       const can = affordable && tierOk && !owned && !r.maxed;
       const cost = Object.entries(r.cost).map(([k, v]) => {
         const ok = (this.inv[k] || 0) >= v;
         return `<i class="${ok ? '' : 'no'}">${v}× ${k.toUpperCase()}</i>`;
       }).join('');
       const badge = r.tier ? `<span class="recipe-tier t${r.tier}">T${r.tier}</span>` : '';
-      const req = tierOk ? '' : ` · REQUIRES TIER ${r.tierReq}`;
+      const req = tierOk ? '' : ` · NEEDS TIER ${r.tierReq}`;
       return `<div class="recipe" data-id="${r.id}">
         <div class="recipe-top">
           <span class="recipe-name">${r.name}</span>${badge}
@@ -233,7 +282,7 @@ export class HUD {
         <div class="recipe-desc">${r.desc}${req}</div>
         <div class="recipe-cost">${cost}</div>
         <button class="recipe-btn" data-craft="${r.id}" ${can ? '' : 'disabled'}>
-          ${owned ? 'EQUIPPED / OWNED' : r.maxed ? 'MAXED' : 'CRAFT'}
+          ${owned ? 'OWNED' : r.maxed ? 'MAXED' : 'CRAFT'}
         </button>
       </div>`;
     }).join('');

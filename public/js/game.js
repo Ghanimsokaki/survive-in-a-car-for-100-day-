@@ -9,7 +9,14 @@ import { HUD } from './hud.js';
 import { AudioKit } from './audio.js';
 import { Net } from './net.js';
 import { clamp, damp, lerp, angleLerp, rand, randInt, pick, hashStr, dist2 } from './utils.js';
+import { RECIPES, ALL_RECIPES, findRecipe } from './recipes.js';
+import { LootField } from './loot.js';
+import { Inventory, InventoryUI } from './inventory.js';
+import { rollLoot, isMaterial, ITEMS, itemName } from './items.js';
 
+export { RECIPES };
+
+const PERK_CAPS = { maxhp: 100, maxfuel: 60, armor: 0.35, dmg: 1.0, scav: 1.0, magnet: 4 };
 const DAY_LENGTH = 95;               // seconds of real survival per in-game day
 const INVULN = 0.55;
 
@@ -40,38 +47,20 @@ const MILESTONES = {
   100: ['THE CATEGORY 5 HYPERCANE', 'The coast. A 250 mph vortex. Lock down and survive.'],
 };
 
-export const RECIPES = [
-  { id: 'pipe', name: 'SCRAP PIPE BAT', tab: 'weapons', tier: 1, tierReq: 1, cost: { scrap: 4 }, desc: '20 DMG · 80 DUR · heavy pipe swung by hand.', weapon: 'pipe', unique: true },
-  { id: 'revolver', name: 'SCAVENGED REVOLVER', tab: 'weapons', tier: 2, tierReq: 2, cost: { steel: 3, scrap: 2, chem: 1 }, desc: '34 DMG · 90 DUR · hitscan sidearm, 48m reach.', weapon: 'revolver', unique: true },
-  { id: 'machete', name: 'SCRAP METAL MACHETE', tab: 'weapons', tier: 2, tierReq: 2, cost: { scrap: 5, steel: 2, leather: 1 }, desc: '35 DMG · 100 DUR · fast cuts.', weapon: 'machete', unique: true },
-  { id: 'katana', name: 'LEAF SPRING KATANA', tab: 'weapons', tier: 3, tierReq: 3, cost: { carbon: 5, steel: 3, leather: 1 }, desc: '55 DMG · 180 DUR · forged from truck suspension steel. 28% crit.', weapon: 'katana', unique: true },
-  { id: 'broadsword', name: 'DAMASCUS SCRAP BROADSWORD', tab: 'weapons', tier: 4, tierReq: 4, cost: { titanium: 6, carbon: 3, cores: 2 }, desc: '120 DMG · 350 DUR · armour-piercing legend.', weapon: 'broadsword', unique: true },
-
-  { id: 'fuelcan', name: 'SIPHON FUEL CAN', tab: 'repairs', tier: 1, cost: { chem: 1, scrap: 1 }, desc: 'Refine chemicals into +12L of usable fuel.' },
-  { id: 'superfuel', name: 'SUPER FUEL BATCH', tab: 'repairs', tier: 2, tierReq: 2, cost: { chem: 3, scrap: 2 }, desc: '+26L of high-grade fuel for the long haul.' },
-  { id: 'repairkit', name: 'FIELD REPAIR KIT', tab: 'repairs', tier: 1, cost: { steel: 2, leather: 1 }, desc: 'Patch the chassis and engine (+30 each).' },
-  { id: 'tirepatch', name: 'TIRE PATCH KIT', tab: 'repairs', tier: 1, cost: { leather: 2, scrap: 1 }, desc: 'Re-tread the rubber (+35 tire tread).' },
-  { id: 'fullfix', name: 'FULL RIG OVERHAUL', tab: 'repairs', tier: 3, tierReq: 3, cost: { steel: 4, titanium: 2, leather: 2 }, desc: 'Engine, chassis and tires back to 100%.' },
-
-  { id: 'armor', name: 'REINFORCED ARMOR PLATING', tab: 'upgrades', tier: 2, tierReq: 1, cost: { steel: 4, titanium: 1 }, desc: 'Welded hull plates. Absorbs 28% of impact damage. Stacks ×3.', upgrade: 'armor' },
-  { id: 'anchors', name: 'HYDRAULIC ANCHOR SPIKE SET', tab: 'upgrades', tier: 2, tierReq: 1, cost: { steel: 3, titanium: 2 }, desc: 'Deeper spikes, stronger hold. Negates tornado lift. Max tier 4.', upgrade: 'anchors' },
-  { id: 'bench2', name: 'MOBILE WELDING RIG', tab: 'upgrades', tier: 2, cost: { steel: 5, carbon: 2 }, desc: 'Upgrade the car workbench to Tier 2.', upgrade: 'bench' },
-  { id: 'bench3', name: 'HYDRAULIC PRESS BAY', tab: 'upgrades', tier: 3, tierReq: 2, cost: { steel: 6, titanium: 3 }, desc: 'Upgrade the car workbench to Tier 3.', upgrade: 'bench' },
-  { id: 'bench4', name: 'TITANIUM FORGE', tab: 'upgrades', tier: 4, tierReq: 3, cost: { titanium: 5, cores: 1 }, desc: 'Upgrade the car workbench to Tier 4.', upgrade: 'bench' },
-];
-
-const WEATHERS = {
-  clear: { label: 'CLEAR', danger: false },
-  dust: { label: 'DUST STORM', danger: true },
-  heat: { label: 'HEATWAVE 41°C', danger: true },
-  rain: { label: 'DRIVING RAIN', danger: false },
-  acid: { label: 'ACID RAIN', danger: true },
-  storm: { label: 'EMP THUNDERSTORM', danger: true },
-  gale: { label: 'GALE WINDS', danger: true },
+export const WEATHERS = {
+  // grip  = how much of your steering the tyres actually deliver
+  // wind  = sideways push in m/s² (gales shove the rig toward the shoulder)
+  clear: { label: 'CLEAR', danger: false, grip: 1, wind: 0 },
+  dust: { label: 'DUST STORM', danger: true, grip: 0.86, wind: 1.1 },
+  heat: { label: 'HEATWAVE 41°C', danger: true, grip: 0.97, wind: 0 },
+  rain: { label: 'DRIVING RAIN', danger: false, grip: 0.82, wind: 0.4 },
+  acid: { label: 'ACID RAIN', danger: true, grip: 0.74, wind: 0.5 },
+  storm: { label: 'EMP THUNDERSTORM', danger: true, grip: 0.88, wind: 1.6 },
+  gale: { label: 'GALE WINDS', danger: true, grip: 0.9, wind: 3.2 },
 };
 
 export class Game {
-  constructor({ mount, profile, room, onQuit, onRunEnd }) {
+  constructor({ mount, profile, room, onQuit, onRunEnd, quality }) {
     this.mount = mount;
     this.profile = profile;
     this.onQuit = onQuit;
@@ -83,19 +72,26 @@ export class Game {
     this.dead = false;
     this.won = false;
     this.kills = 0;
+    this.itemsLooted = 0;
+    this.craftedCount = 0;
     this.shakeAmt = 0;
     this.time = 0;
     this.hudTimer = 0;
     this.dragLook = 0;
     this.touchMode = ('ontouchstart' in window) || navigator.maxTouchPoints > 1;
 
+    this.qualityOption = quality || 'auto';
     this.setupGraphics();
-    this.world = new World(this.scene, 1337);
+    this.world = new World(this.scene, 1337, this.quality);
     if (this.quality !== 'high') {
       this.world.sun.castShadow = this.quality === 'medium';
       this.world.sun.shadow.mapSize.set(512, 512);
     }
     this.effects = new Effects(this.scene, { scale: this.quality === 'low' ? 0.45 : this.quality === 'medium' ? 0.7 : 1 });
+    // one reusable warm light for whichever interior you are standing in
+    this.interiorLight = new THREE.PointLight(0xffcf96, 0, this.quality === 'low' ? 14 : 22, 1.5);
+    this.interiorLight.position.set(0, 3, 0);
+    this.scene.add(this.interiorLight);
     this.setupPlayer();
     this.setupCamera();
     this.setupInput();
@@ -121,6 +117,17 @@ export class Game {
       onCount: (n) => this.onPeerCount(n),
     });
 
+    this.loot = new LootField(this.scene);
+    this.inventory = new Inventory();
+    this.invUI = new InventoryUI(this.inventory, {
+      onUse: (id) => this.useItem(id),
+      onToss: (id) => this.tossItem(id, -1),
+      getMaterials: () => this.materials,
+    });
+    this.pickupBatch = new Map();
+    this.pickupTimer = 0;
+    this.lootSeq = 0;
+
     this.resetRun();
     this.net.start();
     window.addEventListener('resize', () => this.resize());
@@ -135,13 +142,17 @@ export class Game {
     const smallest = Math.min(window.innerWidth, window.innerHeight);
     const cores = navigator.hardwareConcurrency || 4;
     const lowEnd = Boolean(coarse && (smallest < 640 || cores <= 4));
-    this.quality = lowEnd ? 'low' : coarse ? 'medium' : 'high';
-    this.pixelCap = lowEnd ? 1 : coarse ? 1.4 : 1.85;
+    // a manual setting always wins over the heuristics
+    this.qualityChoice = ['low', 'medium', 'high'].includes(this.qualityOption) ? this.qualityOption : 'auto';
+    this.quality = this.qualityChoice === 'auto'
+      ? (lowEnd ? 'low' : coarse ? 'medium' : 'high')
+      : this.qualityChoice;
+    this.pixelCap = this.quality === 'low' ? 1 : this.quality === 'medium' ? 1.4 : 1.85;
 
-    this.renderer = new THREE.WebGLRenderer({ antialias: !lowEnd, powerPreference: 'high-performance' });
+    this.renderer = new THREE.WebGLRenderer({ antialias: this.quality !== 'low', powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.pixelCap));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.shadowMap.enabled = !lowEnd;
+    this.renderer.shadowMap.enabled = this.quality !== 'low';
     this.renderer.shadowMap.type = this.quality === 'high' ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -194,11 +205,22 @@ export class Game {
     this.durability = {};
     this.hp = 100;
     this.kills = 0;
+    this.itemsLooted = 0;
+    this.craftedCount = 0;
     this.dead = false;
     this.won = false;
     this.paused = false;
     this.inCar = true;
     this.dayTimer = 0;
+    this.insideBuilding = null;
+    this.world?.focusInterior?.(null);
+    this.world?.buildings?.forEach((b) => { b._doorOpen = false; });
+    if (this.interiorLight) this.interiorLight.intensity = 0;
+    this.perks = { maxhp: 0, maxfuel: 0, armor: 0, dmg: 0, scav: 0, magnet: 0 };
+    this.hpMax = 100;
+    this.inventory?.clear();
+    this.loot?.clear();
+    this.pickupBatch?.clear();
     this.weather = 'clear';
     this.stormCat = 0;
     this.finalTimer = 0;
@@ -264,7 +286,20 @@ export class Game {
       if (e.code === 'KeyF') this.attack();
       if (e.code === 'KeyG') this.scavenge();
       if (e.code === 'Tab') { e.preventDefault(); this.toggleBench(); }
-      if (e.code === 'Escape') { this.hud.closeBench(); this.paused = false; }
+      if (e.code === 'KeyI') { e.preventDefault(); this.toggleInventory(); }
+      if (/^Digit[1-8]$/.test(e.code)) {
+        e.preventDefault();
+        const slot = Number(e.code.slice(5)) - 1;
+        this.invUI?.useSlot(slot);
+      }
+      if (e.code === 'Escape') {
+        // Escape is the universal "put that away" key: bench, pack, or both.
+        const hadBench = !!this.hud.benchOpen;
+        const hadPack = !!this.invUI?.open;
+        if (hadBench) this.hud.closeBench();
+        if (hadPack) this.invUI.hide();
+        if ((hadBench || hadPack) && !this.dead && !this.won) this.paused = false;
+      }
       if (e.code === 'Enter') { e.preventDefault(); this.focusChat(); }
     });
     window.addEventListener('keyup', (e) => {
@@ -395,7 +430,8 @@ export class Game {
     s.style.left = '18px';
     s.style.top = 'auto';
     s.style.bottom = 'calc(148px + env(safe-area-inset-bottom))';
-    s.style.opacity = '0.34';
+    // parked hint stays invisible: a faded ring used to sit on top of the hotbar
+    s.style.opacity = '0';
     this.stickKnob.style.left = '35px';
     this.stickKnob.style.top = '35px';
   }
@@ -444,6 +480,7 @@ export class Game {
     document.getElementById('scavBtn').addEventListener('click', () => this.scavenge());
     document.getElementById('benchClose').addEventListener('click', () => this.toggleBench(false));
     document.getElementById('respawnBtn').addEventListener('click', () => { this.resetRun(); this.paused = false; });
+    document.getElementById('invBtn')?.addEventListener('click', () => this.toggleInventory());
     document.getElementById('lobbyBtn').addEventListener('click', () => this.onQuit?.());
     const menuBtn = document.getElementById('mobileMenuBtn');
     if (menuBtn) {
@@ -510,10 +547,15 @@ export class Game {
     // controls
     const throttle = clamp(this.keys.forward - this.keys.back, -1, 1);
     if (this.inCar) {
+      const wx = WEATHERS[this.weather] || WEATHERS.clear;
       this.car.update(dt, {
         forward: this.keys.forward, back: this.keys.back,
         left: this.keys.left, right: this.keys.right, boost: this.keys.boost,
-      }, this.world, (dmg) => this.onCarScrape(dmg));
+      }, this.world, (dmg) => this.onCarScrape(dmg), {
+        grip: wx.grip,
+        // gusting sideways push; bigger when you are already fast
+        wind: (wx.wind || 0) * (0.6 + 0.4 * Math.sin(this.time * 0.7)) * clamp(0.35 + this.car.kmh / 90, 0.35, 1.4),
+      });
       this.pos.copy(this.car.pos);
       this.pos.y = 0;
       this.distance = this.car.distance;
@@ -541,9 +583,12 @@ export class Game {
     this.updateTornadoes(dt);
     this.updateEnemies(dt);
     this.updateSpawning(dt);
+    this.updateLoot(dt);
     this.updateInteraction();
     this.updatePeers(dt);
     this.world.update(dt, this.pos, this.zone);
+    this.updateDoors();
+    this.updateInteriorLight(dt);
     this.world.updateWeather(dt, this.camera.position, this.stormCat > 0 ? 30 : 0);
     this.effects.update(dt);
 
@@ -582,7 +627,9 @@ export class Game {
       this.hud.drawRadar(this.radarBlips(), this.inCar ? this.car.yaw : this.avatar.root.rotation.y, 350);
       this.hud.setParty(this.partyRows());
       const stop = this.world.nearestPitStop(this.pos.x, this.pos.z, 20);
-      this.hud.setScavengeReady(!!stop && stop.scavengeReady, stop ? stop.kind.toUpperCase() : '');
+      const build = this.insideBuilding || this.world.nearestBuilding(this.pos.x, this.pos.z, 14);
+      if (build) this.hud.setScavengeReady(Boolean(build.scavengeReady), build.label);
+      else this.hud.setScavengeReady(!!stop && stop.scavengeReady, stop ? stop.kind.toUpperCase() : '');
     }
 
     // multiplayer broadcast
@@ -653,6 +700,9 @@ export class Game {
     this.world.setWeather(kind);
     this.hud.setWeather(info.label, info.danger);
     if (kind === 'acid') this.hud.toast('ACID RAIN — HULL AND BLADES DEGRADING', 'bad');
+    if (kind === 'gale') this.hud.toast('GALE WINDS — HOLD THE WHEEL', 'warn');
+    if (kind === 'rain') this.hud.toast('WET ASPHALT — LONGER BRAKING', 'warn');
+    if (kind === 'dust') this.hud.toast('DUST STORM — VISIBILITY DROPPING', 'warn');
   }
 
   spawnTornado(category) {
@@ -685,10 +735,12 @@ export class Game {
     const speed = sprint ? 8.4 : 4.9;
     const pos = this.avatar.root.position;
 
-    const nx = pos.x + move.x * speed * dt;
+    const nx = clamp(pos.x + move.x * speed * dt, -220, 220);
     const nz = pos.z + move.z * speed * dt;
-    const cx = clamp(nx, -220, 220);
-    if (!this.world.collide(cx, nz, 0.55)) { pos.x = cx; pos.z = nz; }
+    // slide along walls: resolve each axis separately so doorways stay enterable
+    if (!this.world.collideFoot(nx, pos.z, 0.5)) pos.x = nx;
+    if (!this.world.collideFoot(pos.x, nz, 0.5)) pos.z = nz;
+    this.trackInterior();
 
     // jump
     if (this.keys.jump && pos.y <= 0.001) { this.vy = 5.4; this.keys.jump = false; }
@@ -711,6 +763,51 @@ export class Game {
     }
   }
 
+  /** Detects entering/leaving a building interior and swaps the roof state. */
+  trackInterior() {
+    const pos = this.avatar.root.position;
+    const b = this.inCar ? null : this.world.buildingAt(pos.x, pos.z);
+    if (b === this.insideBuilding) return;
+    const previous = this.insideBuilding;
+    this.insideBuilding = b || null;
+    this.world.focusInterior(this.insideBuilding);
+    if (this.insideBuilding) {
+      const bi = this.insideBuilding;
+      const s = bi.scale || 1;
+      this.interiorLight.position.set(bi.x, Math.max(2.4, bi.height * 0.62), bi.z);
+      this.interiorLight.distance = Math.max(14, Math.max(bi.local.w, bi.local.d) * 0.85 * s);
+    }
+    if (this.insideBuilding) {
+      this.hud.toast(`INSIDE ${this.insideBuilding.label} · [G] SEARCH`, 'good');
+      this.audio?.step?.();
+    } else if (previous) {
+      this.hud.toast(`LEFT ${previous.label}`, 'warn');
+    }
+  }
+
+  /** Warm fill light that fades in when you step indoors and out when you leave. */
+  updateInteriorLight(dt) {
+    const want = this.insideBuilding ? (this.quality === 'low' ? 0.5 : 0.95) : 0;
+    this.interiorLight.intensity = damp(this.interiorLight.intensity, want, 4, dt);
+  }
+
+  /** One soft creak when a door you are standing at swings open or shut. */
+  updateDoors() {
+    const pos = this.inCar ? this.car.pos : this.avatar.root.position;
+    for (const b of this.world?.buildings || []) {
+      const near = Math.hypot(pos.x - b.door.x, pos.z - b.door.z) < 6;
+      const open = b.doorAngle > 0.35;
+      if (!near) { b._doorOpen = false; continue; }
+      if (open !== Boolean(b._doorOpen)) {
+        b._doorOpen = open;
+        if (this.time - (this._creakAt || 0) > 0.45) {
+          this._creakAt = this.time;
+          this.audio?.creak?.();
+        }
+      }
+    }
+  }
+
   updateCamera(dt) {
     const focus = this.inCar ? this.car.pos : this.avatar.root.position;
     const wantFocus = new THREE.Vector3(focus.x, focus.y + (this.inCar ? 1.5 : 1.55), focus.z);
@@ -719,6 +816,12 @@ export class Game {
       this.camYaw = angleLerp(this.camYaw, this.car.yaw, 1 - Math.exp(-2.4 * dt));
       this.camPitch = damp(this.camPitch, 0.24, 2, dt);
       this.camDist = damp(this.camDist, 13 + clamp(this.car.kmh / 22, 0, 3), 1.6, dt);
+    }
+    // tighter, higher camera indoors so walls never swallow the view
+    if (!this.inCar) {
+      const want = this.insideBuilding ? 7.4 : 9.6;
+      this.camDist = damp(this.camDist, want, 4, dt);
+      if (this.insideBuilding) this.camPitch = damp(this.camPitch, 0.52, 3, dt);
     }
     const dist = this.camDist;
     const cy = Math.cos(this.camPitch);
@@ -766,6 +869,7 @@ export class Game {
       this.avatar.root.rotation.y = this.car.yaw;
       this.avatar.root.visible = true;
       this.car.toggleAnchor(false);
+      this.trackInterior();
       this.audio.blip(300, 0.1, 'square', 0.1);
     } else {
       if (dist2(this.avatar.root.position, this.car.pos) > 6.5) { this.hud.toast('TOO FAR FROM THE RIG', 'warn'); return; }
@@ -773,6 +877,7 @@ export class Game {
       this.inCar = true;
       this.car.occupied = true;
       this.avatar.root.visible = false;
+      this.trackInterior();
       this.audio.blip(520, 0.1, 'square', 0.1);
     }
   }
@@ -818,7 +923,7 @@ export class Game {
         if (d < bestD) { bestD = d; best = e; }
       });
       if (best) {
-        best.hit(w.dmg, origin);
+        best.hit(w.dmg * (1 + (this.perks?.dmg || 0)), origin);
         this.effects.blood(best.pos.clone().add(new THREE.Vector3(0, 1.2, 0)), aim);
         this.audio.hit();
         if (best.dead) this.onKill(best);
@@ -837,7 +942,7 @@ export class Game {
       if (d > w.range + 1) return;
       const dot = (dx / (d || 1)) * aim.x + (dz / (d || 1)) * aim.z;
       if (dot < 0.25) return;
-      let dmg = w.dmg;
+      let dmg = w.dmg * (1 + (this.perks?.dmg || 0));
       if (w.crit && Math.random() < w.crit) dmg *= 1.9;
       if (e.boss) dmg *= 0.8;
       e.hit(dmg, origin);
@@ -879,34 +984,155 @@ export class Game {
 
   scavenge() {
     if (this.paused || this.dead) return;
+    const build = this.insideBuilding || this.world.nearestBuilding(this.pos.x, this.pos.z, 10);
+    if (build) {
+      // from the road you can only ransack what you can actually reach
+      if (this.insideBuilding !== build) {
+        const door = build.door || build;
+        const reach = dist2(this.pos, door);
+        if (reach > 8) {
+          this.hud.toast(`${build.label} IS OUT OF REACH — WALK UP TO THE DOOR`, 'warn');
+          return;
+        }
+      }
+      this.searchBuilding(build);
+      return;
+    }
     const stop = this.world.nearestPitStop(this.pos.x, this.pos.z, 20);
     if (!stop) { this.hud.toast('NOTHING TO SCAVENGE — FIND A PIT-STOP', 'warn'); return; }
     if (!stop.scavengeReady || stop.cooldown > 0) { this.hud.toast('THIS STOP IS PICKED CLEAN', 'warn'); return; }
 
-    const z = this.zone;
-    const loot = {
-      scrap: randInt(3, 6 + z),
-      steel: randInt(0, 1 + z),
-      leather: randInt(0, 2),
-      chem: randInt(0, 1 + Math.floor(z / 2)),
-      titanium: z >= 1 ? randInt(0, 1 + Math.floor(z / 2)) : 0,
-      carbon: z >= 1 ? randInt(0, 2) : 0,
-      cores: Math.random() < 0.05 + z * 0.03 ? 1 : 0,
-      fuel: stop.kind === 'gas' ? randInt(8, 16) : randInt(2, 7),
-    };
-    Object.entries(loot).forEach(([k, v]) => {
-      if (k === 'fuel') { this.car.fuel = clamp(this.car.fuel + v, 0, this.car.maxFuel); return; }
-      if (v > 0) this.materials[k] = (this.materials[k] || 0) + v;
+    const stacks = rollLoot(Math.random, {
+      zone: this.zone,
+      kind: stop.kind,
+      lootMult: (1 + (this.perks?.scav || 0)) * this.nightBonus,
+      rolls: 3,
     });
-
+    this.scatterLoot(stop.x, stop.z, stacks, { spread: 4.2 });
     stop.scavengeReady = false;
     stop.cooldown = 12;
     stop.crates.visible = false;
-    const txt = Object.entries(loot).filter(([, v]) => v > 0)
-      .map(([k, v]) => `${v} ${k === 'fuel' ? 'L FUEL' : k.toUpperCase()}`).join(' · ');
-    this.hud.toast(`SCAVENGED: ${txt}`, 'good');
+    this.hud.toast(`CRATES BUSTED OPEN — GRAB THE ${stacks.length} DROPS`, 'warn');
     this.audio.pickup();
     this.effects.emit(new THREE.Vector3(stop.x, 1.2, stop.z), 16, { color: 0x9dffb8, spread: 2.4, up: 3.4, life: 0.8, gravity: 6 });
+  }
+
+  /** Searching after dark pays 25% more — the storm is the price. */
+  get nightBonus() {
+    return (this.world?.nightFactor || 0) > 0.55 ? 1.25 : 1;
+  }
+
+  /**
+   * Turns a rolled haul into physical drops around a loot spot. Nothing is
+   * collected until the player walks (or drives) over it.
+   */
+  scatterLoot(x, z, stacks, { spread = 2.8, share = true, grace = 0 } = {}) {
+    if (!stacks?.length) return 0;
+    const key = share ? `${this.net?.id || 'solo'}:${++this.lootSeq}` : null;
+    this.loot.spawn(x, z, stacks, { spread, key, grace });
+    // tell the other survivors where the haul landed so it is theirs to grab too
+    if (key) this.net?.event?.('drop', { key, x, z, spread, grace, stacks });
+    return stacks.length;
+  }
+
+  /**
+   * Puts a stack back on the ground in front of the survivor so co-op partners
+   * can take it. Drops get a short grace window, otherwise you would scoop it
+   * back up on the next frame.
+   */
+  tossItem(id, qty = -1) {
+    if (this.dead || this.won || !id) return 0;
+    if (isMaterial(id)) return 0;
+    const have = this.inventory.count(id);
+    if (!have) { this.hud.toast('YOU ARE NOT CARRYING THAT', 'warn'); return 0; }
+    const n = qty < 0 ? have : Math.min(qty, have);
+    this.inventory.remove(id, n);
+    const pos = this.inCar ? this.car.pos : this.avatar.root.position;
+    const yaw = this.inCar ? this.car.yaw : this.avatar.root.rotation.y;
+    const forward = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw)).multiplyScalar(-1.5);
+    this.scatterLoot(pos.x + forward.x, pos.z + forward.z, [{ id, qty: n }], { spread: 0.5, grace: 1.6 });
+    this.audio?.blip?.(300, 0.09, 'triangle', 0.07);
+    this.hud.toast(`TOSSED ${n} ${itemName(id)} — WALK OVER IT TO GRAB IT BACK`, 'warn');
+    return n;
+  }
+
+  /** Batches pickups so a handful of drops in one second reads as one toast. */
+  notePickup(id, qty) {
+    this.pickupBatch.set(id, (this.pickupBatch.get(id) || 0) + qty);
+  }
+
+  flushPickups(dt) {
+    if (!this.pickupBatch.size) return;
+    this.pickupTimer -= dt;
+    if (this.pickupTimer > 0) return;
+    this.pickupTimer = 0.55;
+    const parts = [...this.pickupBatch].map(([id, qty]) => `${qty} ${itemName(id)}`);
+    this.pickupBatch.clear();
+    const total = parts.length;
+    const text = parts.slice(0, 4).join(' · ') + (total > 4 ? ` +${total - 4} MORE` : '');
+    this.hud.toast(`PICKED UP: ${text}`, 'good');
+    this.audio?.pickup?.();
+  }
+
+  /** Collects drops the player is standing on. */
+  updateLoot(dt) {
+    const pos = this.inCar ? this.car.pos : this.avatar.root.position;
+    const magnet = (this.inCar ? 3.4 : 2.4) + (this.perks?.magnet || 0);
+    const radius = (this.inCar ? 2.5 : 1.15) + (this.perks?.magnet || 0) * 0.5;
+    const got = this.loot.update(dt, pos, { radius, magnet });
+    if (got.length) {
+      for (const stack of got) {
+        if (stack.key) this.net?.event?.('take', { key: stack.key });
+        if (isMaterial(stack.id)) {
+          this.materials[stack.id] = (this.materials[stack.id] || 0) + stack.qty;
+        } else if (stack.id === 'fuel_siphon') {
+          this.car.fuel = clamp(this.car.fuel + stack.qty, 0, this.car.maxFuel);
+        } else {
+          const stored = this.inventory.add(stack.id, stack.qty);
+          if (stored < stack.qty) {
+            this.hud.toast('PACK FULL — ITEM LEFT BEHIND', 'warn');
+            this.loot.spawn(pos.x, pos.z, [{ id: stack.id, qty: stack.qty - stored }], { spread: 0.6 });
+          }
+        }
+        this.itemsLooted += 1;
+        this.notePickup(stack.id, stack.qty);
+      }
+      this.hud.inv = this.materials;
+      if (this.hud.benchOpen) this.hud.refreshBench?.();
+    }
+    this.flushPickups(dt);
+  }
+
+  /** Interior looting: richer the deeper you go, boosted by the building type. */
+  searchBuilding(b) {
+    if (!b.scavengeReady || b.cooldown > 0) {
+      this.hud.toast(`${b.label} IS PICKED CLEAN — TRY ANOTHER HOUSE`, 'warn');
+      return;
+    }
+    const indoors = this.insideBuilding === b;
+    const stacks = rollLoot(Math.random, {
+      zone: this.zone,
+      kind: b.kind,
+      lootMult: b.lootMult * (indoors ? 1.2 : 0.7) * this.nightBonus * (1 + (this.perks?.scav || 0)),
+      inside: indoors,
+      rolls: 3,
+    });
+    // Rummaging from the doorstep spills everything onto the porch: loot you
+    // cannot walk to is the same as no loot, so the drops stay reachable.
+    const spots = indoors
+      ? (b.lootSpots?.length ? b.lootSpots : [{ x: b.x, z: b.z }])
+      : [{ x: b.door?.x ?? b.x, z: b.door?.z ?? b.z }];
+    spots.forEach((spot, i) => {
+      const chunk = stacks.filter((_, idx) => idx % spots.length === i);
+      this.scatterLoot(spot.x, spot.z, chunk, { spread: indoors ? 2.4 : 1.8 });
+    });
+    b.scavengeReady = false;
+    b.cooldown = 32;
+    const bonus = this.nightBonus > 1 ? ' · NIGHT BONUS' : '';
+    this.hud.toast(`${b.label} TURNED OVER — ${stacks.length} DROPS ${indoors ? 'ON THE FLOOR' : 'ON THE PORCH'}${bonus}`, 'warn');
+    this.audio.pickup();
+    this.effects.emit(new THREE.Vector3(b.x, b.height * 0.5, b.z), 14, { color: 0xffd98a, spread: 3.2, up: 2.6, life: 0.9, gravity: 7 });
+    this.net.event('loot', { x: b.x, z: b.z });
   }
 
   onKill(e) {
@@ -915,19 +1141,21 @@ export class Game {
     if (e instanceof RaiderCar || e.boss) {
       this.effects.explosion(at, e.boss ? 1.8 : 1);
       this.audio.explosion ? this.audio.explosion() : this.audio.crash();
-      this.materials.steel = (this.materials.steel || 0) + randInt(2, 4);
-      this.materials.scrap = (this.materials.scrap || 0) + randInt(2, 5);
-      if (Math.random() < 0.3) this.materials.titanium = (this.materials.titanium || 0) + 1;
-      if (Math.random() < 0.16) this.materials.carbon = (this.materials.carbon || 0) + 1;
-      if (Math.random() < 0.12) this.materials.cores = (this.materials.cores || 0) + 1;
-      this.hud.toast('RAIDER RIG DESTROYED · SALVAGE COLLECTED', 'good');
+      // wrecks leave a haul on the tarmac — you still have to drive over it
+      const haul = rollLoot(Math.random, {
+        zone: this.zone, kind: e.boss ? 'boss' : 'raider', lootMult: e.boss ? 2.2 : 1.5, rolls: e.boss ? 4 : 3,
+      });
+      haul.push({ id: 'steel', qty: randInt(2, 4) }, { id: 'scrap', qty: randInt(2, 5) });
+      this.scatterLoot(e.pos.x, e.pos.z, haul, { spread: 3.2, grace: 0.8 });
+      this.hud.toast(e.boss ? 'BOSS RIG DOWN — HAUL ON THE ROAD' : 'RAIDER RIG DESTROYED — GRAB THE SALVAGE', 'good');
       this.net.event('boom', { x: e.pos.x, z: e.pos.z });
       const idx = this.raiders.indexOf(e);
       if (idx >= 0) this.raiders.splice(idx, 1);
     } else {
       this.effects.blood(at, new THREE.Vector3(0, 1, 0));
-      if (Math.random() < 0.55) this.materials.scrap = (this.materials.scrap || 0) + randInt(1, 2);
-      if (Math.random() < 0.2) this.materials.leather = (this.materials.leather || 0) + 1;
+      // scavengers carried something; the corpse drops it on the ground
+      const haul = rollLoot(Math.random, { zone: this.zone, kind: 'hollow', lootMult: 1, rolls: 2 });
+      this.scatterLoot(e.pos.x, e.pos.z, haul, { spread: 2.0, grace: 0.6 });
       this.net.event('kill', { x: e.pos.x, z: e.pos.z });
       const idx = this.hollows.indexOf(e);
       if (idx >= 0) this.hollows.splice(idx, 1);
@@ -935,20 +1163,30 @@ export class Game {
   }
 
   // ------------------------------------------------------------------ craft
+  /** Every recipe, with its live "can't craft this any more" state. */
+  benchRecipes() {
+    return ALL_RECIPES.map((r) => {
+      let maxed = false;
+      if (r.upgrade === 'armor' && this.car.armorLevel >= 3) maxed = true;
+      if (r.upgrade === 'anchors' && this.car.anchorTier >= 4) maxed = true;
+      if (r.upgrade === 'bench' && this.benchTier >= (r.tier || 2)) maxed = true;
+      if (r.effect?.type === 'perk') {
+        const got = this.perks?.[r.effect.perk] || 0;
+        const cap = PERK_CAPS[r.effect.perk] ?? 20;
+        maxed = got >= cap - 1e-9;
+      }
+      return { ...r, maxed };
+    });
+  }
+
   toggleBench(force) {
     const open = force === undefined ? !this.hud.benchOpen : force;
     if (open) {
       if (this.dead || this.won) return;
+      this.invUI?.hide();
       this.paused = true;
       this.hud.ownedWeapons = [...this.owned];
-      const recipes = RECIPES.map((r) => {
-        let maxed = false;
-        if (r.upgrade === 'armor' && this.car.armorLevel >= 3) maxed = true;
-        if (r.upgrade === 'anchors' && this.car.anchorTier >= 4) maxed = true;
-        if (r.upgrade === 'bench' && this.benchTier >= (r.tier || 2)) maxed = true;
-        return { ...r, maxed };
-      });
-      this.hud.openBench(this.benchTier, this.materials, recipes);
+      this.hud.openBench(this.benchTier, this.materials, this.benchRecipes());
       this.audio.blip(560, 0.1, 'triangle', 0.08);
     } else {
       this.paused = false;
@@ -957,7 +1195,7 @@ export class Game {
   }
 
   craft(id) {
-    const r = RECIPES.find((x) => x.id === id);
+    const r = findRecipe(id);
     if (!r) return;
     if ((r.tierReq || 1) > this.benchTier) { this.hud.toast(`NEED WORKBENCH TIER ${r.tierReq}`, 'bad'); return; }
     if (r.weapon && this.owned.has(r.weapon)) return;
@@ -967,8 +1205,14 @@ export class Game {
     if (r.upgrade === 'armor' && this.car.armorLevel >= 3) return;
     if (r.upgrade === 'anchors' && this.car.anchorTier >= 4) return;
     if (r.upgrade === 'bench' && this.benchTier >= (r.tier || 2)) return;
+    if (r.effect?.type === 'perk') {
+      const p = r.effect.perk;
+      const cap = PERK_CAPS[p] ?? 20;
+      if ((this.perks[p] || 0) >= cap - 1e-9) { this.hud.toast('THAT UPGRADE IS MAXED OUT', 'warn'); return; }
+    }
 
     for (const [k, v] of Object.entries(r.cost)) this.materials[k] -= v;
+    this.craftedCount += 1;
 
     if (r.weapon) {
       this.owned.add(r.weapon);
@@ -976,23 +1220,6 @@ export class Game {
       this.weapon = r.weapon;
       this.syncWeapon();
       this.hud.toast(`${r.name} CRAFTED & EQUIPPED`, 'good');
-    } else if (r.id === 'fuelcan') {
-      this.car.fuel = clamp(this.car.fuel + 12, 0, this.car.maxFuel);
-      this.hud.toast('+12L FUEL', 'good');
-    } else if (r.id === 'superfuel') {
-      this.car.fuel = clamp(this.car.fuel + 26, 0, this.car.maxFuel);
-      this.hud.toast('+26L SUPER FUEL', 'good');
-    } else if (r.id === 'repairkit') {
-      this.car.chassis = clamp(this.car.chassis + 30, 0, 100);
-      this.car.engine = clamp(this.car.engine + 30, 0, 100);
-      this.car.dead = false;
-      this.hud.toast('CHASSIS & ENGINE REPAIRED', 'good');
-    } else if (r.id === 'tirepatch') {
-      this.car.tires = clamp(this.car.tires + 35, 0, 100);
-      this.hud.toast('TIRES PATCHED', 'good');
-    } else if (r.id === 'fullfix') {
-      this.car.engine = 100; this.car.tires = 100; this.car.chassis = 100; this.car.dead = false;
-      this.hud.toast('FULL OVERHAUL COMPLETE', 'good');
     } else if (r.upgrade === 'armor') {
       this.car.upgradeArmor();
       this.hud.toast(`ARMOR PLATING LV${this.car.armorLevel}`, 'good');
@@ -1001,22 +1228,49 @@ export class Game {
       this.hud.toast(`ANCHOR TIER ${this.car.anchorTier}`, 'good');
     } else if (r.upgrade === 'bench') {
       this.benchTier = Math.max(this.benchTier, r.tier);
-      this.hud.benchTier.textContent = `TIER ${this.benchTier}`;
+      if (this.hud.benchTier) this.hud.benchTier.textContent = `TIER ${this.benchTier}`;
       this.hud.toast(`WORKBENCH UPGRADED TO TIER ${this.benchTier}`, 'good');
+    } else if (r.effect) {
+      this.applyRecipeEffect(r);
     }
+
     this.audio.craft();
     this.hud.ownedWeapons = [...this.owned];
     this.hud.tier = this.benchTier;
     this.hud.inv = this.materials;
-    const recipes = RECIPES.map((rr) => {
-      let maxed = false;
-      if (rr.upgrade === 'armor' && this.car.armorLevel >= 3) maxed = true;
-      if (rr.upgrade === 'anchors' && this.car.anchorTier >= 4) maxed = true;
-      if (rr.upgrade === 'bench' && this.benchTier >= (rr.tier || 2)) maxed = true;
-      return { ...rr, maxed };
-    });
-    this.hud.recipes = recipes;
+    this.hud.recipes = this.benchRecipes();
     this.hud.refreshBench();
+  }
+
+  /** Resolves a generated recipe's effect. */
+  applyRecipeEffect(r) {
+    const e = r.effect;
+    if (e.type === 'fuel') {
+      this.car.fuel = clamp(this.car.fuel + e.amount, 0, this.car.maxFuel);
+      this.hud.toast(`+${e.amount} L FUEL`, 'good');
+    } else if (e.type === 'repair') {
+      if (e.chassis) this.car.chassis = clamp(this.car.chassis + e.chassis, 0, 100);
+      if (e.engine) this.car.engine = clamp(this.car.engine + e.engine, 0, 100);
+      if (e.tires) this.car.tires = clamp(this.car.tires + e.tires, 0, 100);
+      this.car.dead = false;
+      this.hud.toast('RIG REPAIRED ON THE BENCH', 'good');
+    } else if (e.type === 'tires') {
+      this.car.tires = clamp(this.car.tires + e.amount, 0, 100);
+      this.hud.toast(`+${e.amount} TIRE TREAD`, 'good');
+    } else if (e.type === 'give') {
+      const stored = this.inventory.add(e.item, e.qty);
+      this.hud.toast(stored ? `CRAFTED ${e.qty}× ${itemName(e.item)}` : 'PACK FULL — CRAFT SOMETHING ELSE', stored ? 'good' : 'bad');
+    } else if (e.type === 'perk') {
+      const p = e.perk;
+      const cap = PERK_CAPS[p] ?? 20;
+      this.perks[p] = Math.min(cap, (this.perks[p] || 0) + e.amount);
+      if (p === 'maxhp') this.hpMax = 100 + this.perks.maxhp;
+      if (p === 'maxfuel') {
+        this.car.maxFuel = Math.round(60 + this.perks.maxfuel);
+        this.car.fuel = Math.min(this.car.fuel, this.car.maxFuel);
+      }
+      this.hud.toast(`${r.perkLabel || 'UPGRADE'} INSTALLED`, 'good');
+    }
   }
 
   // ------------------------------------------------------------------ world
@@ -1146,23 +1400,174 @@ export class Game {
     };
     for (let i = this.hollows.length - 1; i >= 0; i--) {
       const h = this.hollows[i];
+      const px = h.group ? h.group.position.x : h.pos.x;
+      const pz = h.group ? h.group.position.z : h.pos.z;
       h.update(dt, target, hooks);
+      // solid walls: shove scavengers back out instead of letting them phase through
+      const hx = h.group ? h.group.position.x : h.pos.x;
+      const hz = h.group ? h.group.position.z : h.pos.z;
+      if (this.world.collideFoot(hx, hz, 0.45)) {
+        if (h.group) h.group.position.set(px, h.group.position.y, pz);
+        else { h.pos.x = px; h.pos.z = pz; }
+      }
       if (Math.hypot(h.pos.x - this.pos.x, h.pos.z - this.pos.z) > 420) { h.die(); this.hollows.splice(i, 1); }
     }
-    for (const r of this.raiders) r.update(dt, target, raiderHooks);
+    for (const r of this.raiders) {
+      const px = r.pos.x, pz = r.pos.z;
+      r.update(dt, target, raiderHooks);
+      // raiders are vehicles: they may not drive through a house either
+      if (!this.world.collide(r.pos.x, r.pos.z, 1.7)) continue;
+      if (!this.world.collide(r.pos.x, pz, 1.7)) r.pos.z = pz;
+      else if (!this.world.collide(px, r.pos.z, 1.7)) r.pos.x = px;
+      else { r.pos.x = px; r.pos.z = pz; }
+    }
+  }
+
+  // -------------------------------------------------------------- inventory
+  toggleInventory(force) {
+    if (this.dead || this.won) return;
+    const open = force === undefined ? !this.invUI.open : force;
+    if (open) {
+      this.paused = true;
+      this.hud.closeBench();
+      this.invUI.show();
+    } else {
+      this.paused = false;
+      this.invUI.hide();
+    }
+  }
+
+  /** Applies a consumable. Returns true when it should be removed from the pack. */
+  useItem(id) {
+    const def = ITEMS[id];
+    if (!def?.use || this.dead) return false;
+    const use = def.use;
+    let applied = false;
+    if (use.heal) {
+      this.hp = clamp(this.hp + use.heal, 0, this.hpMax || 100);
+      applied = true;
+    }
+    if (use.fuel) {
+      if (this.car.fuel >= this.car.maxFuel - 0.1) { this.hud.toast('TANK IS ALREADY FULL', 'warn'); return false; }
+      this.car.fuel = clamp(this.car.fuel + use.fuel, 0, this.car.maxFuel);
+      applied = true;
+    }
+    if (use.chassis) { this.car.chassis = clamp(this.car.chassis + use.chassis, 0, 100); this.car.dead = false; applied = true; }
+    if (use.engine) { this.car.engine = clamp(this.car.engine + use.engine, 0, 100); applied = true; }
+    if (use.tires) { this.car.tires = clamp(this.car.tires + use.tires, 0, 100); applied = true; }
+    if (use.light) {
+      const at = (this.inCar ? this.car.pos : this.avatar.root.position).clone();
+      at.y = 0.4;
+      this.effects.emit(at, 22, { color: 0xff7b3c, spread: 0.7, up: 2.2, life: 1.1, gravity: 3 });
+      this.flare = { at, ttl: 20 };
+      applied = true;
+    }
+    if (use.stamina) { this.car.fuel = clamp(this.car.fuel + 2, 0, this.car.maxFuel); applied = true; }
+    if (applied) {
+      this.audio?.pickup?.();
+      this.hud.toast(`${def.name} USED`, 'good');
+    }
+    return applied;
+  }
+
+  // ------------------------------------------------------------------ admin
+  /** Moves the rig (or the avatar on foot) to a world position. Owner panel only. */
+  teleport(x, z, { keepHeading = true } = {}) {
+    const tx = clamp(Number(x) || 0, -220, 220);
+    const tz = Number(z) || 0;
+    this.car.pos.x = tx;
+    this.car.pos.z = tz;
+    this.car.speed = 0;
+    this.car.lateral = 0;
+    if (!keepHeading) this.car.yaw = 0;
+    this.avatar.root.position.set(tx, 0, tz);
+    this.pos.set(tx, 0, tz);
+    this.camPos.set(tx + 8, 8, tz + 14);
+    this.hud.toast(`TELEPORTED TO ${tx.toFixed(0)} / ${tz.toFixed(0)}`, 'good');
+    return true;
+  }
+
+  healAll() {
+    this.hp = 100;
+    this.car.engine = 100;
+    this.car.chassis = 100;
+    this.car.tires = 100;
+    this.car.dead = false;
+    this.car.fuel = this.car.maxFuel;
+    this.hud.toast('RIG + SURVIVOR RESTORED', 'good');
+  }
+
+  spawnHollow(count = 1, radius = 22) {
+    const out = [];
+    for (let i = 0; i < count; i++) {
+      const a = rand(0, Math.PI * 2);
+      const h = new Hollow(this.scene, this.pos.x + Math.cos(a) * radius, this.pos.z + Math.sin(a) * radius, this.day);
+      this.hollows.push(h);
+      out.push(h);
+    }
+    this.hud.toast(`${count} HOLLOW${count > 1 ? 'S' : ''} SUMMONED`, 'warn');
+    return out;
+  }
+
+  spawnRaider(boss = false) {
+    const a = rand(0, Math.PI * 2);
+    const r = new RaiderCar(this.scene, this.pos.x + Math.cos(a) * 70, this.pos.z + Math.sin(a) * 70, this.day + (boss ? 10 : 0), boss);
+    this.raiders.push(r);
+    this.hud.toast(boss ? 'BOSS RIG DEPLOYED' : 'RAIDER RIG DEPLOYED', 'bad');
+    return r;
+  }
+
+  clearHostiles() {
+    [...this.hollows].forEach((h) => { h.die?.(); });
+    [...this.raiders].forEach((r) => { r.die?.(); });
+    this.hollows.length = 0;
+    this.raiders.length = 0;
+    this.hud.toast('AREA CLEARED', 'good');
+  }
+
+  clearStorms() {
+    [...this.tornadoes].forEach((t) => { t.die?.(); this.scene.remove?.(t.group); });
+    this.tornadoes.length = 0;
+    this.stormCat = 0;
+    this.hud.storm(null);
+    this.hud.toast('STORMS DISSIPATED', 'good');
   }
 
   updateInteraction() {
     if (this.paused || this.dead) return;
-    if (this.inCar) this.hud.prompt('');
-    else {
-      const d = dist2(this.avatar.root.position, this.car.pos);
-      if (d < 6.5) this.hud.prompt('[E] ENTER THE RIG');
-      else {
-        const stop = this.world.nearestPitStop(this.pos.x, this.pos.z, 20);
-        this.hud.prompt(stop ? `[G] SCAVENGE ${stop.label}` : '');
-      }
+    // phones have no keyboard: drop the key hints there instead of showing [G]/[E]
+    const key = (k) => (this.touchMode ? '' : `[${k}] `);
+    if (this.inCar) {
+      const drops = this.loot?.count || 0;
+      const b = this.world.nearestBuilding(this.pos.x, this.pos.z, 26);
+      if (drops) this.hud.prompt(`${drops} DROP${drops === 1 ? '' : 'S'} ON THE GROUND · DRIVE OVER THEM`);
+      else this.hud.prompt(b ? `${b.label} AHEAD · STOP & SEARCH ON FOOT` : '');
+      return;
     }
+
+    const near = this.loot?.nearest(this.pos.x, this.pos.z, 2.2);
+    if (near) { this.hud.prompt(`${itemName(near.item)} · ${near.qty} · WALK OVER IT`); return; }
+
+    const d = dist2(this.avatar.root.position, this.car.pos);
+    if (d < 6.5 && !this.insideBuilding) { this.hud.prompt(`${key('E')}ENTER THE RIG`); return; }
+
+    if (this.insideBuilding) {
+      const b = this.insideBuilding;
+      this.hud.prompt(b.scavengeReady
+        ? `${key('G')}SEARCH ${b.label}`
+        : `${b.label} · PICKED CLEAN · WALK OUT`);
+      return;
+    }
+
+    const build = this.world.nearestBuilding(this.pos.x, this.pos.z, 18);
+    if (build) {
+      this.hud.prompt(build.scavengeReady
+        ? `${key('G')}SEARCH ${build.label}`
+        : `${build.label} · PICKED CLEAN`);
+      return;
+    }
+    const stop = this.world.nearestPitStop(this.pos.x, this.pos.z, 20);
+    this.hud.prompt(stop ? `${key('G')}SCAVENGE ${stop.label}` : '');
   }
 
   radarBlips() {
@@ -1172,6 +1577,10 @@ export class Game {
     this.raiders.forEach((r) => blips.push({ x: r.pos.x - px, z: r.pos.z - pz, kind: 'enemy', size: 3.4 }));
     this.tornadoes.forEach((t) => blips.push({ x: t.pos.x - px, z: t.pos.z - pz, kind: 'tornado' }));
     this.world.pitStops.forEach((s) => blips.push({ x: s.x - px, z: s.z - pz, kind: 'pit' }));
+    this.world.buildings.forEach((b) => blips.push({
+      x: b.x - px, z: b.z - pz, kind: 'house', size: 3.2,
+      inside: b === this.insideBuilding, ready: b.scavengeReady,
+    }));
     this.net.peers.forEach((p) => {
       if (typeof p.x !== 'number' || typeof p.z !== 'number') return;
       blips.push({ x: p.x - px, z: p.z - pz, kind: 'peer', color: '#' + (p.color || 0x5ff0ff).toString(16).padStart(6, '0') });
@@ -1192,8 +1601,11 @@ export class Game {
   // ------------------------------------------------------------------ damage
   hurt(amount, reason = '') {
     if (this.dead || this.won) return;
+    if (this.godMode) return;
+    if (this.perks?.armor) amount *= 1 - Math.min(0.55, this.perks.armor);
     if (this.invuln > 0 && amount < 8) return;
     this.hp -= amount;
+    if (this.hp > this.hpMax) this.hp = this.hpMax;
     if (amount >= 3) {
       this.invuln = INVULN;
       this.flash.style.background = '#ff2f45';
@@ -1216,31 +1628,45 @@ export class Game {
     this.dead = true;
     this.hp = 0;
     this.paused = true;
+    this.invUI?.hide();
+    this.hud.closeBench();
     this.audio.crash();
     this.hud.storm(null);
     this.hud.showGameOver('WRECKED', 'The highway claimed another survivor.', [
       { k: 'DAYS SURVIVED', v: this.day },
       { k: 'DISTANCE', v: `${(this.distance / 1000).toFixed(1)} KM` },
       { k: 'SCAVENGERS DOWN', v: this.kills },
+      { k: 'ITEMS LOOTED', v: this.itemsLooted },
+      { k: 'ITEMS CRAFTED', v: this.craftedCount },
       { k: 'ZONE REACHED', v: ZONES[this.zone].short },
     ]);
     this.net.event('boom', { x: this.pos.x, z: this.pos.z });
-    this.onRunEnd?.({ day: this.day, distance: Math.round(this.distance), kills: this.kills, won: false });
+    this.onRunEnd?.({
+      day: this.day, distance: Math.round(this.distance), kills: this.kills,
+      itemsLooted: this.itemsLooted, crafted: this.craftedCount, won: false,
+    });
   }
 
   win() {
     if (this.won || this.dead) return;
     this.won = true;
     this.paused = true;
+    this.invUI?.hide();
+    this.hud.closeBench();
     this.hud.storm(null);
     this.hud.showGameOver('YOU LIVED', '100 days. One rig. The coast is yours.', [
       { k: 'DAYS SURVIVED', v: 100 },
       { k: 'DISTANCE', v: `${(this.distance / 1000).toFixed(1)} KM` },
       { k: 'SCAVENGERS DOWN', v: this.kills },
+      { k: 'ITEMS LOOTED', v: this.itemsLooted },
+      { k: 'ITEMS CRAFTED', v: this.craftedCount },
       { k: 'STATUS', v: 'ESCAPED' },
     ]);
     this.net.event('win', { x: this.pos.x, z: this.pos.z });
-    this.onRunEnd?.({ day: 100, distance: Math.round(this.distance), kills: this.kills, won: true });
+    this.onRunEnd?.({
+      day: 100, distance: Math.round(this.distance), kills: this.kills,
+      itemsLooted: this.itemsLooted, crafted: this.craftedCount, won: true,
+    });
   }
 
   // ------------------------------------------------------------ multiplayer
@@ -1309,6 +1735,14 @@ export class Game {
       if (d < 60) this.audio.crash();
     } else if (e.kind === 'kill') {
       this.effects.blood(new THREE.Vector3(e.x, 1.2, e.z), new THREE.Vector3(0, 1, 0));
+    } else if (e.kind === 'drop' && Array.isArray(e.stacks)) {
+      this.loot.spawn(e.x, e.z, e.stacks, { spread: e.spread ?? 2, grace: e.grace ?? 0, key: e.key });
+    } else if (e.kind === 'take' && e.key) {
+      this.loot.removeByKey(e.key);
+    } else if (e.kind === 'admin-kick' && e.target === this.net.id) {
+      this.hud.toast('REMOVED BY THE OWNER', 'bad');
+      this.audio.alarm();
+      setTimeout(() => this.onQuit?.(), 1200);
     }
   }
 

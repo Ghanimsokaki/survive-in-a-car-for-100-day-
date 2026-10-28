@@ -161,6 +161,16 @@
           </div>
         </label>
 
+        <div class="field">
+          <span>GRAPHICS</span>
+          <div id="qualityRow" class="seg">
+            <button type="button" data-quality="auto" class="on">AUTO</button>
+            <button type="button" data-quality="low">LOW</button>
+            <button type="button" data-quality="medium">MED</button>
+            <button type="button" data-quality="high">HIGH</button>
+          </div>
+        </div>
+
         <button id="playBtn" class="play-btn">START THE RUN <span>▸</span></button>
         <p id="netStatus" class="net-status">checking relay…</p>
       </div>
@@ -264,13 +274,17 @@
     <button id="anchorBtn" class="act anchor" type="button"><span class="act-ico">⚓</span><span class="act-txt">DEPLOY ANCHORS<em>[SPACE]</em></span></button>
     <button id="benchBtn" class="act" type="button"><span class="act-ico">🛠</span><span class="act-txt">WORKBENCH<em>[TAB]</em></span></button>
     <button id="scavBtn" class="act" type="button"><span class="act-ico">🔍</span><span class="act-txt">SCAVENGE<em>[G]</em></span></button>
+    <button id="invBtn" class="act" type="button"><span class="act-ico">🎒</span><span class="act-txt">BACKPACK<em>[I]</em></span></button>
   </div>
+
+  <div id="hotbar"></div>
 
   <div id="prompt"></div>
   <div id="toasts"></div>
   <div id="stormBanner" class="hidden"></div>
   <div id="crosshair">+</div>
   <button id="mobileMenuBtn" class="mobile-menu" type="button" aria-label="Menu">☰</button>
+  <button id="adminBtn" class="admin-fab hidden" type="button" title="Owner console (backquote)"><span>⌘</span> OWNER</button>
 </div>
 
 <!-- ============ WORKBENCH ============ -->
@@ -291,14 +305,42 @@
           <button data-tab="weapons" class="on" type="button">WEAPONS</button>
           <button data-tab="repairs" type="button">REPAIRS &amp; FUEL</button>
           <button data-tab="upgrades" type="button">RIG UPGRADES</button>
+          <button data-tab="gear" type="button">GEAR</button>
+          <button data-tab="consumables" type="button">CONSUMABLES</button>
+        </div>
+        <div class="recipe-bar">
+          <input id="recipeSearch" placeholder="Search recipes…" autocomplete="off" autocapitalize="none" spellcheck="false" />
+          <span id="recipeCount" class="recipe-count"></span>
         </div>
         <div id="recipeGrid" class="recipes"></div>
+        <div class="recipe-pager">
+          <button id="recipePrev" type="button">‹ PREV</button>
+          <span id="recipePage">1 / 1</span>
+          <button id="recipeNext" type="button">NEXT ›</button>
+        </div>
       </main>
     </div>
   </div>
 </div>
 
 <!-- ============ RUN OVER ============ -->
+<!-- ============ INVENTORY ============ -->
+<div id="invPanel" class="overlay">
+  <div class="inv-card">
+    <div class="bench-head">
+      <h2>BACKPACK <small id="invCount">0/30</small></h2>
+      <button id="invClose" class="x" type="button">✕</button>
+    </div>
+    <div class="inv-body">
+      <p class="inv-hint">Tap an item to pin it to the hotbar · keys <b>1–8</b> use a slot · loot has to be picked up in the world.</p>
+      <div id="invMats" class="inv-mats"></div>
+      <div id="invFilter" class="inv-filter-bar"></div>
+      <div id="invGrid" class="inv-grid"></div>
+      <p id="invEmpty" class="inv-empty">Your pack is empty — scavenge a pit-stop or a house, then walk over the drops.</p>
+    </div>
+  </div>
+</div>
+
 <div id="gameover" class="overlay">
   <div class="go-card">
     <h2 id="goTitle">WRECKED</h2>
@@ -312,7 +354,7 @@
 </div>
 
 <!-- ============ PHONE HINTS ============ -->
-<div id="rotateHint" class="hidden">
+<div id="rotateHint">
   <div class="rotate-ico">📱</div>
   <b>ROTATE YOUR PHONE</b>
   <span>The highway is wider in landscape.</span>

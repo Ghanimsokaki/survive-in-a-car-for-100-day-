@@ -120,6 +120,7 @@ export class AudioKit {
   swing() { this.noiseBurst(0.11, 1500, 0.12); }
   shot() { this.noiseBurst(0.13, 2400, 0.3); this.blip(240, 0.1, 'square', 0.1); }
   pickup() { this.blip(880, 0.08, 'triangle', 0.1); setTimeout(() => this.blip(1180, 0.08, 'triangle', 0.08), 60); }
+  creak() { this.noiseBurst(0.4, 240, 0.07, 'lowpass'); this.blip(92, 0.26, 'sawtooth', 0.045); }
   craft() { [520, 700, 940].forEach((f, i) => setTimeout(() => this.blip(f, 0.12, 'triangle', 0.09), i * 90)); }
   alarm() { [0, 220, 440].forEach((d) => setTimeout(() => this.blip(420, 0.16, 'square', 0.08), d)); }
 }

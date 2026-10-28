@@ -3,6 +3,7 @@ import { buildAvatar } from './avatar.js';
 import { Game } from './game.js';
 import { Account } from './account.js';
 import { AuthUI } from './authui.js';
+import { mountAdmin } from './admin.js';
 import { BODY_COLORS, CAR_COLORS, hexToInt } from './palette.js';
 
 const $ = (id) => document.getElementById(id);
@@ -17,19 +18,24 @@ const state = {
   carColor: CAR_COLORS[0],
   room: 'highway-01',
   guest: true,
+  quality: 'auto',
 };
 
 const saveLocal = () => {
-  try { localStorage.setItem('outrun-profile', JSON.stringify({ room: state.room })); } catch {}
+  try {
+    localStorage.setItem('outrun-profile', JSON.stringify({ room: state.room, quality: state.quality }));
+  } catch {}
 };
 try {
   const saved = JSON.parse(localStorage.getItem('outrun-profile') || '{}');
   if (saved.room) state.room = saved.room;
+  if (['auto', 'low', 'medium', 'high'].includes(saved.quality)) state.quality = saved.quality;
 } catch {}
 
 // ------------------------------------------------------------------ account
 const account = new Account();
 let game = null;
+let admin = null;
 let authUI = null;
 let starting = false;
 
@@ -316,6 +322,7 @@ async function startRun() {
       mount: $('app'),
       profile: { name: state.name, color: hexToInt(state.color), carColor: hexToInt(state.carColor) },
       room: state.room,
+      quality: state.quality,
       onQuit: () => location.reload(),
       onRunEnd: (stats) => {
         account.recordRun(stats);
@@ -330,6 +337,18 @@ async function startRun() {
     game.hud.toast('DAY 1 · OAKHAVEN OUTSKIRTS', 'warn');
     setTimeout(() => game?.hud.toast(isPhone ? 'LEFT STICK DRIVES · TAP ⚓ TO ANCHOR' : 'COLLECT FUEL · REACH THE HIGHWAY', ''), 1800);
     if (account.signedIn) account.setPresence({ status: 'playing', room: state.room, day: 1 });
+    admin = mountAdmin({
+      game,
+      account,
+      survivorName: state.name,
+      onBan: (u) => game?.hud.toast(`@${u} BANNED FROM THE ROOM`, 'warn'),
+    });
+    if (admin) {
+      game.hud.toast(
+        admin.mode === 'guest' ? 'OWNER CONSOLE READY — PRESS ⌘ OWNER OR THE BACKQUOTE KEY' : 'OWNER CONSOLE UNLOCKED',
+        'good'
+      );
+    }
   } catch (err) {
     console.error(err);
     $('loading').classList.add('gone');
@@ -356,16 +375,26 @@ setInterval(() => {
 function phoneSetup() {
   if (isTouch || isCoarse) document.body.classList.add('touch');
   const rotate = $('rotateHint');
+  // Show the "rotate for a wider road" hint ONCE per session. Dismissing it
+  // used to be undone by the polling loop, which made the game unplayable in
+  // portrait; the portrait HUD is now usable on its own.
+  let rotateSeen = false;
+  let rotateDismissed = false;
   const sync = () => {
     if (!isPhone || !rotate) return;
+    if (rotateDismissed || rotateSeen) { rotate.classList.remove('show'); return; }
     const portrait = window.innerHeight > window.innerWidth;
-    const playing = game && game.started;
-    rotate.classList.toggle('show', Boolean(portrait && playing));
+    const playing = game && game.started && !game.dead && !game.won && !game.paused;
+    if (portrait && playing) { rotateSeen = true; rotate.classList.add('show'); }
+    else rotate.classList.remove('show');
   };
   window.addEventListener('orientationchange', () => setTimeout(sync, 220));
   window.addEventListener('resize', sync);
   setInterval(sync, 1200);
-  $('rotateDismiss')?.addEventListener('click', () => rotate?.classList.remove('show'));
+  $('rotateDismiss')?.addEventListener('click', () => {
+    rotateDismissed = true;
+    rotate?.classList.remove('show');
+  });
   if (isPhone) {
     document.querySelector('meta[name="viewport"]')
       ?.setAttribute('content', 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover');
@@ -422,6 +451,22 @@ async function boot() {
     $('roomInput').value = state.room;
     saveLocal();
   });
+  // graphics quality: persisted, applied on the next launch
+  const qualityRow = $('qualityRow');
+  const paintQuality = () => {
+    qualityRow?.querySelectorAll('[data-quality]').forEach((b) => {
+      b.classList.toggle('on', b.dataset.quality === state.quality);
+    });
+  };
+  qualityRow?.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-quality]');
+    if (!btn) return;
+    state.quality = btn.dataset.quality;
+    paintQuality();
+    saveLocal();
+  });
+  paintQuality();
+
   $('playBtn')?.addEventListener('click', startRun);
   [$('nameInput'), $('roomInput')].forEach((el) => el?.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') startRun();
@@ -487,4 +532,4 @@ async function boot() {
 
 boot();
 
-window.__outrun = { state, account, get game() { return game; }, startRun };
+window.__outrun = { state, account, get game() { return game; }, get admin() { return admin; }, startRun };

@@ -15,6 +15,8 @@ function run(cmd, args) {
 const suites = [
   ['env.test.mjs', 'VERCEL ENV → BROWSER'],
   ['game.test.mjs', 'SIMULATION'],
+  ['interiors-admin.test.mjs', 'INTERIORS + OWNER CONSOLE'],
+  ['loot-inventory.test.mjs', 'LOOT + INVENTORY + RECIPES'],
   ['account.test.mjs', 'ACCOUNTS + FRIENDS'],
   ['app.test.mjs', 'GUEST UI FLOW'],
   ['app-auth.test.mjs', 'SIGNED-IN FRIENDS UI'],

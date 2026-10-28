@@ -11,6 +11,7 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { publicConfig, resolveSupabaseConfig } from './lib/supabase-env.mjs';
+import { bearerToken, handleAdminRequest } from './lib/admin-auth.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -135,6 +136,28 @@ const server = createServer(async (req, res) => {
     const cfg = { ...publicConfig(process.env, 'node-websocket'), websocket: true };
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
     res.end(JSON.stringify(cfg, null, 2));
+    return;
+  }
+
+  if (pathname === '/api/admin') {
+    if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    const action = (url.searchParams.get('action') || 'verify').toLowerCase();
+    const token = bearerToken(req);
+    let raw = '';
+    req.on('data', (d) => { raw += d; if (raw.length > 4000) req.destroy(); });
+    req.on('end', async () => {
+      let body = {};
+      try { body = raw ? JSON.parse(raw) : {}; } catch { body = {}; }
+      let out;
+      try {
+        out = await handleAdminRequest({ method: req.method || 'GET', token, action, body, env: process.env });
+      } catch (err) {
+        out = { status: 500, body: { ok: false, reason: String(err && err.message || err) } };
+      }
+      res.writeHead(out.status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(JSON.stringify(out.body));
+    });
     return;
   }
 
