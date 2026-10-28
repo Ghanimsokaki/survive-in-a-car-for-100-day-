@@ -114,6 +114,7 @@ export class Game {
     this.inventory = new Inventory();
     this.invUI = new InventoryUI(this.inventory, {
       onUse: (id) => this.useItem(id),
+      onToss: (id) => this.tossItem(id, -1),
       getMaterials: () => this.materials,
     });
     this.pickupBatch = new Map();
@@ -570,6 +571,7 @@ export class Game {
     this.updateInteraction();
     this.updatePeers(dt);
     this.world.update(dt, this.pos, this.zone);
+    this.updateDoors();
     this.world.updateWeather(dt, this.camera.position, this.stormCat > 0 ? 30 : 0);
     this.effects.update(dt);
 
@@ -754,6 +756,23 @@ export class Game {
       this.audio?.step?.();
     } else if (previous) {
       this.hud.toast(`LEFT ${previous.label}`, 'warn');
+    }
+  }
+
+  /** One soft creak when a door you are standing at swings open or shut. */
+  updateDoors() {
+    const pos = this.inCar ? this.car.pos : this.avatar.root.position;
+    for (const b of this.world?.buildings || []) {
+      const near = Math.hypot(pos.x - b.door.x, pos.z - b.door.z) < 6;
+      const open = b.doorAngle > 0.35;
+      if (!near) { b._doorOpen = false; continue; }
+      if (open !== Boolean(b._doorOpen)) {
+        b._doorOpen = open;
+        if (this.time - (this._creakAt || 0) > 0.45) {
+          this._creakAt = this.time;
+          this.audio?.creak?.();
+        }
+      }
     }
   }
 
@@ -974,6 +993,27 @@ export class Game {
     if (!stacks?.length) return 0;
     this.loot.spawn(x, z, stacks, { spread });
     return stacks.length;
+  }
+
+  /**
+   * Puts a stack back on the ground in front of the survivor so co-op partners
+   * can take it. Drops get a short grace window, otherwise you would scoop it
+   * back up on the next frame.
+   */
+  tossItem(id, qty = -1) {
+    if (this.dead || this.won || !id) return 0;
+    if (isMaterial(id)) return 0;
+    const have = this.inventory.count(id);
+    if (!have) { this.hud.toast('YOU ARE NOT CARRYING THAT', 'warn'); return 0; }
+    const n = qty < 0 ? have : Math.min(qty, have);
+    this.inventory.remove(id, n);
+    const pos = this.inCar ? this.car.pos : this.avatar.root.position;
+    const yaw = this.inCar ? this.car.yaw : this.avatar.root.rotation.y;
+    const forward = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw)).multiplyScalar(-1.5);
+    this.loot.spawn(pos.x + forward.x, pos.z + forward.z, [{ id, qty: n }], { spread: 0.5, grace: 1.6 });
+    this.audio?.blip?.(300, 0.09, 'triangle', 0.07);
+    this.hud.toast(`TOSSED ${n} ${itemName(id)} — WALK OVER IT TO GRAB IT BACK`, 'warn');
+    return n;
   }
 
   /** Batches pickups so a handful of drops in one second reads as one toast. */

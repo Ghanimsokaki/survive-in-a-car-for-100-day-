@@ -167,7 +167,7 @@ How it plays:
   bonus, then the place is picked clean for 32 s. Cars cannot drive through a building; only people
   fit through the doorway.
 * Interiors are lit by the world sun, so a midday raid is safe and a night raid is genuinely dark;
-* **hinged doors** swing open as you step onto the porch and shut behind you — wide warehouses
+* **hinged doors** creak open as you step onto the porch and shut behind you — wide warehouses
   get double leaves, and the panels open inward so a doorway is never blocked.
 
 ## 🎒 Loot, backpack and hotbar
@@ -186,6 +186,8 @@ Everything you scavenge exists in the world first:
 * the pack sorts itself (usables → gear → raw salvage) and filters by **ALL / USABLE / GEAR / SALVAGE**
   with live counts, so a full 30-slot pack never turns into a wall of icons;
 * every usable cell carries its own **USE** button — phones never have to hunt for a hotbar slot;
+* every non-material stack has a **TOSS** button: it drops in front of you with a short grace window,
+  so survivors can hand loot to each other over the ground;
 * **Esc** puts the bench *and* the backpack away and unpauses; opening one stows the other.
 
 ## 🛠 1000 crafting recipes

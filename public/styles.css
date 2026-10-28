@@ -757,6 +757,10 @@ body.touch{-webkit-user-select:none;user-select:none;overscroll-behavior:none}
 .inv-cell .inv-use{position:absolute;right:8px;bottom:8px;padding:5px 10px;border-radius:6px;
   background:#1b2130;border:1px solid rgba(255,255,255,.14);font-size:8px;letter-spacing:1.2px;color:#dfe5ef}
 .inv-cell .inv-use:hover{background:var(--amber);color:#1a0f01;border-color:var(--amber)}
+.inv-cell .inv-toss{position:absolute;left:8px;bottom:8px;padding:5px 9px;border-radius:6px;
+  background:#151a24;border:1px solid rgba(255,255,255,.1);font-size:8px;letter-spacing:1.2px;color:#8e97a6}
+.inv-cell .inv-toss:hover{background:#2a2027;color:#ffb3ba;border-color:rgba(255,77,94,.5)}
+.inv-cell:has(.inv-toss) .inv-desc{padding-bottom:22px}
 
 /* backpack filter row */
 .inv-filter-bar{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0 8px}

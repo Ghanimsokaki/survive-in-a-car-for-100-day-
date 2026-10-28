@@ -119,9 +119,10 @@ export function sortItems(list) {
 }
 
 export class InventoryUI {
-  constructor(inventory, { onUse, getMaterials } = {}) {
+  constructor(inventory, { onUse, onToss, getMaterials } = {}) {
     this.inv = inventory;
     this.onUse = onUse || (() => {});
+    this.onToss = onToss || null;
     this.getMaterials = getMaterials || (() => ({}));
     this.selected = 0;
     this.open = false;
@@ -156,6 +157,13 @@ export class InventoryUI {
       this.useSlot(Number(slot.dataset.slot));
     });
     this.el.grid?.addEventListener('click', (ev) => {
+      const tossBtn = ev.target.closest('[data-toss]');
+      if (tossBtn && this.onToss) {
+        ev.stopPropagation?.();
+        this.onToss(tossBtn.dataset.toss);
+        this.render();
+        return;
+      }
       const useBtn = ev.target.closest('[data-use]');
       if (useBtn) {
         ev.stopPropagation?.();
@@ -241,6 +249,8 @@ export class InventoryUI {
           <span class="inv-name">${it.name}</span>
           <span class="inv-desc">${it.desc || (onBar ? 'ON HOTBAR' : 'TAP TO ADD TO HOTBAR')}</span>
           ${isUsable(it.id) ? `<span class="inv-use" data-use="${it.id}">USE</span>` : ''}
+          ${this.onToss && itemKind(it.id) !== 'material'
+            ? `<span class="inv-toss" data-toss="${it.id}" title="Drop this stack">TOSS</span>` : ''}
         </button>`;
       }).join('');
       if (this.el.weight) this.el.weight.textContent = `${this.inv.list().length}/${this.inv.capacity}`;

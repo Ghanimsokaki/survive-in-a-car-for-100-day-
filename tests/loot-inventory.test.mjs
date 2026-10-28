@@ -270,6 +270,50 @@ console.log('\nrun summary');
   g.hp = 100;
 }
 
+console.log('\ntossing loot back on the ground');
+{
+  g.loot.clear();
+  g.inventory.add('medkit', 3);
+  g.inCar = false;
+  g.pos.set(80, 0, 80);
+  g.avatar.root.position.set(80, 0, 80);
+  g.avatar.root.rotation.y = 0;
+  const had = g.inventory.count('medkit');
+  const tossed = g.tossItem('medkit', -1);
+  check('toss empties the stack', tossed === had && had > 0 && g.inventory.count('medkit') === 0, `${tossed}`);
+  check('the stack lands as a drop', g.loot.count === 1, `${g.loot.count}`);
+  const drop = g.loot.drops[0];
+  check('the drop appears in front of you', Math.hypot(drop.group.position.x - 80, drop.group.position.z - 80) > 0.5);
+
+  // standing on it must not vacuum it straight back up
+  drop.group.position.set(80, 0, 80);
+  const early = g.loot.update(1 / 60, { x: 80, z: 80 }, { radius: 2, magnet: 3 });
+  check('a fresh toss cannot be re-collected instantly', early.length === 0);
+  for (let i = 0; i < 120; i++) g.loot.update(1 / 60, { x: 500, z: 500 }, { radius: 1, magnet: 1 });
+  const late = g.loot.update(1 / 60, { x: 80, z: 80 }, { radius: 2, magnet: 3 });
+  check('after the grace window it can be picked up again',
+    late.some((s) => s.id === 'medkit' && s.qty === tossed), late.map((s) => s.id).join(','));
+
+  check('materials cannot be tossed', g.tossItem('scrap', 1) === 0);
+  const missing = Object.keys(ITEMS).find((id) => !isMaterial(id) && g.inventory.count(id) === 0);
+  check('tossing something you lack is refused', g.tossItem(missing, 1) === 0, missing);
+
+  // the TOSS control is wired in the backpack UI
+  g.inventory.add('bandage', 1);
+  g.invUI.show();
+  check('non-materials render a TOSS button', /data-toss="bandage"/.test(g.invUI.el.grid.innerHTML));
+  check('materials never get one', !/data-toss="scrap"/.test(g.invUI.el.grid.innerHTML));
+  check('the pack holds bandages to toss', g.inventory.count('bandage') > 0);
+  g.invUI.el.grid.dispatch('click', {
+    target: { closest: (sel) => (sel === '[data-toss]' ? { dataset: { toss: 'bandage' } } : null) },
+  });
+  check('the TOSS button drops the stack', g.inventory.count('bandage') === 0);
+  g.toggleInventory(false);
+  g.loot.clear();
+  g.pos.set(7, 0, 30);
+  g.avatar.root.position.set(7, 0, 30);
+}
+
 console.log('\nbackpack filters');
 {
   const inv = new Inventory();

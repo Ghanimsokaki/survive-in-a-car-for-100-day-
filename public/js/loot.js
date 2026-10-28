@@ -51,9 +51,9 @@ export class LootField {
    * Scatters stacks around a point.
    * @param {number} x @param {number} z
    * @param {{id:string,qty:number}[]} stacks
-   * @param {{spread?:number}} opts
+   * @param {{spread?:number, grace?:number}} opts grace = seconds before it can be collected
    */
-  spawn(x, z, stacks, { spread = 2.6 } = {}) {
+  spawn(x, z, stacks, { spread = 2.6, grace = 0 } = {}) {
     for (const stack of stacks) {
       if (!stack || !stack.qty) continue;
       if (this.drops.length >= this.max) this.removeOldest();
@@ -80,6 +80,7 @@ export class LootField {
         phase: rand(0, Math.PI * 2),
         age: 0,
         ttl: 95,
+        grace,
         taken: false,
       });
     }
@@ -109,6 +110,7 @@ export class LootField {
       const d = this.drops[i];
       d.age += dt;
       d.phase += dt * 2.2;
+      if (d.grace > 0) d.grace = Math.max(0, d.grace - dt);
       d.box.rotation.y += dt * 1.5;
       d.box.position.y = 0.28 + Math.sin(d.phase) * 0.07;
       d.ring.scale.setScalar(1 + Math.sin(d.phase * 0.8) * 0.08);
@@ -116,6 +118,9 @@ export class LootField {
       const dx = target.x - d.group.position.x;
       const dz = target.z - d.group.position.z;
       const dist = Math.hypot(dx, dz);
+
+      // a stack you just dropped cannot be vacuumed straight back up
+      if (d.grace > 0) continue;
 
       if (dist < magnet && dist > 0.001) {
         const pull = (1 - dist / magnet) * 3.4 * dt;
