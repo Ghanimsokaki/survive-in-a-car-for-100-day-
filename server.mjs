@@ -10,6 +10,7 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
+import { publicConfig, resolveSupabaseConfig } from './lib/supabase-env.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -124,13 +125,16 @@ const server = createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
 
   if (pathname === '/api/config') {
-    res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-    res.end(JSON.stringify({
-      supabaseUrl: process.env.SUPABASE_URL || '',
-      supabaseAnonKey: process.env.SUPABASE_ANON_KEY || '',
-      mode: 'node-websocket',
-      websocket: true,
-    }));
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+    res.end(JSON.stringify({ ...publicConfig(process.env, 'node-websocket'), websocket: true }));
+    return;
+  }
+
+  // same payload as a static file, so the client's fallback chain works in dev too
+  if (pathname === '/config.json') {
+    const cfg = { ...publicConfig(process.env, 'node-websocket'), websocket: true };
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+    res.end(JSON.stringify(cfg, null, 2));
     return;
   }
 
@@ -263,6 +267,15 @@ server.listen(PORT, HOST, () => {
   console.log(`\n  100 DAYS OUTRUN — relay online`);
   console.log(`  → http://localhost:${PORT}  (bind ${HOST}:${PORT})`);
   console.log(`  → websocket /ws · http relay /api/room`);
-  const sb = process.env.SUPABASE_URL ? `configured (${process.env.SUPABASE_URL})` : 'not configured — players run as guests';
-  console.log(`  → supabase accounts: ${sb}\n`);
+  const resolved = resolveSupabaseConfig(process.env);
+  if (resolved.configured) {
+    console.log(`  → supabase accounts: configured`);
+    console.log(`      url: ${resolved.url}  (from ${resolved.urlVar})`);
+    console.log(`      key: ${resolved.keyVar} (${resolved.keyKind})`);
+  } else {
+    console.log('  → supabase accounts: not configured — players run as guests');
+    for (const problem of resolved.problems) console.log(`      · ${problem}`);
+    console.log('      fix: set SUPABASE_URL + SUPABASE_ANON_KEY in .env, then restart');
+  }
+  console.log('');
 });

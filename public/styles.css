@@ -435,3 +435,14 @@ body.touch{-webkit-user-select:none;user-select:none;overscroll-behavior:none}
   .act-txt{display:none}
   #stick{width:112px;height:112px;bottom:calc(128px + env(safe-area-inset-bottom))}
 }
+
+/* env diagnostic inside the connect panel */
+.setup-status{display:flex;flex-direction:column;gap:4px;margin-bottom:14px}
+.setup-status:empty{display:none}
+.st-row{font-size:9.5px;letter-spacing:1px;line-height:1.5;padding:6px 9px;border-radius:6px;
+  background:#0e131c;border:1px solid rgba(255,255,255,.07);color:#9aa3b3}
+.st-row b{font-weight:700}
+.st-ok{color:#6dffa8}
+.st-no{color:#ff6d7b}
+.st-good{color:#b9ffd4;border-color:rgba(109,255,168,.4);background:#0d1713}
+.st-bad{color:#ffb3ba;border-color:rgba(255,109,123,.35);background:#170f11}

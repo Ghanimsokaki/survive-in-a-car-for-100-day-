@@ -105,6 +105,15 @@ treated as online for 75 s after their last beat, and the list refreshes every 2
 **Guests** keep a local profile and can play, chat and join rooms; only persistence and the friends list
 need Supabase. If the backend is missing or unreachable the game silently runs guest-only.
 
+**Credential delivery.** The browser resolves Supabase config through a chain:
+`/api/config` (live env on Vercel functions or the Node relay) → `/config.json` (baked at build time from the
+same env vars) → `supabase-config.js` (inline, for hosts that block JSON fetches) → `localStorage` (pasted on
+device). `lib/supabase-env.mjs` is the single resolver used by the function, the Node server and the build
+script, so all three agree; it accepts the common variable spellings (`SUPABASE_*`, `NEXT_PUBLIC_SUPABASE_*`,
+`VITE_SUPABASE_*`, `SUPABASE_PUBLISHABLE_KEY`, …), derives the project URL from the key's `ref` claim when the
+URL is missing, and refuses to ship a `service_role` / `sb_secret_` key. The sign-in screen exposes the
+resolver's report so a misconfigured deployment is visible without opening dev tools.
+
 Row level security: profiles readable by authenticated players (needed for username lookup), writes limited
 to your own row; friendships visible/deletable only to the two players involved; presence writable only by
 its owner and readable by all authenticated players.
