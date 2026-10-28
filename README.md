@@ -130,8 +130,8 @@ docs/DESIGN.md        game design document
 ## Legacy 2D build
 
 The first iteration of this project — a single-file, top-down canvas version — is preserved untouched in
-`legacy/index-2d.html` (with its original design doc at `docs/GDD-legacy-2d.md`). Open it directly in a
-browser if you want to see where the highway started.
+`public/legacy/index-2d.html` (served at `/legacy/index-2d.html`, original design doc in
+`docs/GDD-legacy-2d.md`). Open it to see where the highway started.
 
 ## Notes
 
