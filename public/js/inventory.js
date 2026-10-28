@@ -28,6 +28,13 @@ export class Inventory {
 
   count(id) { return this.items.get(id) || 0; }
 
+  /** Empties the pack and the hotbar (fresh run). */
+  clear() {
+    this.items.clear();
+    this.hotbar = new Array(HOTBAR_SLOTS).fill(null);
+    this.emit();
+  }
+
   /** Adds stacks, respecting per-item stack limits. Returns how many were stored. */
   add(id, qty = 1) {
     if (!ITEMS[id] || qty <= 0) return 0;

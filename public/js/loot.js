@@ -51,9 +51,11 @@ export class LootField {
    * Scatters stacks around a point.
    * @param {number} x @param {number} z
    * @param {{id:string,qty:number}[]} stacks
-   * @param {{spread?:number, grace?:number}} opts grace = seconds before it can be collected
+   * @param {{spread?:number, grace?:number, key?:string}} opts grace = seconds before it can be
+   *   collected; key lets co-op clients agree on which drop was already taken
    */
-  spawn(x, z, stacks, { spread = 2.6, grace = 0 } = {}) {
+  spawn(x, z, stacks, { spread = 2.6, grace = 0, key = null } = {}) {
+    let n = 0;
     for (const stack of stacks) {
       if (!stack || !stack.qty) continue;
       if (this.drops.length >= this.max) this.removeOldest();
@@ -81,10 +83,21 @@ export class LootField {
         age: 0,
         ttl: 95,
         grace,
+        key: key ? `${key}:${n++}` : null,
         taken: false,
       });
     }
     return this.drops.length;
+  }
+
+  /** Removes the local copy of a drop a teammate already picked up. */
+  removeByKey(key) {
+    if (!key) return false;
+    const i = this.drops.findIndex((d) => d.key === key);
+    if (i < 0) return false;
+    this.scene.remove(this.drops[i].group);
+    this.drops.splice(i, 1);
+    return true;
   }
 
   removeOldest() {
@@ -128,7 +141,7 @@ export class LootField {
         d.group.position.z += (dz / dist) * pull;
       }
       if (dist < radius) {
-        picked.push({ id: d.item, qty: d.qty });
+        picked.push({ id: d.item, qty: d.qty, key: d.key });
         this.scene.remove(d.group);
         this.drops.splice(i, 1);
         continue;

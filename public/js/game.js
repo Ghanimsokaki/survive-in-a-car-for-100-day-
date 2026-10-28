@@ -123,6 +123,7 @@ export class Game {
     });
     this.pickupBatch = new Map();
     this.pickupTimer = 0;
+    this.lootSeq = 0;
 
     this.resetRun();
     this.net.start();
@@ -210,11 +211,7 @@ export class Game {
     if (this.interiorLight) this.interiorLight.intensity = 0;
     this.perks = { maxhp: 0, maxfuel: 0, armor: 0, dmg: 0, scav: 0, magnet: 0 };
     this.hpMax = 100;
-    this.inventory?.items.clear();
-    if (this.inventory) {
-      this.inventory.hotbar = new Array(8).fill(null);
-      this.inventory.emit();
-    }
+    this.inventory?.clear();
     this.loot?.clear();
     this.pickupBatch?.clear();
     this.weather = 'clear';
@@ -1008,9 +1005,12 @@ export class Game {
    * Turns a rolled haul into physical drops around a loot spot. Nothing is
    * collected until the player walks (or drives) over it.
    */
-  scatterLoot(x, z, stacks, { spread = 2.8 } = {}) {
+  scatterLoot(x, z, stacks, { spread = 2.8, share = true, grace = 0 } = {}) {
     if (!stacks?.length) return 0;
-    this.loot.spawn(x, z, stacks, { spread });
+    const key = share ? `${this.net?.id || 'solo'}:${++this.lootSeq}` : null;
+    this.loot.spawn(x, z, stacks, { spread, key, grace });
+    // tell the other survivors where the haul landed so it is theirs to grab too
+    if (key) this.net?.event?.('drop', { key, x, z, spread, grace, stacks });
     return stacks.length;
   }
 
@@ -1029,7 +1029,7 @@ export class Game {
     const pos = this.inCar ? this.car.pos : this.avatar.root.position;
     const yaw = this.inCar ? this.car.yaw : this.avatar.root.rotation.y;
     const forward = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw)).multiplyScalar(-1.5);
-    this.loot.spawn(pos.x + forward.x, pos.z + forward.z, [{ id, qty: n }], { spread: 0.5, grace: 1.6 });
+    this.scatterLoot(pos.x + forward.x, pos.z + forward.z, [{ id, qty: n }], { spread: 0.5, grace: 1.6 });
     this.audio?.blip?.(300, 0.09, 'triangle', 0.07);
     this.hud.toast(`TOSSED ${n} ${itemName(id)} — WALK OVER IT TO GRAB IT BACK`, 'warn');
     return n;
@@ -1061,6 +1061,7 @@ export class Game {
     const got = this.loot.update(dt, pos, { radius, magnet });
     if (got.length) {
       for (const stack of got) {
+        if (stack.key) this.net?.event?.('take', { key: stack.key });
         if (isMaterial(stack.id)) {
           this.materials[stack.id] = (this.materials[stack.id] || 0) + stack.qty;
         } else if (stack.id === 'fuel_siphon') {
@@ -1710,6 +1711,10 @@ export class Game {
       if (d < 60) this.audio.crash();
     } else if (e.kind === 'kill') {
       this.effects.blood(new THREE.Vector3(e.x, 1.2, e.z), new THREE.Vector3(0, 1, 0));
+    } else if (e.kind === 'drop' && Array.isArray(e.stacks)) {
+      this.loot.spawn(e.x, e.z, e.stacks, { spread: e.spread ?? 2, grace: e.grace ?? 0, key: e.key });
+    } else if (e.kind === 'take' && e.key) {
+      this.loot.removeByKey(e.key);
     } else if (e.kind === 'admin-kick' && e.target === this.net.id) {
       this.hud.toast('REMOVED BY THE OWNER', 'bad');
       this.audio.alarm();

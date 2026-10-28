@@ -273,6 +273,7 @@ console.log('\nrun summary');
 console.log('\ntossing loot back on the ground');
 {
   g.loot.clear();
+  g.inventory.clear();
   g.inventory.add('medkit', 3);
   g.inCar = false;
   g.pos.set(80, 0, 80);
@@ -309,6 +310,46 @@ console.log('\ntossing loot back on the ground');
   });
   check('the TOSS button drops the stack', g.inventory.count('bandage') === 0);
   g.toggleInventory(false);
+  g.loot.clear();
+  g.pos.set(7, 0, 30);
+  g.avatar.root.position.set(7, 0, 30);
+}
+
+console.log('\nco-op loot');
+{
+  g.loot.clear();
+  g.inventory.clear();
+  const sent = [];
+  const realEvent = g.net.event.bind(g.net);
+  g.net.event = (kind, data) => { sent.push({ kind, ...data }); realEvent(kind, data); };
+
+  g.inCar = false;
+  g.pos.set(120, 0, 120);
+  g.avatar.root.position.set(120, 0, 120);
+
+  // my search announces where the drops landed (placed off my feet so it stays put)
+  g.scatterLoot(124, 124, [{ id: 'medkit', qty: 2 }], { spread: 0 });
+  const dropMsg = sent.find((m) => m.kind === 'drop');
+  check('my haul is announced to the room', Boolean(dropMsg) && dropMsg.stacks.length === 1, dropMsg?.key || '');
+  check('shared drops carry a key', g.loot.drops.every((d) => typeof d.key === 'string' && d.key.length > 3));
+  const myKey = g.loot.drops[0]?.key;
+
+  // a teammate's swing lands on my screen, right under my boots
+  g.onNetEvent({ kind: 'drop', key: 'peer-9:3', x: 120, z: 120, spread: 0, stacks: [{ id: 'fuelcan', qty: 1 }] });
+  check('a teammate\'s search spawns drops here too', g.loot.count === 2, `${g.loot.count}`);
+  check('peer drops keep their shared key', g.loot.drops.some((d) => d.key === 'peer-9:3:0'));
+
+  // I walk over the shared stack: it is mine and the room is told
+  g.updateLoot(1 / 60);
+  check('the pickup is broadcast as taken', sent.some((m) => m.kind === 'take' && m.key === 'peer-9:3:0'),
+    sent.map((m) => `${m.kind}:${m.key || ''}`).join(' '));
+  check('my own drop is untouched by that pickup', g.loot.count === 1, `${g.loot.count}`);
+
+  // a teammate grabbing my drop removes the copy on my screen
+  g.onNetEvent({ kind: 'take', key: myKey });
+  check('a teammate taking a drop clears my copy', g.loot.count === 0);
+
+  g.net.event = realEvent;
   g.loot.clear();
   g.pos.set(7, 0, 30);
   g.avatar.root.position.set(7, 0, 30);
