@@ -94,12 +94,17 @@ console.log('\nwalking inside');
   check('player walks through the doorway', g.world.buildingAt(g.pos.x, g.pos.z) === b,
     `x=${g.pos.x.toFixed(1)} door=${b.door.x.toFixed(1)}`);
   check('roof lifts while inside', g.insideBuilding === b && b.roof.visible === false);
+  check('a warm interior light follows you in',
+    Math.abs(g.interiorLight.position.x - b.x) < 0.01 && Math.abs(g.interiorLight.position.z - b.z) < 0.01);
   check('car cannot enter the building', Boolean(g.world.collide(b.x, b.z, 1.6)));
 
   g.keys.forward = 0; g.keys.back = 1;
   for (let i = 0; i < 260; i++) g.updateFoot(1 / 60);
   check('player can walk back out', g.world.buildingAt(g.pos.x, g.pos.z) === null);
   check('roof returns after leaving', b.roof.visible === true);
+  for (let i = 0; i < 120; i++) g.updateInteriorLight(1 / 60);
+  check('the interior light fades out once you leave', g.interiorLight.intensity < 0.05,
+    g.interiorLight.intensity.toFixed(3));
 }
 
 console.log('\nhinged doors');

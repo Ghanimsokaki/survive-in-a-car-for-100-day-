@@ -85,6 +85,10 @@ export class Game {
       this.world.sun.shadow.mapSize.set(512, 512);
     }
     this.effects = new Effects(this.scene, { scale: this.quality === 'low' ? 0.45 : this.quality === 'medium' ? 0.7 : 1 });
+    // one reusable warm light for whichever interior you are standing in
+    this.interiorLight = new THREE.PointLight(0xffcf96, 0, this.quality === 'low' ? 14 : 22, 1.5);
+    this.interiorLight.position.set(0, 3, 0);
+    this.scene.add(this.interiorLight);
     this.setupPlayer();
     this.setupCamera();
     this.setupInput();
@@ -203,6 +207,7 @@ export class Game {
     this.insideBuilding = null;
     this.world?.focusInterior?.(null);
     this.world?.buildings?.forEach((b) => { b._doorOpen = false; });
+    if (this.interiorLight) this.interiorLight.intensity = 0;
     this.perks = { maxhp: 0, maxfuel: 0, armor: 0, dmg: 0, scav: 0, magnet: 0 };
     this.hpMax = 100;
     this.inventory?.items.clear();
@@ -573,6 +578,7 @@ export class Game {
     this.updatePeers(dt);
     this.world.update(dt, this.pos, this.zone);
     this.updateDoors();
+    this.updateInteriorLight(dt);
     this.world.updateWeather(dt, this.camera.position, this.stormCat > 0 ? 30 : 0);
     this.effects.update(dt);
 
@@ -753,11 +759,23 @@ export class Game {
     this.insideBuilding = b || null;
     this.world.focusInterior(this.insideBuilding);
     if (this.insideBuilding) {
+      const bi = this.insideBuilding;
+      const s = bi.scale || 1;
+      this.interiorLight.position.set(bi.x, Math.max(2.4, bi.height * 0.62), bi.z);
+      this.interiorLight.distance = Math.max(14, Math.max(bi.local.w, bi.local.d) * 0.85 * s);
+    }
+    if (this.insideBuilding) {
       this.hud.toast(`INSIDE ${this.insideBuilding.label} · [G] SEARCH`, 'good');
       this.audio?.step?.();
     } else if (previous) {
       this.hud.toast(`LEFT ${previous.label}`, 'warn');
     }
+  }
+
+  /** Warm fill light that fades in when you step indoors and out when you leave. */
+  updateInteriorLight(dt) {
+    const want = this.insideBuilding ? (this.quality === 'low' ? 0.5 : 0.95) : 0;
+    this.interiorLight.intensity = damp(this.interiorLight.intensity, want, 4, dt);
   }
 
   /** One soft creak when a door you are standing at swings open or shut. */
