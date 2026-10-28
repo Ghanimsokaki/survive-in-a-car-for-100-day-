@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.vercel/
+.env
+.env.local
+.DS_Store
+*.log
+
+# local test harness
+.harness/
+
+# generated test fixtures
+tests/app/
