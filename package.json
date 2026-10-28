@@ -1,0 +1,26 @@
+{
+  "name": "100-days-outrun",
+  "version": "2.1.0",
+  "private": true,
+  "type": "module",
+  "description": "100 Days Outrun \u2014 a 3D multiplayer post-apocalyptic highway survival run with Supabase accounts, friends and phone controls.",
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node server.mjs",
+    "build": "node scripts/build.mjs",
+    "test": "node tests/run-all.mjs",
+    "test:build": "node tests/build.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "game",
+    "threejs",
+    "multiplayer",
+    "survival",
+    "3d",
+    "vercel"
+  ],
+  "license": "Apache-2.0"
+}

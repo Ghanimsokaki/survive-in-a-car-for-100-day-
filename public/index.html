@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+<meta name="theme-color" content="#08090d" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<title>100 Days Outrun — Highway Survival</title>
+<meta name="description" content="A 3D multiplayer post-apocalyptic highway survival run. 100 days, one car, endless storms." />
+<link rel="stylesheet" href="./styles.css" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌪️</text></svg>" />
+</head>
+<body>
+<div id="app"></div>
+<div id="vignette"></div>
+<div id="flash"></div>
+
+<!-- ============ SIGN IN (ROBLOX-STYLE) ============ -->
+<div id="auth" class="overlay show">
+  <div class="auth-wrap">
+    <div class="auth-card">
+      <div class="auth-brand">
+        <div class="logo-mark">100</div>
+        <div>
+          <h1>DAYS OUTRUN</h1>
+          <p class="sub">HIGHWAY SURVIVAL · 3D MULTIPLAYER</p>
+        </div>
+      </div>
+
+      <div class="auth-tabs" role="tablist">
+        <button data-mode="login" class="on" role="tab">LOG IN</button>
+        <button data-mode="signup" role="tab">SIGN UP</button>
+      </div>
+
+      <form id="authForm" autocomplete="on">
+        <label class="field">
+          <span>USERNAME</span>
+          <input id="authUser" name="username" autocomplete="username" autocapitalize="none" spellcheck="false"
+                 maxlength="16" placeholder="survivor_01" />
+        </label>
+
+        <label class="field hidden" id="displayField">
+          <span>DISPLAY NAME</span>
+          <input id="authDisplay" maxlength="20" autocapitalize="words" placeholder="How friends see you" />
+        </label>
+
+        <label class="field">
+          <span>PASSWORD</span>
+          <input id="authPass" name="password" type="password" autocomplete="current-password" maxlength="72" placeholder="••••••••" />
+        </label>
+
+        <label class="field hidden" id="confirmField">
+          <span>CONFIRM PASSWORD</span>
+          <input id="authPass2" type="password" autocomplete="new-password" maxlength="72" placeholder="••••••••" />
+        </label>
+
+        <div class="avatar-pick hidden" id="signupColors">
+          <div class="ap-group"><span>BODY</span><div id="signupBodyRow" class="swatches"></div></div>
+          <div class="ap-group"><span>RIG</span><div id="signupCarRow" class="swatches car"></div></div>
+        </div>
+
+        <p id="authError" class="auth-error" role="alert"></p>
+        <button id="authSubmit" class="play-btn" type="submit">LOG IN <span>▸</span></button>
+      </form>
+
+      <div class="auth-alt">
+        <button id="guestBtn" class="link-btn" type="button">PLAY AS GUEST</button>
+        <span class="dot-sep">•</span>
+        <button id="connectBtn" class="link-btn" type="button">CONNECT SUPABASE</button>
+      </div>
+      <p class="auth-hint" id="authHint">Accounts keep your survivor, friends list and best run across devices.</p>
+    </div>
+
+    <aside class="auth-side">
+      <div class="preview-stage">
+        <canvas id="previewCanvas"></canvas>
+        <span class="preview-tag">YOUR SURVIVOR</span>
+      </div>
+      <div class="side-stats">
+        <div><span>ENGINE</span><b>THREE.JS</b></div>
+        <div><span>PLAYERS</span><b>1–8 / ROOM</b></div>
+        <div><span>RUN</span><b>100 DAYS</b></div>
+        <div><span>PHONES</span><b>TOUCH READY</b></div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<!-- ============ SUPABASE SETUP ============ -->
+<div id="sbSetup" class="overlay">
+  <div class="setup-card">
+    <div class="bench-head">
+      <h2>CONNECT SUPABASE</h2>
+      <button id="sbClose" class="x" type="button">✕</button>
+    </div>
+    <div class="setup-body">
+      <p>Paste your project URL and <b>anon public</b> key. They are stored on this device only and are safe to
+        expose — row level security protects the data. On a hosted deploy, set <code>SUPABASE_URL</code> and
+        <code>SUPABASE_ANON_KEY</code> in the environment instead.</p>
+      <label class="field"><span>PROJECT URL</span>
+        <input id="sbUrl" placeholder="https://abcd1234.supabase.co" autocapitalize="none" spellcheck="false" />
+      </label>
+      <label class="field"><span>ANON PUBLIC KEY</span>
+        <input id="sbKey" placeholder="eyJhbGciOiJIUzI1NiIs…" autocapitalize="none" spellcheck="false" />
+      </label>
+      <p id="sbError" class="auth-error"></p>
+      <div class="setup-actions">
+        <button id="sbSave" class="play-btn small" type="button">SAVE &amp; RELOAD</button>
+        <button id="sbGuest" class="ghost-btn" type="button">STAY GUEST</button>
+      </div>
+      <p class="auth-hint">Run <code>supabase/schema.sql</code> in the SQL editor once, and turn off
+        “Confirm email” in Authentication → Providers → Email.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ============ LOBBY ============ -->
+<div id="lobby" class="overlay">
+  <div class="lobby-card">
+    <div class="lobby-head">
+      <div class="logo-mark">100</div>
+      <div class="lobby-title">
+        <h1>DAYS OUTRUN</h1>
+        <p class="sub">HIGHWAY SURVIVAL · 3D MULTIPLAYER</p>
+      </div>
+      <div class="account-chip" id="accountChip">
+        <i id="accountDot"></i>
+        <div>
+          <b id="accountName">GUEST</b>
+          <span id="accountMeta">OFFLINE PROFILE</span>
+        </div>
+        <button id="signOutBtn" class="chip-btn" type="button" title="Sign out">⇥</button>
+      </div>
+    </div>
+
+    <div class="lobby-body">
+      <div class="lobby-left">
+        <label class="field">
+          <span>SURVIVOR NAME</span>
+          <input id="nameInput" maxlength="14" placeholder="Wanderer" autocomplete="off" />
+        </label>
+
+        <div class="field">
+          <span>BODY COLOR</span>
+          <div id="colorRow" class="swatches"></div>
+        </div>
+
+        <div class="field">
+          <span>RIG COLOR</span>
+          <div id="carRow" class="swatches car"></div>
+        </div>
+
+        <label class="field">
+          <span>ROOM CODE (SHARE TO PLAY TOGETHER)</span>
+          <div class="room-row">
+            <input id="roomInput" maxlength="12" placeholder="highway-01" autocomplete="off" autocapitalize="none" />
+            <button id="randomRoom" class="mini" title="New room code" type="button">⟳</button>
+          </div>
+        </label>
+
+        <button id="playBtn" class="play-btn">START THE RUN <span>▸</span></button>
+        <p id="netStatus" class="net-status">checking relay…</p>
+      </div>
+
+      <div class="lobby-right">
+        <div class="preview-stage small">
+          <canvas id="previewCanvasLobby"></canvas>
+          <span class="preview-tag">YOUR SURVIVOR</span>
+        </div>
+
+        <div class="friends-card">
+          <div class="friends-head">
+            <span>FRIENDS</span>
+            <span id="friendsCount" class="friends-count">0</span>
+            <button id="friendsRefresh" class="chip-btn" type="button" title="Refresh">⟳</button>
+          </div>
+          <div id="friendsList" class="friends-list"></div>
+          <div class="add-friend">
+            <input id="addFriendInput" placeholder="Add friend by username" autocapitalize="none" spellcheck="false" />
+            <button id="addFriendBtn" type="button">+</button>
+          </div>
+          <div id="friendsNote" class="friends-note"></div>
+        </div>
+
+        <details class="keys-details">
+          <summary>CONTROLS</summary>
+          <div class="keygrid">
+            <div><kbd>W A S D</kbd><span>Drive / walk</span></div>
+            <div><kbd>SPACE</kbd><span>Anchors · jump</span></div>
+            <div><kbd>E</kbd><span>Enter / exit car</span></div>
+            <div><kbd>F</kbd><span>Attack</span></div>
+            <div><kbd>G</kbd><span>Scavenge</span></div>
+            <div><kbd>TAB</kbd><span>Workbench</span></div>
+            <div><kbd>SHIFT</kbd><span>Sprint / boost</span></div>
+            <div><kbd>DRAG</kbd><span>Look around</span></div>
+          </div>
+        </details>
+      </div>
+    </div>
+
+    <div class="lobby-foot">
+      <span>DAY 1 · OAKHAVEN OUTSKIRTS</span>
+      <span>FUEL 20L · 4.8 KM TO THE HIGHWAY</span>
+      <span id="onlineCount">0 SURVIVORS ONLINE</span>
+    </div>
+  </div>
+</div>
+
+<!-- ============ HUD ============ -->
+<div id="hud" class="hidden">
+  <header id="topbar">
+    <div class="tb-block day">
+      <span class="tb-label">SURVIVAL</span>
+      <strong><span id="dayNum">1</span><em>/100</em></strong>
+    </div>
+    <div class="tb-block zone">
+      <span class="tb-label">ZONE</span>
+      <strong id="zoneName">OAKHAVEN OUTSKIRTS</strong>
+      <div class="day-track"><div id="dayFill"></div></div>
+    </div>
+    <div class="tb-block speedo">
+      <span class="tb-label">SPEED</span>
+      <strong><span id="speedVal">0</span><em>KM/H</em></strong>
+    </div>
+    <div class="tb-block dist">
+      <span class="tb-label">DISTANCE</span>
+      <strong><span id="distVal">0.0</span><em>KM</em></strong>
+    </div>
+    <div class="tb-block clock" id="clockBlock">
+      <span class="tb-label">WEATHER</span>
+      <strong id="weatherVal">CLEAR</strong>
+    </div>
+  </header>
+
+  <div id="radarWrap">
+    <canvas id="radar" width="220" height="220"></canvas>
+    <div class="radar-tag">RADAR · 350m</div>
+  </div>
+
+  <div id="chat">
+    <div id="chatLog"></div>
+    <input id="chatInput" maxlength="120" placeholder="Tap to talk…" autocomplete="off" autocapitalize="none" />
+  </div>
+
+  <div id="party"></div>
+
+  <div id="diag">
+    <div class="diag-title">VEHICLE DIAGNOSTICS</div>
+    <div class="meter" data-k="engine"><span>ENGINE</span><div class="bar"><i></i></div><b>100%</b></div>
+    <div class="meter" data-k="chassis"><span>CHASSIS</span><div class="bar"><i></i></div><b>100%</b></div>
+    <div class="meter" data-k="tires"><span>TIRES</span><div class="bar"><i></i></div><b>100%</b></div>
+    <div class="meter" data-k="fuel"><span>FUEL</span><div class="bar"><i></i></div><b>20L</b></div>
+    <div class="diag-sub">
+      <span id="vitals">HP 100</span>
+      <span id="weaponRow">FISTS</span>
+      <span id="anchorRow">SPIKES LOCKED</span>
+    </div>
+  </div>
+
+  <div id="actions">
+    <button id="anchorBtn" class="act anchor" type="button"><span class="act-ico">⚓</span><span class="act-txt">DEPLOY ANCHORS<em>[SPACE]</em></span></button>
+    <button id="benchBtn" class="act" type="button"><span class="act-ico">🛠</span><span class="act-txt">WORKBENCH<em>[TAB]</em></span></button>
+    <button id="scavBtn" class="act" type="button"><span class="act-ico">🔍</span><span class="act-txt">SCAVENGE<em>[G]</em></span></button>
+  </div>
+
+  <div id="prompt"></div>
+  <div id="toasts"></div>
+  <div id="stormBanner" class="hidden"></div>
+  <div id="crosshair">+</div>
+  <button id="mobileMenuBtn" class="mobile-menu" type="button" aria-label="Menu">☰</button>
+</div>
+
+<!-- ============ WORKBENCH ============ -->
+<div id="bench" class="overlay">
+  <div class="bench-card">
+    <div class="bench-head">
+      <h2>MOBILE WORKBENCH <small id="benchTier">TIER 1</small></h2>
+      <button id="benchClose" class="x" type="button">✕</button>
+    </div>
+    <div class="bench-body">
+      <aside class="inv">
+        <h3>STORAGE</h3>
+        <ul id="invList"></ul>
+        <div class="inv-note">Salvage materials at pit-stops and from fallen raiders.</div>
+      </aside>
+      <main class="craft">
+        <div class="tabs">
+          <button data-tab="weapons" class="on" type="button">WEAPONS</button>
+          <button data-tab="repairs" type="button">REPAIRS &amp; FUEL</button>
+          <button data-tab="upgrades" type="button">RIG UPGRADES</button>
+        </div>
+        <div id="recipeGrid" class="recipes"></div>
+      </main>
+    </div>
+  </div>
+</div>
+
+<!-- ============ RUN OVER ============ -->
+<div id="gameover" class="overlay">
+  <div class="go-card">
+    <h2 id="goTitle">WRECKED</h2>
+    <p id="goSub">The highway claimed another survivor.</p>
+    <div id="goStats" class="go-stats"></div>
+    <div class="go-btns">
+      <button id="respawnBtn" class="play-btn small" type="button">ROLL AGAIN</button>
+      <button id="lobbyBtn" class="ghost-btn" type="button">LOBBY</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ PHONE HINTS ============ -->
+<div id="rotateHint" class="hidden">
+  <div class="rotate-ico">📱</div>
+  <b>ROTATE YOUR PHONE</b>
+  <span>The highway is wider in landscape.</span>
+  <button id="rotateDismiss" type="button">PLAY ANYWAY</button>
+</div>
+
+<div id="loading"><div class="spin"></div><span>WARMING THE ENGINE…</span></div>
+
+<script type="module" src="./js/main.js"></script>
+</body>
+</html>
