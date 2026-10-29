@@ -4,6 +4,11 @@ import { Game } from './game.js';
 import { Account } from './account.js';
 import { AuthUI } from './authui.js';
 import { mountAdmin } from './admin.js';
+import { MODES, DEFAULT_MODE, modeById } from './modes.js';
+import {
+  SKIN_TONES, OUTFIT_COLORS, HAIR_STYLES, HAIR_COLORS, ACCESSORIES,
+  DEFAULT_CUSTOM, normalizeCustom, resolveCustom, describeCustom,
+} from './customize.js';
 import { BODY_COLORS, CAR_COLORS, hexToInt } from './palette.js';
 
 const $ = (id) => document.getElementById(id);
@@ -19,17 +24,23 @@ const state = {
   room: 'highway-01',
   guest: true,
   quality: 'auto',
+  mode: DEFAULT_MODE,
+  custom: { ...DEFAULT_CUSTOM },
 };
 
 const saveLocal = () => {
   try {
-    localStorage.setItem('outrun-profile', JSON.stringify({ room: state.room, quality: state.quality }));
+    localStorage.setItem('outrun-profile', JSON.stringify({
+      room: state.room, quality: state.quality, mode: state.mode, custom: state.custom,
+    }));
   } catch {}
 };
 try {
   const saved = JSON.parse(localStorage.getItem('outrun-profile') || '{}');
   if (saved.room) state.room = saved.room;
   if (['auto', 'low', 'medium', 'high'].includes(saved.quality)) state.quality = saved.quality;
+  if (MODES.some((m) => m.id === saved.mode)) state.mode = saved.mode;
+  if (saved.custom) state.custom = normalizeCustom(saved.custom);
 } catch {}
 
 // ------------------------------------------------------------------ account
@@ -70,9 +81,9 @@ function makePreview(canvas) {
   const stage = {
     canvas, renderer, scene, camera, avatar: null,
     yaw: -0.35, targetYaw: -0.35, dragging: false, lastX: 0,
-    setAvatar(hex, name) {
+    setAvatar(hex, name, custom) {
       if (stage.avatar) scene.remove(stage.avatar.root);
-      stage.avatar = buildAvatar({ color: hex, name });
+      stage.avatar = buildAvatar({ color: hex, name, custom });
       stage.avatar.root.rotation.y = stage.yaw;
       scene.add(stage.avatar.root);
     },
@@ -126,8 +137,10 @@ function previewLoop(now) {
 function refreshPreviews() {
   const hex = hexToInt(state.color);
   const name = (state.name || 'SURVIVOR').toUpperCase().slice(0, 14);
-  authPreview?.setAvatar(hex, name);
-  lobbyPreview?.setAvatar(hex, name);
+  authPreview?.setAvatar(hex, name, state.custom);
+  lobbyPreview?.setAvatar(hex, name, state.custom);
+  const summary = $('customSummary');
+  if (summary) summary.textContent = describeCustom(state.custom);
 }
 
 // ------------------------------------------------------------------- lobby
@@ -165,8 +178,106 @@ let colorTimer = null;
 function persistProfileColors() {
   clearTimeout(colorTimer);
   colorTimer = setTimeout(() => {
-    account.saveProfile({ body_color: state.color, car_color: state.carColor });
+    account.saveProfile({
+      body_color: state.color,
+      car_color: state.carColor,
+      customization: state.custom,
+    });
   }, 600);
+}
+
+// ------------------------------------------------------- customization UI
+const hexCss = (hex) => `#${(hex >>> 0).toString(16).padStart(6, '0')}`;
+
+function paintSwatches(container, options, key, { tiny = false } = {}) {
+  if (!container) return;
+  container.innerHTML = '';
+  options.forEach((opt) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = `swatch ${tiny ? 'tiny ' : ''}${state.custom[key] === opt.id ? 'on' : ''}`;
+    b.style.background = hexCss(opt.hex);
+    b.title = opt.label;
+    b.dataset.value = opt.id;
+    b.addEventListener('click', () => {
+      state.custom = normalizeCustom({ ...state.custom, [key]: opt.id });
+      if (key === 'skin') state.color = hexCss(opt.hex);
+      paintCustom();
+      saveLocal();
+      refreshPreviews();
+      persistProfileColors();
+    });
+    container.appendChild(b);
+  });
+}
+
+function paintChips(container, options, key) {
+  if (!container) return;
+  container.innerHTML = '';
+  options.forEach((opt) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = `chip ${state.custom[key] === opt.id ? 'on' : ''}`;
+    b.dataset.value = opt.id;
+    b.innerHTML = `<i>${opt.icon || ''}</i>${opt.label}`;
+    b.addEventListener('click', () => {
+      state.custom = normalizeCustom({ ...state.custom, [key]: opt.id });
+      if (key === 'skin') state.color = hexCss(opt.hex);
+      paintCustom();
+      saveLocal();
+      refreshPreviews();
+      persistProfileColors();
+    });
+    container.appendChild(b);
+  });
+}
+
+function paintCustom() {
+  paintSwatches($('skinRow'), SKIN_TONES, 'skin');
+  paintSwatches($('colorRow'), OUTFIT_COLORS, 'outfit');
+  paintChips($('hairRow'), HAIR_STYLES, 'hair');
+  paintSwatches($('hairColorRow'), HAIR_COLORS, 'hairColor', { tiny: true });
+  paintChips($('gearRow'), ACCESSORIES, 'accessory');
+
+  const h = $('heightRange');
+  const b = $('buildRange');
+  if (h) h.value = String(Math.round(state.custom.height * 100));
+  if (b) b.value = String(Math.round(state.custom.build * 100));
+  if ($('heightVal')) $('heightVal').textContent = `${Math.round(state.custom.height * 100)}%`;
+  if ($('buildVal')) $('buildVal').textContent = `${Math.round(state.custom.build * 100)}%`;
+  if ($('customSummary')) $('customSummary').textContent = describeCustom(state.custom);
+}
+
+function bindCustomControls() {
+  const bindSlider = (id, valId, key) => {
+    $(id)?.addEventListener('input', (e) => {
+      state.custom = normalizeCustom({ ...state.custom, [key]: Number(e.target.value) / 100 });
+      if ($(valId)) $(valId).textContent = `${e.target.value}%`;
+      if ($('customSummary')) $('customSummary').textContent = describeCustom(state.custom);
+      refreshPreviews();
+      saveLocal();
+    });
+    $(id)?.addEventListener('change', () => persistProfileColors());
+  };
+  bindSlider('heightRange', 'heightVal', 'height');
+  bindSlider('buildRange', 'buildVal', 'build');
+
+  $('randomLook')?.addEventListener('click', () => {
+    const pickOf = (list) => list[Math.floor(Math.random() * list.length)].id;
+    state.custom = normalizeCustom({
+      skin: pickOf(SKIN_TONES),
+      outfit: pickOf(OUTFIT_COLORS),
+      hair: pickOf(HAIR_STYLES),
+      hairColor: pickOf(HAIR_COLORS),
+      accessory: pickOf(ACCESSORIES),
+      height: 0.9 + Math.random() * 0.2,
+      build: 0.88 + Math.random() * 0.24,
+    });
+    paintCustom();
+    saveLocal();
+    refreshPreviews();
+    persistProfileColors();
+  });
 }
 
 // --------------------------------------------------------------- account UI
@@ -194,6 +305,18 @@ function applyProfileToState(profile) {
   state.name = (profile.display_name || profile.username || 'SURVIVOR').toUpperCase().slice(0, 14);
   state.color = profile.body_color || state.color;
   state.carColor = profile.car_color || state.carColor;
+  if (profile.customization) {
+    state.custom = normalizeCustom(profile.customization);
+  } else if (profile.body_color) {
+    const target = hexToInt(profile.body_color);
+    const near = SKIN_TONES.reduce((best, t) => {
+      const d = Math.abs(((t.hex >> 16) & 255) - ((target >> 16) & 255))
+        + Math.abs(((t.hex >> 8) & 255) - ((target >> 8) & 255))
+        + Math.abs((t.hex & 255) - (target & 255));
+      return d < best.d ? { d, id: t.id } : best;
+    }, { d: Infinity, id: state.custom.skin });
+    state.custom = normalizeCustom({ ...state.custom, skin: near.id });
+  }
   if ($('nameInput')) $('nameInput').value = state.name;
 }
 
@@ -329,9 +452,15 @@ async function startRun() {
   try {
     game = new Game({
       mount: $('app'),
-      profile: { name: state.name, color: hexToInt(state.color), carColor: hexToInt(state.carColor) },
+      profile: {
+        name: state.name,
+        color: hexToInt(state.color),
+        carColor: hexToInt(state.carColor),
+        custom: state.custom,
+      },
       room: state.room,
       quality: state.quality,
+      mode: state.mode,
       onQuit: () => location.reload(),
       onRunEnd: (stats) => {
         account.recordRun(stats);
@@ -468,10 +597,10 @@ async function boot() {
   state.name = state.name || 'WANDERER';
   if (!account.profile?.username || account.profile.username === 'GUEST') state.name = 'WANDERER';
 
-  const bodyRow = $('colorRow');
   const carRow = $('carRow');
-  buildSwatches(bodyRow, BODY_COLORS, 'color');
   buildSwatches(carRow, CAR_COLORS, 'carColor');
+  paintCustom();
+  bindCustomControls();
 
   $('nameInput')?.addEventListener('input', (e) => {
     state.name = e.target.value.trim().toUpperCase().slice(0, 14);
@@ -492,6 +621,32 @@ async function boot() {
     $('roomInput').value = state.room;
     saveLocal();
   });
+  // game modes: several runs inside the run
+  const modeRow = $('modeRow');
+  const paintMode = () => {
+    const mode = modeById(state.mode);
+    if ($('modeName')) $('modeName').textContent = mode.name;
+    if ($('modeBlurb')) $('modeBlurb').textContent = mode.blurb;
+    modeRow?.querySelectorAll('[data-mode]').forEach((b) => b.classList.toggle('on', b.dataset.mode === mode.id));
+  };
+  if (modeRow) {
+    modeRow.innerHTML = MODES.map((m) => `
+      <button type="button" class="mode-card" data-mode="${m.id}" style="--m:${m.accent}">
+        <span class="mode-ico">${m.icon}</span>
+        <b>${m.name}</b>
+        <em>${m.sub}</em>
+        <i>${m.tags.join(' · ')}</i>
+      </button>`).join('');
+    modeRow.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-mode]');
+      if (!btn) return;
+      state.mode = btn.dataset.mode;
+      paintMode();
+      saveLocal();
+    });
+  }
+  paintMode();
+
   // graphics quality: persisted, applied on the next launch
   const qualityRow = $('qualityRow');
   const paintQuality = () => {
@@ -537,7 +692,7 @@ async function boot() {
     account,
     onAuthenticated: (profile) => {
       applyProfileToState(profile);
-      buildSwatches($('colorRow'), BODY_COLORS, 'color');
+      paintCustom();
       buildSwatches($('carRow'), CAR_COLORS, 'carColor');
       refreshPreviews();
       showLobby();
@@ -549,7 +704,18 @@ async function boot() {
     onColorsChanged: (colors) => {
       state.color = colors.body;
       state.carColor = colors.car;
-      authPreview?.setAvatar(hexToInt(state.color), state.name || 'SURVIVOR');
+      // the sign-in screen's body swatch is the skin tone: map it to the nearest one
+      const target = hexToInt(colors.body);
+      const near = SKIN_TONES.reduce((best, t) => {
+        const d = Math.abs(((t.hex >> 16) & 255) - ((target >> 16) & 255))
+          + Math.abs(((t.hex >> 8) & 255) - ((target >> 8) & 255))
+          + Math.abs((t.hex & 255) - (target & 255));
+        return d < best.d ? { d, id: t.id } : best;
+      }, { d: Infinity, id: state.custom.skin });
+      state.custom = normalizeCustom({ ...state.custom, skin: near.id });
+      paintCustom();
+      saveLocal();
+      authPreview?.setAvatar(hexToInt(state.color), state.name || 'SURVIVOR', state.custom);
     },
   });
 
@@ -558,7 +724,7 @@ async function boot() {
 
   if (account.signedIn) {
     applyProfileToState(account.profile);
-    buildSwatches($('colorRow'), BODY_COLORS, 'color');
+    paintCustom();
     buildSwatches($('carRow'), CAR_COLORS, 'carColor');
     refreshPreviews();
     showLobby();

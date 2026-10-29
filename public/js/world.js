@@ -136,11 +136,17 @@ export class World {
     this.sun.shadow.camera.right = 42;
     this.sun.shadow.camera.top = 42;
     this.sun.shadow.camera.bottom = -42;
-    this.sun.shadow.bias = -0.0012;
+    this.sun.shadow.bias = -0.0006;
+    this.sun.shadow.normalBias = 0.022;      // kills the acne on the flat road slabs
+    this.sun.shadow.radius = 2.4;
     scene.add(this.sun, this.sun.target);
 
     this.fill = new THREE.DirectionalLight(0x8fb4ff, 0.45);
     scene.add(this.fill);
+
+    // a whisper of ambient so undersides and interiors never crush to pure black
+    this.ambient = new THREE.AmbientLight(0x7d8ba6, 0.22);
+    scene.add(this.ambient);
 
     // ground
     const groundGeo = new THREE.PlaneGeometry(1400, 2800);
@@ -699,9 +705,17 @@ export class World {
     this.nightFactor = t;
     this.starMat.opacity = clamp(t * 1.3 - 0.15, 0, 0.95);
     this.stars.visible = this.starMat.opacity > 0.02;
-    this.sun.intensity = lerp(2.3, 0.18, t);
-    this.hemi.intensity = lerp(1.15, 0.42, t);
-    this.fill.intensity = lerp(0.45, 0.22, t);
+    // moonlit night: the key light halves-and-halves, but the sky/fill stay cool
+    // instead of vanishing, so shapes stay readable without looking like day
+    this.sun.intensity = lerp(2.3, 0.3, t);
+    this.hemi.intensity = lerp(1.15, 0.34, t);
+    this.hemi.color.lerpColors(new THREE.Color(ZONES[this.zoneIndex].sky), new THREE.Color(0x2f4a72), t);
+    this.fill.intensity = lerp(0.45, 0.62, t);
+    this.fill.color.lerpColors(new THREE.Color(0x8fb4ff), new THREE.Color(0x7f9cff), t);
+    if (this.ambient) {
+      this.ambient.intensity = lerp(0.22, 0.3, t);
+      this.ambient.color.lerpColors(new THREE.Color(0x7d8ba6), new THREE.Color(0x3f5a86), t);
+    }
     const zone = ZONES[this.zoneIndex];
     this.applySky(zone, t);
     const sky = new THREE.Color(zone.sky).lerp(new THREE.Color(0x0a1220), t * 0.86);
@@ -709,6 +723,16 @@ export class World {
     if (this.scene.fog) {
       const fog = new THREE.Color(zone.fog).lerp(new THREE.Color(0x0a1018), t * 0.8);
       this.scene.fog.color.copy(fog);
+    }
+  }
+
+  /** Quality-aware fog: a short far plane is cheaper and hides prop pop-in. */
+  setFogRange(near, far) {
+    this.fogNear = near;
+    this.fogFar = far;
+    if (this.scene.fog) {
+      this.scene.fog.near = near;
+      this.scene.fog.far = far;
     }
   }
 

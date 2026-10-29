@@ -150,8 +150,17 @@
         </label>
 
         <div class="field">
-          <span>BODY COLOR</span>
-          <div id="colorRow" class="swatches"></div>
+          <span>SURVIVOR LOOK <b id="customSummary">PLAIN KIT</b></span>
+          <div id="customPanel" class="custom-panel">
+            <div class="cust-row"><em>SKIN</em><div id="skinRow" class="swatches"></div></div>
+            <div class="cust-row"><em>OUTFIT</em><div id="colorRow" class="swatches"></div></div>
+            <div class="cust-row"><em>HAIR</em><div id="hairRow" class="chip-row"></div></div>
+            <div class="cust-row"><em>HAIR COLOUR</em><div id="hairColorRow" class="swatches tiny"></div></div>
+            <div class="cust-row"><em>GEAR</em><div id="gearRow" class="chip-row"></div></div>
+            <label class="cust-slider"><em>HEIGHT</em><input id="heightRange" type="range" min="90" max="110" value="100" /><b id="heightVal">100%</b></label>
+            <label class="cust-slider"><em>BUILD</em><input id="buildRange" type="range" min="85" max="115" value="100" /><b id="buildVal">100%</b></label>
+            <button id="randomLook" class="mini wide" type="button">🎲 RANDOMISE</button>
+          </div>
         </div>
 
         <div class="field">
@@ -166,6 +175,12 @@
             <button id="randomRoom" class="mini" title="New room code" type="button">⟳</button>
           </div>
         </label>
+
+        <div class="field">
+          <span>GAME MODE <b id="modeName">100 DAYS</b></span>
+          <div id="modeRow" class="mode-row"></div>
+          <p id="modeBlurb" class="mode-blurb">One rig, one highway, a hundred days of storms.</p>
+        </div>
 
         <div class="field">
           <span>GRAPHICS</span>
@@ -230,7 +245,8 @@
   <header id="topbar">
     <div class="tb-block day">
       <span class="tb-label">SURVIVAL</span>
-      <strong><span id="dayNum">1</span><em>/100</em></strong>
+      <strong><span id="dayNum">1</span><em id="dayGoal">/100</em></strong>
+      <span id="modeTag" class="mode-tag">100 DAYS</span>
     </div>
     <div class="tb-block zone">
       <span class="tb-label">ZONE</span>
@@ -273,6 +289,7 @@
       <span id="vitals">HP 100</span>
       <span id="weaponRow">FISTS</span>
       <span id="anchorRow">SPIKES LOCKED</span>
+      <span id="fpsRow">60 FPS</span>
     </div>
   </div>
 

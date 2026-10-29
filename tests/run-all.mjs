@@ -21,6 +21,7 @@ const suites = [
   ['app.test.mjs', 'GUEST UI FLOW'],
   ['app-auth.test.mjs', 'SIGNED-IN FRIENDS UI'],
   ['hud-frame.test.mjs', 'HUD FRAME + ORIENTATION'],
+  ['modes-avatar.test.mjs', 'GAME MODES + PERF + AVATAR'],
 ];
 
 await run(process.execPath, ['build.mjs']);

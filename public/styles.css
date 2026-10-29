@@ -851,3 +851,94 @@ body.touch{-webkit-user-select:none;user-select:none;overscroll-behavior:none}
   #chat{top:calc(8px + env(safe-area-inset-top));width:170px}
   #party{top:calc(52px + env(safe-area-inset-top))}
 }
+
+/* ============================ GAME MODE PICKER ============================ */
+.mode-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:7px}
+.mode-card{display:flex;flex-direction:column;gap:2px;align-items:flex-start;text-align:left;
+  padding:9px 10px;border-radius:9px;background:#10141d;border:1px solid rgba(255,255,255,.1);
+  color:#9aa4b4;cursor:pointer;transition:.15s}
+.mode-card:hover{border-color:color-mix(in srgb,var(--m) 55%,transparent);transform:translateY(-1px)}
+.mode-card.on{background:color-mix(in srgb,var(--m) 14%,#10141d);border-color:var(--m);color:#eef3fb}
+.mode-card .mode-ico{font-size:15px;line-height:1;color:var(--m)}
+.mode-card b{font-size:9.5px;letter-spacing:1.4px;color:#dfe6f1}
+.mode-card em{font-style:normal;font-size:7.5px;letter-spacing:.8px;color:#717b8c}
+.mode-card i{font-style:normal;font-size:7px;letter-spacing:.9px;color:var(--m);opacity:.85}
+.mode-blurb{margin:6px 0 0;font-size:9px;letter-spacing:.6px;line-height:1.45;color:#7d8798}
+.field>span b{color:var(--amber);font-weight:700;margin-left:6px;letter-spacing:1.4px}
+.mode-tag{display:block;margin-top:3px;font-size:7.5px;letter-spacing:1.6px;color:var(--amber);opacity:.9}
+@media (max-width:820px){
+  .mode-row{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .mode-card{padding:8px 9px}
+  .mode-tag{display:none}
+}
+
+/* ======================= SURVIVOR CUSTOMISATION PANEL ====================== */
+.custom-panel{display:flex;flex-direction:column;gap:7px;background:#0d1119;border:1px solid rgba(255,255,255,.07);
+  border-radius:10px;padding:10px}
+.cust-row{display:flex;align-items:center;gap:8px}
+.cust-row>em{font-style:normal;width:64px;flex:0 0 64px;font-size:7.5px;letter-spacing:1.1px;color:#6f788a}
+.cust-row .swatches{flex:1;margin:0}
+.swatches.tiny .swatch{width:16px;height:16px}
+.chip-row{display:flex;flex-wrap:wrap;gap:4px;flex:1}
+.chip{display:flex;align-items:center;gap:4px;padding:4px 7px;border-radius:6px;background:#141922;
+  border:1px solid rgba(255,255,255,.1);color:#8d96a6;font-size:7.5px;letter-spacing:.8px;cursor:pointer}
+.chip:hover{border-color:rgba(255,179,71,.45);color:#e6ecf6}
+.chip.on{background:rgba(255,179,71,.15);border-color:var(--amber);color:var(--amber)}
+.chip i{font-style:normal;font-size:10px;line-height:1}
+.cust-slider{display:flex;align-items:center;gap:8px}
+.cust-slider>em{font-style:normal;width:64px;flex:0 0 64px;font-size:7.5px;letter-spacing:1.1px;color:#6f788a}
+.cust-slider input[type=range]{flex:1;height:4px;-webkit-appearance:none;appearance:none;border-radius:3px;
+  background:linear-gradient(90deg,rgba(255,179,71,.6),rgba(255,179,71,.15));outline:none}
+.cust-slider input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;
+  background:var(--amber);border:1px solid #ffe6c0;cursor:pointer}
+.cust-slider input[type=range]::-moz-range-thumb{width:12px;height:12px;border-radius:50%;background:var(--amber);
+  border:1px solid #ffe6c0;cursor:pointer}
+.cust-slider b{width:34px;text-align:right;font-size:8px;color:#cfd7e4}
+.mini.wide{width:100%;justify-content:center}
+@media (max-width:820px){
+  .cust-row>em,.cust-slider>em{width:52px;flex:0 0 52px;font-size:7px}
+  .custom-panel{padding:8px;gap:6px}
+}
+
+/* ======================= PHONE HUD: COMPACT TOP + DIAG =====================
+   Landscape phones have ~390px of height. The top bar, radar, party list and
+   diagnostics all compete with the road, so they get a compact treatment that
+   keeps the numbers readable without eating a third of the screen.
+*/
+@media (max-height:560px) and (pointer:coarse){
+  #topbar{top:calc(4px + env(safe-area-inset-top));transform:translateX(-50%) scale(.72);
+    transform-origin:top center;border-radius:8px}
+  .tb-block{padding:6px 10px 7px;min-width:74px}
+  .tb-block strong{font-size:16px}
+  .tb-block.zone{min-width:132px}
+  .tb-label{font-size:7px;letter-spacing:1.2px;margin-bottom:1px}
+  .mode-tag{display:none}
+
+  #radarWrap{width:92px;height:92px;top:calc(4px + env(safe-area-inset-top));left:calc(4px + env(safe-area-inset-left))}
+  #party{top:calc(102px + env(safe-area-inset-top));left:calc(4px + env(safe-area-inset-left));gap:3px;
+    max-height:78px;overflow:hidden}
+  .party-row{font-size:7.5px;padding:2px 6px;letter-spacing:.8px}
+  #chat{width:150px;right:calc(6px + env(safe-area-inset-right));top:calc(6px + env(safe-area-inset-top))}
+
+  /* diagnostics: shrink to a fuel + hull ticker on tiny screens */
+  #diag{width:168px;padding:6px 8px 6px;border-radius:8px}
+  .diag-title{font-size:7px;letter-spacing:1.4px;margin-bottom:4px}
+  .meter{margin-bottom:2px;font-size:6.5px;gap:5px}
+  .meter>span{width:38px}
+  .meter .bar{height:4px}
+  .diag-sub{font-size:6.5px;gap:5px;margin-top:3px;padding-top:3px}
+  #anchorRow{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:78px}
+  #fpsRow{opacity:.7}
+
+  /* prompts and toasts stay legible but small */
+  #prompt{font-size:9px;letter-spacing:1.1px;padding:5px 10px;border-radius:6px}
+  .toast{font-size:8.5px;letter-spacing:.9px;padding:5px 10px}
+  #crosshair{opacity:.35}
+}
+
+/* tiny phones in portrait: same idea, one notch less aggressive */
+@media (max-width:430px) and (pointer:coarse){
+  #topbar{transform:translateX(-50%) scale(.8);transform-origin:top center}
+  #diag{width:172px;transform:scale(.78)}
+  .diag-sub{gap:5px}
+}

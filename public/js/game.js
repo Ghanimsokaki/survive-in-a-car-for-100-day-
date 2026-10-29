@@ -13,6 +13,7 @@ import { RECIPES, ALL_RECIPES, findRecipe } from './recipes.js';
 import { LootField } from './loot.js';
 import { Inventory, InventoryUI } from './inventory.js';
 import { rollLoot, isMaterial, ITEMS, itemName } from './items.js';
+import { MODES, DEFAULT_MODE, modeById as resolveMode, goalLabel } from './modes.js';
 
 export { RECIPES };
 
@@ -60,7 +61,7 @@ export const WEATHERS = {
 };
 
 export class Game {
-  constructor({ mount, profile, room, onQuit, onRunEnd, quality }) {
+  constructor({ mount, profile, room, onQuit, onRunEnd, quality, mode }) {
     this.mount = mount;
     this.profile = profile;
     this.onQuit = onQuit;
@@ -79,14 +80,20 @@ export class Game {
     this.hudTimer = 0;
     this.dragLook = 0;
     this.touchMode = ('ontouchstart' in window) || navigator.maxTouchPoints > 1;
+    // several games inside the game: the mode reshapes the whole run
+    this.mode = resolveMode(mode || DEFAULT_MODE);
+    this.modeId = this.mode.id;
 
     this.qualityOption = quality || 'auto';
     this.setupGraphics();
     this.world = new World(this.scene, 1337, this.quality);
     if (this.quality !== 'high') {
       this.world.sun.castShadow = this.quality === 'medium';
-      this.world.sun.shadow.mapSize.set(512, 512);
+      this.world.sun.shadow.mapSize.set(this.quality === 'medium' ? 1024 : 512, this.quality === 'medium' ? 1024 : 512);
+    } else {
+      this.world.sun.shadow.mapSize.set(2048, 2048);
     }
+    this.world.setFogRange(this.quality === 'low' ? 70 : 90, this.quality === 'low' ? 300 : 430);
     this.effects = new Effects(this.scene, { scale: this.quality === 'low' ? 0.45 : this.quality === 'medium' ? 0.7 : 1 });
     // one reusable warm light for whichever interior you are standing in
     this.interiorLight = new THREE.PointLight(0xffcf96, 0, this.quality === 'low' ? 14 : 22, 1.5);
@@ -150,18 +157,26 @@ export class Game {
     this.pixelCap = this.quality === 'low' ? 1 : this.quality === 'medium' ? 1.4 : 1.85;
 
     this.renderer = new THREE.WebGLRenderer({ antialias: this.quality !== 'low', powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.pixelCap));
+    // adaptive resolution: the frame governor trades pixels for frames
+    this.renderScale = 1;
+    this.minScale = this.quality === 'high' ? 0.62 : 0.55;
+    this.frames = 0;
+    this.frameTime = 1 / 60;
+    this.perfTimer = 0;
+    this.fps = 60;
+    this.renderer.setPixelRatio(this.targetPixelRatio());
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.shadowMap.enabled = this.quality !== 'low';
     this.renderer.shadowMap.type = this.quality === 'high' ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.06;
+    this.baseExposure = 1.06;
     this.mount.appendChild(this.renderer.domElement);
 
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.1, 1200);
-    this.scene.fog = new THREE.Fog(0xb9a68a, 90, 430);
+    this.scene.fog = new THREE.Fog(0xb9a68a, this.quality === 'low' ? 70 : 90, this.quality === 'low' ? 300 : 430);
     this.scene.background = new THREE.Color(0xb9a68a);
   }
 
@@ -171,7 +186,11 @@ export class Game {
     this.car.yaw = Math.PI;
     this.scene.add(this.car.group);
 
-    this.avatar = buildAvatar({ color: this.profile.color, name: this.profile.name });
+    this.avatar = buildAvatar({
+      color: this.profile.color,
+      name: this.profile.name,
+      custom: this.profile.custom,
+    });
     this.avatar.root.visible = false;
     this.avatar.root.position.set(7, 0, 30);
     this.scene.add(this.avatar.root);
@@ -194,12 +213,15 @@ export class Game {
   }
 
   resetRun() {
+    this.dayLength = this.mode.dayLength || DAY_LENGTH;
     this.day = 1;
     this.dayTimer = 0;
+    this.finalTimer = 0;
+    this.anchorHold = 0;
     this.zone = 0;
     this.distance = 0;
     this.materials = { scrap: 2, steel: 0, titanium: 0, carbon: 0, leather: 1, chem: 0, cores: 0, fuel: 0 };
-    this.benchTier = 1;
+    this.benchTier = this.mode.startBench || 1;
     this.owned = new Set(['fists']);
     this.weapon = 'fists';
     this.durability = {};
@@ -227,6 +249,7 @@ export class Game {
 
     this.scene.remove(this.car.group);
     this.car = new Vehicle({ color: this.profile.carColor });
+    this.car.fuel = clamp(this.mode.startFuel ?? 20, 0, this.car.maxFuel);
     this.car.group.position.set(7, 0, 30);
     this.car.yaw = Math.PI;
     this.car.mesh.setAnchored(false, 1);
@@ -281,7 +304,7 @@ export class Game {
       const k = keyMap[e.code];
       if (k) { this.keys[k] = 1; e.preventDefault(); }
       if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') this.keys.boost = true;
-      if (e.code === 'Space') { e.preventDefault(); this.toggleAnchor(); }
+      if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) this.toggleAnchor(); }
       if (e.code === 'KeyE') this.toggleCar();
       if (e.code === 'KeyF') this.attack();
       if (e.code === 'KeyG') this.scavenge();
@@ -508,7 +531,9 @@ export class Game {
   // ------------------------------------------------------------------ loops
   loop() {
     requestAnimationFrame(this.loop);
-    const dt = Math.min(0.05, this.clock.getDelta());
+    const raw = this.clock.getDelta();
+    const dt = Math.min(0.05, raw);
+    this.updatePerf(raw);
     this.time += dt;
     if (this.started && !this.paused) this.update(dt);
     else this.updateIdle(dt);
@@ -533,7 +558,7 @@ export class Game {
       this.hud.chat('', `— ${ZONES[this.zone].name} — ${ZONES[this.zone].desc}`, '#ffb347', true);
     }
 
-    if (this.dayTimer >= DAY_LENGTH && !this.dead && !this.won) {
+    if (this.dayTimer >= this.dayLength && !this.dead && !this.won) {
       this.dayTimer = 0;
       this.newDay();
     }
@@ -542,6 +567,8 @@ export class Game {
     const cycle = (this.time * 0.008 + 0.22) % 1;
     const nightT = this.zone === 4 ? 0.5 + Math.sin(cycle * Math.PI * 2) * 0.28 : clamp((Math.sin(cycle * Math.PI * 2) - 0.35) * 1.7, 0, 0.72);
     this.world.setNight(nightT);
+    // a touch more exposure after dark reads as moonlight instead of murk
+    this.renderer.toneMappingExposure = this.baseExposure + nightT * 0.3;
     if (this.car.mesh.beams) this.car.mesh.beams.forEach((b) => (b.intensity = lerp(6, 30, nightT)));
 
     // controls
@@ -556,6 +583,7 @@ export class Game {
         // gusting sideways push; bigger when you are already fast
         wind: (wx.wind || 0) * (0.6 + 0.4 * Math.sin(this.time * 0.7)) * clamp(0.35 + this.car.kmh / 90, 0.35, 1.4),
       });
+      this.updateAnchor(dt);
       this.pos.copy(this.car.pos);
       this.pos.y = 0;
       this.distance = this.car.distance;
@@ -615,14 +643,15 @@ export class Game {
     this.hudTimer += dt;
     if (this.hudTimer > 0.09) {
       this.hudTimer = 0;
-      this.hud.setDay(this.day, this.dayTimer / DAY_LENGTH, ZONES[this.zone].name);
+      this.hud.setDay(this.day, this.dayTimer / this.dayLength, ZONES[this.zone].name, this.mode);
+      this.hud.setMode?.(this.mode, this.modeProgress());
       this.hud.setSpeed(this.speedKmh || 0);
       this.hud.setDistance(this.distance / 1000);
       this.hud.setDiagnostics({
         engine: this.car.engine, chassis: this.car.chassis, tires: this.car.tires,
         fuel: this.car.fuel, maxFuel: this.car.maxFuel, hp: this.hp,
         weapon: this.weaponLabel(), anchored: this.car.anchored,
-        anchorTier: this.car.anchorTier, inCar: this.inCar,
+        anchorTier: this.car.anchorTier, inCar: this.inCar, fps: this.fps,
       });
       this.hud.drawRadar(this.radarBlips(), this.inCar ? this.car.yaw : this.avatar.root.rotation.y, 350);
       this.hud.setParty(this.partyRows());
@@ -640,31 +669,39 @@ export class Game {
       yaw: this.inCar ? this.car.yaw : this.avatar.root.rotation.y,
       inCar: this.inCar, speed: this.speedKmh || 0, hp: this.hp,
       day: this.day, weapon: this.weapon, anchored: this.car.anchored,
+      custom: this.profile.custom || null, mode: this.mode.id,
     }, performance.now());
 
-    // endgame timer
-    if (this.day === 100 && !this.won && !this.dead) {
-      this.finalTimer += dt;
-      if (this.finalTimer > 120) this.win();
+    // endgame timer — the mode decides how long the last stand lasts
+    if (Number.isFinite(this.mode.targetDay) && this.day >= this.mode.targetDay && !this.won && !this.dead) {
+      const hold = this.mode.finalSeconds ?? 120;
+      if (hold <= 0) this.win();
+      else {
+        this.finalTimer += dt;
+        if (this.finalTimer > hold) this.win();
+      }
     }
   }
 
   // ------------------------------------------------------------------ days
   newDay() {
-    this.day = Math.min(100, this.day + 1);
+    const target = this.mode.targetDay;
+    this.day = Number.isFinite(target) ? Math.min(target, this.day + 1) : this.day + 1;
     const m = MILESTONES[this.day];
     if (m) {
       this.hud.toast(`DAY ${this.day} · ${m[0]}`, 'warn');
       this.hud.chat('', `${m[0]} — ${m[1]}`, '#ffd9a0', true);
       this.audio.alarm();
     } else {
-      this.hud.toast(`DAY ${this.day} / 100`, '');
+      this.hud.toast(Number.isFinite(target) ? `DAY ${this.day} / ${target}` : `DAY ${this.day}`, '');
     }
     if (this.day === 15) { this.benchTier = Math.max(this.benchTier, 2); this.hud.toast('WORKBENCH UPGRADED TO TIER 2', 'good'); }
     if (this.day === 40) { this.benchTier = Math.max(this.benchTier, 3); this.hud.toast('WORKBENCH UPGRADED TO TIER 3', 'good'); }
     if (this.day === 78) { this.benchTier = Math.max(this.benchTier, 4); this.hud.toast('WORKBENCH UPGRADED TO TIER 4', 'good'); }
-    if (this.day === 100) {
-      this.hud.chat('', 'The Category 5 Hypercane is on the horizon. Anchor down and survive 2 minutes.', '#ff6d7b', true);
+    if (Number.isFinite(target) && this.day === target) {
+      this.hud.chat('', this.mode.id === 'classic'
+        ? 'The Category 5 Hypercane is on the horizon. Anchor down and survive 2 minutes.'
+        : `FINAL DAY OF ${this.mode.name} — hold out for ${this.mode.finalSeconds || 30} seconds.`, '#ff6d7b', true);
     }
     this.rollWeather();
     this.spawnTimer = Math.min(this.spawnTimer, 3);
@@ -686,11 +723,12 @@ export class Game {
     if (d === 68 || d === 75 || d === 82) w = 'heat';
     this.setWeather(w);
 
-    // storm events
+    // storm events (the mode scales both the schedule and the dice)
     const stormDays = { 14: 2, 35: 3, 60: 4, 80: 4, 100: 5 };
-    if (stormDays[d]) this.spawnTornado(stormDays[d]);
-    else if (d > 8 && Math.random() < 0.16 + d * 0.002) {
-      this.spawnTornado(clamp(1 + Math.floor(d / 24), 1, 5));
+    const stormMult = this.mode.stormMult || 1;
+    if (stormDays[d]) this.spawnTornado(clamp(Math.round(stormDays[d] * Math.min(2, stormMult)), 1, 5));
+    else if (d > 8 && Math.random() < (0.16 + d * 0.002) * stormMult) {
+      this.spawnTornado(clamp(1 + Math.floor((d / 24) * stormMult), 1, 5));
     }
   }
 
@@ -854,9 +892,41 @@ export class Game {
       return;
     }
     this.car.toggleAnchor();
+    // releasing must hand control back instantly: no latched inputs, no drag
+    if (!this.car.anchored) {
+      this.anchorHold = 0;
+      this.car.speed = Math.max(this.car.speed, 0);
+    }
     this.audio.blip(this.car.anchored ? 420 : 620, 0.14, 'square', 0.11);
     this.hud.toast(this.car.anchored ? 'ANCHOR SPIKES DEPLOYED' : 'ANCHORS RELEASED', this.car.anchored ? 'good' : '');
     this.net.event('anchor', { on: this.car.anchored, x: this.car.pos.x, z: this.car.pos.z });
+  }
+
+  /**
+   * Safety valve for the "I can't move after anchoring" report: holding the
+   * throttle while anchored spins the wheels for a moment, then rips the spikes
+   * out on its own. A real tornado warning still pauses the release, because the
+   * player asked for the anchor *because* of the storm.
+   */
+  updateAnchor(dt) {
+    if (!this.inCar || this.dead || this.won) { this.anchorHold = 0; return; }
+    if (!this.car.anchored) { this.anchorHold = 0; return; }
+    const trying = this.keys.forward > 0.2 && !this.stormWarning;
+    this.anchorHold = trying ? (this.anchorHold || 0) + dt : 0;
+    if (this.anchorHold > 0.55) {
+      this.car.toggleAnchor(false);
+      this.anchorHold = 0;
+      this.hud.toast('ANCHORS RIPPED OUT — DRIVING AGAIN', 'warn');
+      this.audio.blip(620, 0.14, 'square', 0.11);
+      this.net.event('anchor', { on: false, x: this.car.pos.x, z: this.car.pos.z });
+    }
+  }
+
+  /** Live re-dress: the lobby hands us the saved look when the run starts. */
+  applyCustom(custom) {
+    if (!custom || !this.avatar) return;
+    this.profile.custom = custom;
+    this.avatar.setCustom(custom);
   }
 
   toggleCar() {
@@ -1005,7 +1075,7 @@ export class Game {
     const stacks = rollLoot(Math.random, {
       zone: this.zone,
       kind: stop.kind,
-      lootMult: (1 + (this.perks?.scav || 0)) * this.nightBonus,
+      lootMult: (this.mode.lootMult || 1) * (1 + (this.perks?.scav || 0)) * this.nightBonus,
       rolls: 3,
     });
     this.scatterLoot(stop.x, stop.z, stacks, { spread: 4.2 });
@@ -1020,6 +1090,20 @@ export class Game {
   /** Searching after dark pays 25% more — the storm is the price. */
   get nightBonus() {
     return (this.world?.nightFactor || 0) > 0.55 ? 1.25 : 1;
+  }
+
+  /** True when a tornado is close enough that anchoring is the sensible choice. */
+  get stormWarning() {
+    return (this.tornadoes || []).some(
+      (t) => Math.hypot(t.pos.x - this.pos.x, t.pos.z - this.pos.z) < 220,
+    );
+  }
+
+  /** 0..1 through the current mode's run, for the HUD and the summary. */
+  modeProgress() {
+    const target = this.mode.targetDay;
+    if (!Number.isFinite(target)) return 0;
+    return clamp(this.day / target, 0, 1);
   }
 
   /**
@@ -1113,7 +1197,8 @@ export class Game {
     const stacks = rollLoot(Math.random, {
       zone: this.zone,
       kind: b.kind,
-      lootMult: b.lootMult * (indoors ? 1.2 : 0.7) * this.nightBonus * (1 + (this.perks?.scav || 0)),
+      lootMult: b.lootMult * (indoors ? 1.2 : 0.7) * this.nightBonus
+        * (this.mode.lootMult || 1) * (1 + (this.perks?.scav || 0)),
       inside: indoors,
       rolls: 3,
     });
@@ -1341,8 +1426,8 @@ export class Game {
   updateSpawning(dt) {
     this.spawnTimer -= dt;
     if (this.spawnTimer > 0 || this.dead) return;
-    this.spawnTimer = clamp(16 - this.day * 0.08, 6.5, 16);
-    const maxH = Math.min(16, 4 + Math.floor(this.day / 7));
+    this.spawnTimer = clamp(16 - this.day * 0.08, 6.5, 16) / (this.mode.spawnRate || 1);
+    const maxH = Math.min(16, Math.round((4 + Math.floor(this.day / 7)) * (this.mode.hollowMult || 1)));
     if (this.hollows.length < maxH) {
       const n = clamp(1 + Math.floor(this.day / 15), 1, 4);
       for (let i = 0; i < n && this.hollows.length < maxH; i++) {
@@ -1352,7 +1437,9 @@ export class Game {
         this.hollows.push(h);
       }
     }
-    if (this.day >= 5 && this.raiders.length < Math.min(4, 1 + Math.floor(this.day / 25)) && Math.random() < 0.5) {
+    const raiderCap = Math.max(1, Math.round(Math.min(4, 1 + Math.floor(this.day / 25)) * (this.mode.raiderMult || 1)));
+    const raiderChance = clamp(0.5 * (this.mode.raiderMult || 1), 0.25, 0.95);
+    if ((this.day >= 5 || this.mode.raiderMult > 1.5) && this.raiders.length < raiderCap && Math.random() < raiderChance) {
       const ang = rand(0, Math.PI * 2);
       const d = rand(90, 140);
       this.raiders.push(new RaiderCar(this.scene, this.pos.x + Math.cos(ang) * d, this.pos.z + Math.sin(ang) * d, this.day));
@@ -1538,6 +1625,10 @@ export class Game {
     // phones have no keyboard: drop the key hints there instead of showing [G]/[E]
     const key = (k) => (this.touchMode ? '' : `[${k}] `);
     if (this.inCar) {
+      if (this.car.anchored) {
+        this.hud.prompt('ANCHORED · TAP ⚓ OR HOLD THROTTLE TO DRIVE OFF');
+        return;
+      }
       const drops = this.loot?.count || 0;
       const b = this.world.nearestBuilding(this.pos.x, this.pos.z, 26);
       if (drops) this.hud.prompt(`${drops} DROP${drops === 1 ? '' : 'S'} ON THE GROUND · DRIVE OVER THEM`);
@@ -1632,7 +1723,7 @@ export class Game {
     this.hud.closeBench();
     this.audio.crash();
     this.hud.storm(null);
-    this.hud.showGameOver('WRECKED', 'The highway claimed another survivor.', [
+    this.hud.showGameOver('WRECKED', `${this.mode.name} · the highway claimed another survivor.`, [
       { k: 'DAYS SURVIVED', v: this.day },
       { k: 'DISTANCE', v: `${(this.distance / 1000).toFixed(1)} KM` },
       { k: 'SCAVENGERS DOWN', v: this.kills },
@@ -1654,8 +1745,8 @@ export class Game {
     this.invUI?.hide();
     this.hud.closeBench();
     this.hud.storm(null);
-    this.hud.showGameOver('YOU LIVED', '100 days. One rig. The coast is yours.', [
-      { k: 'DAYS SURVIVED', v: 100 },
+    this.hud.showGameOver('YOU LIVED', `${this.mode.name} cleared — ${Number.isFinite(this.mode.targetDay) ? this.mode.targetDay + ' days' : this.day + ' days'}. One rig. The coast is yours.`, [
+      { k: 'DAYS SURVIVED', v: this.day },
       { k: 'DISTANCE', v: `${(this.distance / 1000).toFixed(1)} KM` },
       { k: 'SCAVENGERS DOWN', v: this.kills },
       { k: 'ITEMS LOOTED', v: this.itemsLooted },
@@ -1674,7 +1765,11 @@ export class Game {
     let v = this.peerVisuals?.get(p.id);
     if (!v) {
       if (!this.peerVisuals) this.peerVisuals = new Map();
-      const avatar = buildAvatar({ color: p.color || 0xffb347, name: p.name || 'SURVIVOR' });
+      const avatar = buildAvatar({
+        color: p.color || 0xffb347,
+        name: p.name || 'SURVIVOR',
+        custom: p.custom || null,
+      });
       const car = new Vehicle({ color: p.carColor || 0xd24a2b, lights: false });
       car.group.visible = false;
       avatar.root.visible = true;
@@ -1759,11 +1854,52 @@ export class Game {
     if (el) el.textContent = `${n + 1} SURVIVOR${n ? 'S' : ''} ONLINE`;
   }
 
+  /** Device pixel ratio, capped by the quality setting and the frame governor. */
+  targetPixelRatio() {
+    const dpr = Math.min(window.devicePixelRatio || 1, this.pixelCap || 1.85);
+    return Math.max(0.5, dpr * (this.renderScale ?? 1));
+  }
+
   resize() {
     this.camera.aspect = window.innerWidth / window.innerHeight;
     this.camera.updateProjectionMatrix();
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.pixelCap || 1.85));
+    this.renderer.setPixelRatio(this.targetPixelRatio());
     this.renderer.setSize(window.innerWidth, window.innerHeight);
+  }
+
+  /**
+   * Frame governor. Measures the smoothed frame time and trades render resolution
+   * (and, if it is still desperate, shadows and particle scale) to hold ~60 fps on
+   * phones and laptops alike. This is the part that actually makes a weaker device
+   * faster — a database cannot render frames, so the work has to be avoided here.
+   */
+  updatePerf(dt) {
+    this.frameTime = this.frameTime * 0.9 + dt * 0.1;
+    this.perfTimer += dt;
+    if (this.perfTimer < 1.2) return;
+    this.perfTimer = 0;
+    this.fps = Math.round(1 / Math.max(this.frameTime, 1 / 240));
+    const slow = this.frameTime > 1 / 42;      // below ~42 fps: drop detail
+    const fast = this.frameTime < 1 / 57;      // comfortably above 57 fps: give detail back
+    let changed = false;
+    if (slow && this.renderScale > this.minScale) {
+      this.renderScale = Math.max(this.minScale, this.renderScale - 0.08);
+      changed = true;
+    } else if (fast && this.renderScale < 1) {
+      this.renderScale = Math.min(1, this.renderScale + 0.04);
+      changed = true;
+    }
+    if (changed) this.renderer.setPixelRatio(this.targetPixelRatio());
+    // last resort on a very slow device: shadows off, particles thinned
+    if (slow && this.renderScale <= this.minScale + 1e-6) {
+      if (this.renderer.shadowMap.enabled) {
+        this.renderer.shadowMap.enabled = false;
+        this.world.sun.castShadow = false;
+        this.hud.toast('SHADOWS OFF — HOLDING FRAMES', 'warn');
+      } else if (this.effects.scale > 0.4) {
+        this.effects.scale = 0.4;
+      }
+    }
   }
 
   dispose() {

@@ -8,7 +8,7 @@ export class HUD {
       hud: $('hud'), day: $('dayNum'), dayFill: $('dayFill'), zone: $('zoneName'),
       speed: $('speedVal'), dist: $('distVal'), weather: $('weatherVal'),
       radar: $('radar'), meters: {}, vitals: $('vitals'), weapon: $('weaponRow'),
-      anchorRow: $('anchorRow'), anchorBtn: $('anchorBtn'), benchBtn: $('benchBtn'), scavBtn: $('scavBtn'),
+      anchorRow: $('anchorRow'), dayGoal: $('dayGoal'), modeTag: $('modeTag'), fpsRow: $('fpsRow'), anchorBtn: $('anchorBtn'), benchBtn: $('benchBtn'), scavBtn: $('scavBtn'),
       prompt: $('prompt'), toasts: $('toasts'), storm: $('stormBanner'),
       chatLog: $('chatLog'), chatInput: $('chatInput'), party: $('party'),
       bench: $('bench'), benchTier: $('benchTier'), inv: $('invList'), recipes: $('recipeGrid'),
@@ -47,11 +47,20 @@ export class HUD {
   show() { this.el.hud.classList.remove('hidden'); }
   hide() { this.el.hud.classList.add('hidden'); }
 
-  setDay(day, progress, zoneName) {
+  setDay(day, progress, zoneName, mode) {
     this.el.day.textContent = day;
+    if (mode && this.el.dayGoal) this.el.dayGoal.textContent = Number.isFinite(mode.targetDay) ? `/${mode.targetDay}` : '';
+    if (mode && this.el.modeTag) this.el.modeTag.textContent = mode.name;
     this.el.dayFill.style.width = `${clamp(progress * 100, 0, 100)}%`;
     if (zoneName) this.el.zone.textContent = zoneName;
   }
+  /** Mode chip in the top bar (called with the live mode object). */
+  setMode(mode) {
+    if (!mode) return;
+    if (this.el.modeTag) this.el.modeTag.textContent = mode.name;
+    if (this.el.dayGoal) this.el.dayGoal.textContent = Number.isFinite(mode.targetDay) ? `/${mode.targetDay}` : '';
+  }
+
   setSpeed(kmh) { this.el.speed.textContent = Math.round(Math.abs(kmh)); }
   setDistance(km) { this.el.dist.textContent = fmt(km, 2); }
   setWeather(label, danger) {
@@ -74,7 +83,8 @@ export class HUD {
     this.el.vitals.textContent = `HP ${Math.max(0, Math.round(v.hp))}`;
     this.el.vitals.style.color = v.hp < 35 ? '#ff6d7b' : '#ff9aa4';
     this.el.weapon.textContent = v.weapon;
-    this.el.anchorRow.textContent = v.anchored ? 'ANCHORS DEPLOYED' : `SPIKES T${v.anchorTier} READY`;
+    this.el.anchorRow.textContent = v.anchored ? 'ANCHORED · TAP TO RELEASE' : `SPIKES T${v.anchorTier} READY`;
+    if (this.el.fpsRow && typeof v.fps === 'number') this.el.fpsRow.textContent = `${v.fps} FPS`;
     this.el.anchorRow.style.color = v.anchored ? '#6dffa8' : '#8b93a5';
     this.el.anchorBtn.classList.toggle('on', !!v.anchored);
     this.el.anchorBtn.disabled = !v.inCar;
