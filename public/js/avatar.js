@@ -1,6 +1,7 @@
 import * as THREE from '../vendor/three.module.js';
 import { canvasTex, clamp, damp } from './utils.js';
 import { resolveCustom } from './customize.js';
+import { createMaterialKit, segmentsFor } from './materials.js';
 
 const mat = (hex, extra = {}) => new THREE.MeshStandardMaterial({ color: hex, roughness: 0.72, metalness: 0.04, ...extra });
 
@@ -49,12 +50,12 @@ function nameTexture(name, color) {
 }
 
 /** Rounded limb: capsule body + a joint ball, so elbows/knees never read as gaps. */
-function limb({ radius = 0.12, length = 0.5, material, joint = 0.15 }) {
+function limb({ radius = 0.12, length = 0.5, material, joint = 0.15, seg = null }) {
   const g = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.CapsuleGeometry(radius, length, 6, 12), material);
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(radius, length, seg?.capsule ?? 6, seg?.ball ?? 12), material);
   body.position.y = -length / 2 - radius * 0.4;
   body.castShadow = true; body.receiveShadow = true;
-  const ball = new THREE.Mesh(new THREE.SphereGeometry(joint, 12, 10), material);
+  const ball = new THREE.Mesh(new THREE.SphereGeometry(joint, seg?.sphereW ?? 12, seg?.sphereH ?? 10), material);
   ball.castShadow = true;
   g.add(ball, body);
   return g;
@@ -67,18 +68,26 @@ function limb({ radius = 0.12, length = 0.5, material, joint = 0.15 }) {
  * limbs are capsules with real joints, and hair / accessories are separate
  * meshes that can be swapped at runtime by `setCustom` without a rebuild.
  */
-export function buildAvatar({ color = 0xffb347, name = 'WANDERER', custom = null } = {}) {
+export function buildAvatar({
+  color = 0xffb347, name = 'WANDERER', custom = null, detail = 'medium', env = null,
+} = {}) {
   const cfg = resolveCustom(custom);
   const root = new THREE.Group();
   const rig = new THREE.Group();
   root.add(rig);
 
-  const skin = mat(cfg.skinHex || color, { roughness: 0.68 });
-  const shirt = mat(cfg.outfitHex);
-  const pants = mat(new THREE.Color(cfg.outfitHex).multiplyScalar(0.55).getHex(), { roughness: 0.86 });
-  const boot = mat(0x1b1e25, { roughness: 0.92 });
-  const hairMat = mat(cfg.hairHex, { roughness: 0.95 });
-  const metal = mat(0x9aa3ae, { metalness: 0.8, roughness: 0.35 });
+  // PBR kit: skin gets sheen + clearcoat, cloth gets a woven normal map, metal
+  // gets real reflections. Detail tier decides how much of that survives.
+  const kit = createMaterialKit({ detail, env });
+  const seg = segmentsFor(detail);
+
+  const skin = kit.skin();
+  skin.color.setHex(cfg.skinHex || color);
+  const shirt = kit.cloth(cfg.outfitHex);
+  const pants = kit.cloth(new THREE.Color(cfg.outfitHex).multiplyScalar(0.55).getHex());
+  const boot = kit.leather(0x1b1e25);
+  const hairMat = kit.hair(cfg.hairHex);
+  const metal = kit.metal(0x9aa3ae, { rough: 0.34 });
 
   const cast = (m) => { m.castShadow = true; m.receiveShadow = true; return m; };
   const box = (w, h, d, material) => cast(new THREE.Mesh(new THREE.BoxGeometry(w, h, d), material));
@@ -199,7 +208,7 @@ export function buildAvatar({ color = 0xffb347, name = 'WANDERER', custom = null
     pivot.position.set(side * 0.4, 1.44, 0);
     const pad = ball(0.13, shirt, 10);
     pivot.add(pad);
-    const arm = limb({ radius: 0.1, length: 0.44, material: skin, joint: 0.11 });
+    const arm = limb({ radius: 0.1, length: 0.44, material: skin, joint: 0.11, seg });
     arm.position.y = -0.06;
     pivot.add(arm);
     const glove = box(0.17, 0.17, 0.19, boot);
@@ -215,7 +224,7 @@ export function buildAvatar({ color = 0xffb347, name = 'WANDERER', custom = null
   const mkLeg = (side) => {
     const pivot = new THREE.Group();
     pivot.position.set(side * 0.17, 0.86, 0);
-    const leg = limb({ radius: 0.115, length: 0.42, material: pants, joint: 0.13 });
+    const leg = limb({ radius: 0.115, length: 0.42, material: pants, joint: 0.13, seg });
     leg.position.y = -0.02;
     pivot.add(leg);
     const knee = ball(0.09, pants, 8);
@@ -443,6 +452,8 @@ export function buildAvatar({ color = 0xffb347, name = 'WANDERER', custom = null
     parts: { torso, head, armL, armR, legL, legR, hairStyles, accessories },
     animate, attack, setWeapon, setBodyColor, setCustom, setName,
     custom: cfg,
+    detail,
+    kit,
     get weapon() { return weaponId; },
   };
   setCustom(cfg);

@@ -1,0 +1,17 @@
+{
+  "id": "signal-lost",
+  "title": "Signal Lost",
+  "author": "ghanimz",
+  "blurb": "The dark only shows what your radio pings reveal. Find eight beacons before the battery gives out.",
+  "tags": [
+    "explore",
+    "fog",
+    "solo"
+  ],
+  "version": "1.0.0",
+  "entry": "index.html",
+  "icon": "icon.svg",
+  "accent": "#c58cff",
+  "players": "1",
+  "featured": false
+}

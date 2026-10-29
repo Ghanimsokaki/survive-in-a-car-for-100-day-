@@ -1,0 +1,13 @@
+{
+  "id": "my-game",
+  "title": "My Game",
+  "author": "your-username",
+  "blurb": "One line: what is the loop, and why is it fun?",
+  "tags": ["solo", "action"],
+  "version": "1.0.0",
+  "entry": "index.html",
+  "icon": "icon.svg",
+  "accent": "#6be0ff",
+  "players": "1",
+  "featured": false
+}

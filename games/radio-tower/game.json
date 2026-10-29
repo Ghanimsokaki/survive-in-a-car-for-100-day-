@@ -1,0 +1,17 @@
+{
+  "id": "radio-tower",
+  "title": "Radio Tower",
+  "author": "ghanimz",
+  "blurb": "Hold the relay until dawn. Every wave is faster, and the tower is the only thing keeping the map alive.",
+  "tags": [
+    "defence",
+    "waves",
+    "solo"
+  ],
+  "version": "1.0.0",
+  "entry": "index.html",
+  "icon": "icon.svg",
+  "accent": "#6be0ff",
+  "players": "1",
+  "featured": true
+}

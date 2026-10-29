@@ -1,0 +1,520 @@
+/**
+ * THE ARCADE — the hub every session starts in.
+ *
+ * One built-in game (100 Days Outrun, the 3D engine in this repo) plus every
+ * community game found under ./games (see scripts/scan-games.mjs). Community
+ * games are untrusted: they run in a sandboxed iframe with no same-origin
+ * access and talk to us through a small, validated postMessage protocol.
+ *
+ * Pure helpers (mergeCatalogues / filterGames / cardHtml / validateBridgeMessage)
+ * are exported so the test suite can pin the behaviour without a browser.
+ */
+import { ArcadeStats, ratingLabel, rankRuns } from './arcade-stats.js';
+
+export const CATALOGUE_URL = './games/index.json';
+export const BRIDGE = 'outrun-arcade';
+
+/** The game that ships with the repo. Rendered like any other card. */
+export const NATIVE_GAMES = [{
+  id: 'outrun',
+  title: '100 DAYS OUTRUN',
+  author: 'ghanimz',
+  blurb: 'One rig, one highway, a hundred days of storms. Five modes, crafting, anchors, friends.',
+  tags: ['survival', 'multiplayer', '3d'],
+  accent: '#ffb347',
+  icon: './icon.svg',
+  players: '1-8',
+  featured: true,
+  native: true,
+  version: '2.1.0',
+}];
+
+const ALLOWED_TYPES = new Set(['arcade:ready', 'arcade:state', 'arcade:score', 'arcade:close']);
+
+/** Drops anything that is not a well-formed, in-range bridge message. */
+export function validateBridgeMessage(data) {
+  if (!data || typeof data !== 'object') return null;
+  if (data.channel !== BRIDGE) return null;
+  const type = String(data.type || '');
+  if (!ALLOWED_TYPES.has(type)) return null;
+  const p = data.payload && typeof data.payload === 'object' ? data.payload : {};
+  const int = (v, max) => Math.max(0, Math.min(max, Math.round(Number(v) || 0)));
+  switch (type) {
+    case 'arcade:ready':
+      return { type, payload: {} };
+    case 'arcade:state':
+      return {
+        type,
+        payload: {
+          day: int(p.day, 9999),
+          score: int(p.score, 9999999),
+          status: String(p.status || '').slice(0, 32).toUpperCase(),
+        },
+      };
+    case 'arcade:score':
+      return {
+        type,
+        payload: {
+          score: int(p.score, 9999999),
+          day: int(p.day, 9999),
+          seconds: int(p.seconds, 86400),
+          won: Boolean(p.won),
+          meta: String(p.meta || '').slice(0, 80),
+        },
+      };
+    case 'arcade:close':
+    default:
+      return { type: 'arcade:close', payload: {} };
+  }
+}
+
+/** Built-ins first (featured), then the community catalogue as scanned. */
+export function mergeCatalogues(nativeGames, remote) {
+  const list = Array.isArray(remote?.games) ? remote.games : [];
+  const community = list
+    .filter((g) => g && typeof g.id === 'string' && g.id.trim().length > 0 && g.title)
+    .map((g) => ({
+      id: g.id,
+      title: String(g.title),
+      // the hub page is not inside the game folder: every asset path is absolute
+      // from the site root so the card art actually loads
+      author: String(g.author || 'anonymous'),
+      blurb: String(g.blurb || ''),
+      tags: Array.isArray(g.tags) ? g.tags.slice(0, 5) : [],
+      accent: /^#[0-9a-fA-F]{6}$/.test(g.accent || '') ? g.accent : '#6be0ff',
+      icon: `./${String(g.path || `games/${g.id}`).replace(/^\.?\//, '')}/${String(g.icon || 'icon.svg').replace(/^\.?\//, '')}`,
+      path: String(g.path || `games/${g.id}`).replace(/^\.?\//, ''),
+      entry: String(g.entry || 'index.html'),
+      players: String(g.players || '1'),
+      featured: Boolean(g.featured),
+      native: false,
+      version: String(g.version || '1.0.0'),
+    }));
+  return [...nativeGames, ...community];
+}
+
+/** Search + tab filtering. Tabs mirror the left rail. */
+export function filterGames(games, { query = '', tab = 'home' } = {}) {
+  const q = String(query || '').trim().toLowerCase();
+  let list = [...games];
+  if (tab === 'mine') list = list.filter((g) => g.native || g.owned);
+  if (tab === 'new') list = list.filter((g) => !g.native);
+  if (q) {
+    list = list.filter((g) => `${g.title} ${g.author} ${g.blurb} ${(g.tags || []).join(' ')}`
+      .toLowerCase().includes(q));
+  }
+  return list;
+}
+
+export const escapeHtml = (s) => String(s ?? '')
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+/** One game card as HTML. `stats` is an ArcadeStats instance (optional). */
+export function cardHtml(game, stats = null) {
+  const rating = stats?.ratingOf(game.id);
+  const plays = stats?.plays(game.id) || 0;
+  const stars = rating && rating.count ? Math.round(rating.avg) : 0;
+  const starRow = '★'.repeat(stars) + '☆'.repeat(5 - stars);
+  return `<button type="button" class="game-card${game.featured ? ' featured' : ''}"
+      data-game="${escapeHtml(game.id)}" style="--card-accent:${escapeHtml(game.accent)}">
+      <span class="gc-art">
+        <img src="${escapeHtml(game.icon)}" alt="" loading="lazy" onerror="this.style.display='none'" />
+        <i class="gc-tag">${game.native ? 'BUILT-IN' : escapeHtml(game.author)}</i>
+        ${game.featured ? '<i class="gc-featured">FEATURED</i>' : ''}
+      </span>
+      <span class="gc-body">
+        <b class="gc-title">${escapeHtml(game.title)}</b>
+        <em class="gc-blurb">${escapeHtml(game.blurb)}</em>
+        <span class="gc-meta">
+          <span class="gc-stars" title="${escapeHtml(ratingLabel(rating))}">${starRow}</span>
+          <span class="gc-plays">${plays ? `${plays} PLAY${plays === 1 ? '' : 'S'}` : 'NEW'}</span>
+          <span class="gc-tags">${(game.tags || []).slice(0, 3).map((t) => `#${escapeHtml(t)}`).join(' ')}</span>
+        </span>
+      </span>
+    </button>`;
+}
+
+/** Reads the generated catalogue; a missing file is not an error (fresh checkout). */
+export async function loadCatalogue(fetchImpl = globalThis.fetch) {
+  try {
+    const res = await fetchImpl(`${CATALOGUE_URL}?v=${Date.now()}`, { cache: 'no-store' });
+    if (!res.ok) throw new Error(`http ${res.status}`);
+    const json = await res.json();
+    return Array.isArray(json?.games) ? json : { version: 1, games: [] };
+  } catch {
+    return { version: 1, games: [], offline: true };
+  }
+}
+
+/**
+ * The hub itself: renders the rail, the friends strip and the cards, and owns
+ * the sandboxed game frame.
+ */
+export class Arcade {
+  constructor({
+    account = null,
+    onPlayNative = () => {},
+    getPlayer = () => ({ name: 'WANDERER', color: '#5ff0ff', room: 'highway-01', quality: 'auto' }),
+    fetchImpl = globalThis.fetch,
+    stats = null,
+  } = {}) {
+    this.account = account;
+    this.onPlayNative = onPlayNative;
+    this.getPlayer = getPlayer;
+    this.fetchImpl = fetchImpl;
+    this.stats = stats || new ArcadeStats({ account });
+    this.games = [...NATIVE_GAMES];
+    this.tab = 'home';
+    this.query = '';
+    this.playing = null;
+    this.frame = null;
+    this.lastScore = null;
+    this.onMessage = this.onMessage.bind(this);
+    this.build();
+  }
+
+  // ------------------------------------------------------------------ markup
+  build() {
+    const root = document.createElement('div');
+    root.id = 'arcade';
+    root.className = 'arcade hidden';
+    root.innerHTML = `
+      <header class="arc-top">
+        <div class="arc-logo"><span>100</span> ARCADE</div>
+        <label class="arc-search">
+          <input id="arcSearch" placeholder="Search games, creators, tags…" autocomplete="off" spellcheck="false" />
+        </label>
+        <div class="arc-top-right">
+          <span id="arcOnline" class="arc-online">SOLO</span>
+          <button id="arcProfileBtn" class="arc-avatar" type="button" title="Account">?</button>
+        </div>
+      </header>
+
+      <div class="arc-body">
+        <nav class="arc-rail">
+          <button class="arc-nav on" data-tab="home" type="button"><b>⌂</b><span>Home</span></button>
+          <button class="arc-nav" data-tab="mine" type="button"><b>▣</b><span>My Games</span></button>
+          <button class="arc-nav" data-tab="new" type="button"><b>✦</b><span>Community</span></button>
+          <button id="arcCreateBtn" class="arc-nav" type="button"><b>+</b><span>Create a Game</span></button>
+          <button id="arcRecordsBtn" class="arc-nav" type="button"><b>◆</b><span>Records</span></button>
+        </nav>
+
+        <main class="arc-main">
+          <section class="arc-friends">
+            <div class="arc-sec-head"><h2>Friends <small id="arcFriendCount"></small></h2></div>
+            <div id="arcFriends" class="arc-friend-row"></div>
+          </section>
+
+          <section>
+            <div class="arc-sec-head"><h2 id="arcSecTitle">Recommended for you</h2>
+              <span id="arcCount" class="arc-count"></span></div>
+            <div id="arcGrid" class="arc-grid"></div>
+          </section>
+
+          <section id="arcRecordsSec" class="hidden">
+            <div class="arc-sec-head"><h2>Records</h2></div>
+            <div id="arcRecords" class="arc-records"></div>
+          </section>
+        </main>
+      </div>
+
+      <div id="arcPlayer" class="arc-player hidden">
+        <div class="ap-bar">
+          <span id="apTitle">GAME</span>
+          <span id="apStatus"></span>
+          <button id="apReload" type="button" title="Restart">⟳</button>
+          <button id="apClose" type="button" title="Back to arcade">✕</button>
+        </div>
+        <div class="ap-stage"><iframe id="apFrame" title="Community game"
+          sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe></div>
+        <div id="apResult" class="ap-result hidden"></div>
+      </div>
+
+      <div id="arcCreate" class="arc-modal hidden">
+        <div class="arc-modal-card">
+          <header><h2>ADD YOUR GAME</h2><button id="arcCreateClose" type="button">✕</button></header>
+          <p>Games live in the repo, one folder each. Open a pull request with your folder and it shows up
+            here for everyone once it is merged.</p>
+          <pre id="arcCreateSnippet"></pre>
+          <div class="arc-modal-actions">
+            <a id="arcCreateLink" class="arc-link" href="#" target="_blank" rel="noopener">OPEN GITHUB →</a>
+            <button id="arcCreateCopy" type="button">COPY MANIFEST</button>
+          </div>
+          <p class="arc-note">Full rules and the SDK: <code>games/README.md</code>. Your game runs sandboxed —
+            it cannot read accounts, storage or other games.</p>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(root);
+    this.el = root;
+
+    const $ = (id) => root.querySelector(`#${id}`);
+    this.nodes = {
+      search: $('arcSearch'), grid: $('arcGrid'), title: $('arcSecTitle'), count: $('arcCount'),
+      friends: $('arcFriends'), friendCount: $('arcFriendCount'), online: $('arcOnline'),
+      player: $('arcPlayer'), frame: $('apFrame'), playerTitle: $('apTitle'), playerStatus: $('apStatus'),
+      result: $('apResult'), records: $('arcRecords'), recordsSec: $('arcRecordsSec'),
+      create: $('arcCreate'), createSnippet: $('arcCreateSnippet'), createLink: $('arcCreateLink'),
+      profileBtn: $('arcProfileBtn'),
+    };
+
+    root.querySelectorAll('.arc-nav[data-tab]').forEach((b) => {
+      b.addEventListener('click', () => {
+        this.tab = b.dataset.tab;
+        root.querySelectorAll('.arc-nav[data-tab]').forEach((x) => x.classList.toggle('on', x === b));
+        this.render();
+      });
+    });
+    this.nodes.search?.addEventListener('input', (e) => {
+      this.query = e.target.value || '';
+      this.render();
+    });
+    this.nodes.grid?.addEventListener?.('click', (e) => {
+      const card = e.target?.closest?.('[data-game]');
+      if (card) this.launch(card.dataset.game);
+    });
+    $('arcCreateBtn')?.addEventListener('click', () => this.showCreate());
+    $('arcCreateClose')?.addEventListener('click', () => this.nodes.create.classList.add('hidden'));
+    $('arcCreateCopy')?.addEventListener('click', () => this.copyManifest());
+    $('arcRecordsBtn')?.addEventListener('click', () => {
+      this.tab = 'records';
+      root.querySelectorAll('.arc-nav[data-tab]').forEach((x) => x.classList.remove('on'));
+      this.nodes.recordsSec.classList.remove('hidden');
+      this.renderRecords();
+    });
+    $('apClose')?.addEventListener('click', () => this.closeGame());
+    $('apReload')?.addEventListener('click', () => this.launch(this.playing?.id));
+
+    window.addEventListener('message', this.onMessage);
+    this.nodes.createSnippet.textContent = this.manifestTemplate();
+  }
+
+  manifestTemplate() {
+    return `games/my-game/game.json
+{
+  "id": "my-game",
+  "title": "My Game",
+  "author": "your-username",
+  "blurb": "One line about the loop.",
+  "tags": ["solo"],
+  "version": "1.0.0",
+  "entry": "index.html",
+  "icon": "icon.svg"
+}`;
+  }
+
+  showCreate() {
+    this.nodes.create.classList.remove('hidden');
+    const repo = 'https://github.com/Ghanimsokaki/survive-in-a-car-for-100-day-/new/main/games/my-game';
+    this.nodes.createLink.setAttribute('href', repo);
+  }
+
+  async copyManifest() {
+    try {
+      await navigator.clipboard.writeText(this.manifestTemplate());
+      this.toast('MANIFEST COPIED');
+    } catch {
+      this.toast('COPY FAILED — SELECT IT MANUALLY');
+    }
+  }
+
+  // ----------------------------------------------------------------- loading
+  async refresh() {
+    await this.stats.load();
+    this.games = mergeCatalogues(NATIVE_GAMES, await loadCatalogue(this.fetchImpl));
+    this.render();
+    return this.games;
+  }
+
+  show() {
+    this.el.classList.remove('hidden');
+    document.body.classList.add('arcade-open');
+    this.render();
+  }
+
+  hide() {
+    this.el.classList.add('hidden');
+    document.body.classList.remove('arcade-open');
+    this.closeGame();
+  }
+
+  // ------------------------------------------------------------------- render
+  render() {
+    const list = filterGames(this.games, { query: this.query, tab: this.tab === 'records' ? 'home' : this.tab });
+    const titles = { home: 'Recommended for you', mine: 'My games', new: 'New from the community' };
+    if (this.nodes.title) this.nodes.title.textContent = titles[this.tab] || 'Games';
+    if (this.nodes.count) this.nodes.count.textContent = `${list.length} GAME${list.length === 1 ? '' : 'S'}`;
+    if (this.nodes.grid) {
+      this.nodes.grid.innerHTML = list.length
+        ? list.map((g) => cardHtml(g, this.stats)).join('')
+        : '<p class="arc-empty">No games match that search.</p>';
+    }
+    this.renderFriends();
+    if (this.tab === 'records') this.renderRecords();
+  }
+
+  renderFriends() {
+    const host = this.nodes.friends;
+    if (!host) return;
+    const friends = Array.isArray(this.account?.friends) ? this.account.friends : [];
+    const online = friends.filter((f) => f.online);
+    if (this.nodes.friendCount) {
+      this.nodes.friendCount.textContent = friends.length ? `${friends.length} · ${online.length} ONLINE` : '';
+    }
+    if (this.nodes.online) {
+      this.nodes.online.textContent = this.account?.signedIn ? `${online.length} FRIENDS ONLINE` : 'GUEST MODE';
+    }
+    const tiles = friends.slice(0, 8).map((f) => `
+      <button type="button" class="arc-friend${f.online ? ' on' : ''}" data-friend="${escapeHtml(f.name)}">
+        <span class="af-dot"></span><b>${escapeHtml(String(f.name || '?').slice(0, 8))}</b>
+        <em>${f.online ? 'PLAYING' : 'OFFLINE'}</em>
+      </button>`);
+    host.innerHTML = `<button type="button" class="arc-friend add" data-add-friend="1">
+        <span class="af-plus">+</span><b>Add Friends</b><em>${friends.length ? 'FIND MORE' : 'NOBODY YET'}</em>
+      </button>${tiles.join('')}`;
+  }
+
+  renderRecords() {
+    const host = this.nodes.records;
+    if (!host) return;
+    const rows = this.games.map((g) => {
+      const board = rankRuns(this.stats.data.best[g.id] || []).slice(0, 3);
+      const best = board[0];
+      return `<div class="arc-rec">
+        <span class="ar-art" style="background:${escapeHtml(g.accent)}"></span>
+        <b>${escapeHtml(g.title)}</b>
+        <em>${best ? `BEST ${best.score} · ${escapeHtml(best.name)}` : 'NO RUNS YET'}</em>
+        <span class="ar-stars">${escapeHtml(ratingLabel(this.stats.ratingOf(g.id)))}</span>
+        <span class="ar-rate" data-rate="${escapeHtml(g.id)}">${[1, 2, 3, 4, 5]
+    .map((n) => `<button type="button" data-stars="${n}" data-game-rate="${escapeHtml(g.id)}"
+        class="${this.stats.myRating(g.id) >= n ? 'on' : ''}">★</button>`).join('')}</span>
+      </div>`;
+    }).join('');
+    host.innerHTML = rows;
+    host.querySelectorAll('[data-game-rate]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        await this.stats.rate(btn.dataset.gameRate, Number(btn.dataset.stars));
+        this.renderRecords();
+        this.toast('RATING SAVED');
+      });
+    });
+  }
+
+  // ------------------------------------------------------------------- launch
+  launch(id) {
+    const game = this.games.find((g) => g.id === id);
+    if (!game) return false;
+    if (game.native) {
+      this.hide();
+      this.onPlayNative(game);
+      return true;
+    }
+    this.openGame(game);
+    return true;
+  }
+
+  openGame(game) {
+    this.playing = game;
+    const player = this.getPlayer();
+    this.nodes.player.classList.remove('hidden');
+    this.nodes.result.classList.add('hidden');
+    this.nodes.playerTitle.textContent = game.title;
+    this.nodes.playerStatus.textContent = 'LOADING…';
+    // relative URL: the iframe is same-path but sandboxed without same-origin,
+    // so it can render our files yet cannot read our DOM, storage or session
+    const url = `./${game.path}/${game.entry}?g=${encodeURIComponent(game.id)}`;
+    this.nodes.frame.src = url;
+    this.nodes.frame.setAttribute('src', url);
+    this.readyAt = 0;
+    setTimeout(() => {
+      if (this.playing?.id === game.id) this.postInit();
+    }, 900);
+  }
+
+  postInit() {
+    const player = this.getPlayer();
+    try {
+      this.nodes.frame?.contentWindow?.postMessage({
+        channel: BRIDGE,
+        type: 'arcade:init',
+        payload: {
+          player: {
+            name: player.name || 'WANDERER',
+            color: player.color || '#5ff0ff',
+            room: player.room || 'highway-01',
+            custom: player.custom || null,
+          },
+          quality: player.quality || 'auto',
+        },
+      }, '*');
+    } catch { /* frame not ready yet — the game's local fallback covers it */ }
+  }
+
+  closeGame() {
+    this.playing = null;
+    this.nodes?.player?.classList.add('hidden');
+    if (this.nodes?.frame) {
+      this.nodes.frame.src = 'about:blank';
+      this.nodes.frame.setAttribute('src', 'about:blank');
+    }
+  }
+
+  async onMessage(ev) {
+    const msg = validateBridgeMessage(ev.data);
+    if (!msg) return;
+    const game = this.playing;
+    if (!game) return;
+    if (msg.type === 'arcade:ready') {
+      this.postInit();
+      this.nodes.playerStatus.textContent = 'LIVE';
+      return;
+    }
+    if (msg.type === 'arcade:close') { this.closeGame(); return; }
+    if (msg.type === 'arcade:state') {
+      this.nodes.playerStatus.textContent = msg.payload.status
+        || (msg.payload.day ? `DAY ${msg.payload.day}` : `SCORE ${msg.payload.score}`);
+      return;
+    }
+    if (msg.type === 'arcade:score') {
+      const run = msg.payload;
+      this.lastScore = run;
+      await this.stats.submitRun(game.id, run, this.getPlayer().name);
+      this.nodes.playerStatus.textContent = 'RUN LOGGED';
+      this.nodes.result.classList.remove('hidden');
+      this.nodes.result.innerHTML = `
+        <b>RUN LOGGED</b>
+        <span>SCORE ${run.score}${run.day ? ` · DAY ${run.day}` : ''}${run.seconds ? ` · ${run.seconds}s` : ''}</span>
+        <span class="ap-best">${this.stats.myRating(game.id) ? 'RATED' : 'RATE THIS GAME'}</span>
+        <span class="ap-stars">${[1, 2, 3, 4, 5].map((n) => `<button type="button" data-stars="${n}"
+          class="${this.stats.myRating(game.id) >= n ? 'on' : ''}">★</button>`).join('')}</span>
+        <button type="button" class="ap-again" data-ap="again">PLAY AGAIN</button>
+        <button type="button" class="ap-exit" data-ap="exit">BACK TO ARCADE</button>`;
+      this.nodes.result.querySelectorAll('[data-stars]').forEach((b) => {
+        b.addEventListener('click', async () => {
+          await this.stats.rate(game.id, Number(b.dataset.stars));
+          this.nodes.result.querySelectorAll('[data-stars]').forEach((x) => {
+            x.classList.toggle('on', Number(x.dataset.stars) <= Number(b.dataset.stars));
+          });
+          this.toast('THANKS FOR RATING');
+        });
+      });
+      this.nodes.result.querySelector('[data-ap="again"]')?.addEventListener('click', () => this.launch(game.id));
+      this.nodes.result.querySelector('[data-ap="exit"]')?.addEventListener('click', () => this.closeGame());
+      return;
+    }
+  }
+
+  toast(text) {
+    const el = document.createElement('div');
+    el.className = 'arc-toast';
+    el.textContent = text;
+    this.el.appendChild(el);
+    setTimeout(() => el.remove(), 1800);
+  }
+
+  destroy() {
+    window.removeEventListener('message', this.onMessage);
+    this.el?.remove();
+  }
+}

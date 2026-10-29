@@ -19,6 +19,52 @@ npm test           # headless suites (simulation, accounts, both UI flows)
 
 No install step, no build step. `public/vendor/three.module.js` is vendored, so the game boots even offline.
 
+## 🕹 The arcade
+
+The first screen after sign-in is the **arcade**: a hub with the built-in game plus every community game
+in the repo. Cards show the creator, tags, star rating and play count; **Records** has your best run per
+game and a star rating you can change any time.
+
+### Add your own game (pull request)
+
+```
+games/<your-game>/
+  game.json     ← manifest: id, title, author, blurb, tags, version, entry, icon
+  icon.svg      ← square card art
+  index.html    ← your game (plain HTML/JS/canvas, no build step)
+  game.js
+```
+
+1. Copy `games/_template/` to `games/your-game/` — the folder name **is** the id.
+2. Write your game; load the SDK with `<script src="../_shared/sdk.js"></script>`.
+3. Open a PR adding the folder. `npm run games` regenerates `games/index.json`; `npm test` validates
+   every manifest, and the build bundles `games/` into `dist/` automatically.
+
+Community games run in **`<iframe sandbox="allow-scripts">`** — no same-origin access, so a submitted game
+cannot read the hub's DOM, `localStorage`, the Supabase session or another game's data. It talks through a
+small validated `postMessage` protocol:
+
+```js
+Arcade.ready();                                                    // accept input
+Arcade.on('start', (player) => { /* name, color, room, custom */ });
+Arcade.state({ day: 3, status: 'HOLD THE LINE' });                 // optional live chip
+Arcade.score({ score: 1240, seconds: 96, won: true, meta: 'day 12' });
+Arcade.close();                                                    // back to the arcade
+```
+
+Full rules, the manifest schema and the SDK: **[`games/README.md`](games/README.md)**.
+
+### Ratings, plays and leaderboards
+
+Stars and runs are stored in Supabase (`game_ratings`, `game_runs`, plus the `game_stats` view) so the
+catalogue reads the same on every device. Guests get a local board instead, and a deployment without the
+SQL still works — `arcade-stats.js` degrades quietly.
+
+> **On "use Supabase for performance":** Supabase is a Postgres database over HTTPS. It stores ratings,
+> runs and presence; it never touches a frame, so it cannot raise FPS, and moving per-frame state
+> (positions, physics) into it would make the game slower. Performance work lives in the client: the
+> adaptive frame governor (render scale → shadows → particles) and the quality-tiered avatar materials.
+
 ## 👤 Sign in like Roblox
 
 The first screen is an account screen:

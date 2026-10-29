@@ -240,3 +240,82 @@ end;
 $$;
 
 grant execute on function public.ban_player(text, text) to authenticated;
+
+-- ============================================================================
+-- ARCADE — ratings and run scores for community games
+--
+-- The games themselves live in the repo (games/<slug>/), so this table set only
+-- stores what actually changes at runtime: who rated what, and how everyone's
+-- runs went. Guests keep a local copy; signed-in players sync here.
+-- ============================================================================
+
+create table if not exists public.game_ratings (
+  user_id    uuid not null references auth.users(id) on delete cascade,
+  game_id    text not null,
+  stars      smallint not null check (stars between 1 and 5),
+  updated_at timestamptz not null default now(),
+  primary key (user_id, game_id)
+);
+alter table public.game_ratings enable row level security;
+
+-- aggregates are public; individual votes are only exposed as a score
+drop policy if exists "ratings readable" on public.game_ratings;
+create policy "ratings readable" on public.game_ratings
+  for select using (true);
+
+drop policy if exists "players rate as themselves" on public.game_ratings;
+create policy "players rate as themselves" on public.game_ratings
+  for insert to authenticated with check (auth.uid() = user_id);
+
+drop policy if exists "players update their own rating" on public.game_ratings;
+create policy "players update their own rating" on public.game_ratings
+  for update to authenticated using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+create table if not exists public.game_runs (
+  id         bigserial primary key,
+  user_id    uuid references auth.users(id) on delete set null,
+  game_id    text not null,
+  score      integer not null default 0 check (score >= 0),
+  day        integer not null default 0,
+  seconds    integer not null default 0,
+  won        boolean not null default false,
+  meta       text not null default '',
+  created_at timestamptz not null default now()
+);
+alter table public.game_runs enable row level security;
+create index if not exists game_runs_score_idx on public.game_runs (game_id, score desc);
+create index if not exists game_runs_recent_idx on public.game_runs (created_at desc);
+
+drop policy if exists "runs are readable" on public.game_runs;
+create policy "runs are readable" on public.game_runs
+  for select using (true);
+
+drop policy if exists "players submit their own runs" on public.game_runs;
+create policy "players submit their own runs" on public.game_runs
+  for insert to authenticated with check (auth.uid() = user_id);
+
+-- anonymous plays are still counted (guests), but never attached to an account
+drop policy if exists "guests submit runs" on public.game_runs;
+create policy "guests submit runs" on public.game_runs
+  for insert to anon with check (user_id is null);
+
+drop policy if exists "owner prunes runs" on public.game_runs;
+create policy "owner prunes runs" on public.game_runs
+  for delete using (public.is_owner());
+
+-- one row per game: average rating, vote count and play count, so the arcade
+-- can paint 20 cards from a single cheap select
+create or replace view public.game_stats as
+select
+  g.game_id,
+  coalesce(round(avg(g.stars)::numeric, 2), 0) as avg_stars,
+  count(g.*) as votes,
+  coalesce((select count(*) from public.game_runs r where r.game_id = g.game_id), 0) as plays
+from public.game_ratings g
+group by g.game_id;
+
+grant select on public.game_stats to anon, authenticated;
+grant select, insert, update on public.game_ratings to authenticated;
+grant select on public.game_ratings to anon;
+grant select, insert on public.game_runs to anon, authenticated;
+grant usage, select on sequence public.game_runs_id_seq to anon, authenticated;

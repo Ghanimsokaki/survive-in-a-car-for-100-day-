@@ -1,9 +1,11 @@
 import * as THREE from '../vendor/three.module.js';
 import { buildAvatar } from './avatar.js';
+import { buildEnvironment } from './materials.js';
 import { Game } from './game.js';
 import { Account } from './account.js';
 import { AuthUI } from './authui.js';
 import { mountAdmin } from './admin.js';
+import { Arcade } from './arcade.js';
 import { MODES, DEFAULT_MODE, modeById } from './modes.js';
 import { loadBook, bestLine, careerLine, resetBook } from './records.js';
 import {
@@ -48,6 +50,7 @@ try {
 const account = new Account();
 let game = null;
 let admin = null;
+let arcade = null;
 let authUI = null;
 let starting = false;
 
@@ -79,12 +82,18 @@ function makePreview(canvas) {
   ring.position.y = 0.01;
   scene.add(ring);
 
+  // one prefiltered panorama shared by every preview avatar on the page
+  let previewEnv = null;
+  try { previewEnv = buildEnvironment(renderer, scene); } catch { previewEnv = null; }
+
   const stage = {
-    canvas, renderer, scene, camera, avatar: null,
+    canvas, renderer, scene, camera, avatar: null, env: previewEnv,
     yaw: -0.35, targetYaw: -0.35, dragging: false, lastX: 0,
     setAvatar(hex, name, custom) {
       if (stage.avatar) scene.remove(stage.avatar.root);
-      stage.avatar = buildAvatar({ color: hex, name, custom });
+      // lobby/auth previews get the full PBR treatment on desktop hardware
+      const detail = isPhone ? 'medium' : 'high';
+      stage.avatar = buildAvatar({ color: hex, name, custom, detail, env: stage.env || null });
       stage.avatar.root.rotation.y = stage.yaw;
       scene.add(stage.avatar.root);
     },
@@ -144,9 +153,35 @@ function refreshPreviews() {
   if (summary) summary.textContent = describeCustom(state.custom);
 }
 
+// ------------------------------------------------------------------ arcade
+/**
+ * The hub. Everything starts here: the built-in 100 Days Outrun plus every
+ * community game merged from ./games/index.json.
+ */
+function showArcade() {
+  $('auth').classList.remove('show');
+  $('lobby').classList.remove('show');
+  if (!arcade) {
+    arcade = new Arcade({
+      account,
+      onPlayNative: () => showLobby(),
+      getPlayer: () => ({
+        name: state.name || 'WANDERER',
+        color: state.color,
+        room: state.room,
+        custom: state.custom,
+        quality: state.quality,
+      }),
+    });
+  }
+  arcade.show();
+  arcade.refresh();
+}
+
 // ------------------------------------------------------------------- lobby
 function showLobby() {
   $('auth').classList.remove('show');
+  arcade?.hide();
   $('lobby').classList.add('show');
   $('nameInput').value = state.name;
   $('roomInput').value = state.room;
@@ -491,7 +526,7 @@ async function startRun() {
   } catch (err) {
     console.error(err);
     $('loading').classList.add('gone');
-    $('lobby').classList.add('show');
+    showArcade();
     if (btn) btn.innerHTML = 'START THE RUN <span>▸</span>';
     setFriendNote(`Could not start: ${err.message}`, 'err');
     starting = false;
@@ -693,6 +728,10 @@ async function boot() {
     await account.refreshFriends();
     setFriendNote('Friend list updated.', 'ok');
   });
+  $('arcadeBtn')?.addEventListener('click', () => {
+    $('lobby').classList.remove('show');
+    showArcade();
+  });
   $('signOutBtn')?.addEventListener('click', async () => {
     await account.signOut();
     applyProfileToState(account.profile);
@@ -703,7 +742,7 @@ async function boot() {
   });
 
   account.on((kind) => {
-    if (kind === 'friends') renderFriends();
+    if (kind === 'friends') { renderFriends(); arcade?.renderFriends(); }
     if (kind === 'profile') renderAccountChip();
   });
 
@@ -714,11 +753,11 @@ async function boot() {
       paintCustom();
       buildSwatches($('carRow'), CAR_COLORS, 'carColor');
       refreshPreviews();
-      showLobby();
+      showArcade();
     },
     onGuest: (profile) => {
       applyProfileToState(profile);
-      showLobby();
+      showArcade();
     },
     onColorsChanged: (colors) => {
       state.color = colors.body;
@@ -746,7 +785,7 @@ async function boot() {
     paintCustom();
     buildSwatches($('carRow'), CAR_COLORS, 'carColor');
     refreshPreviews();
-    showLobby();
+    showArcade();
     account.refreshFriends();
   } else {
     authUI.show();
@@ -758,4 +797,10 @@ async function boot() {
 
 boot();
 
-window.__outrun = { state, account, get game() { return game; }, get admin() { return admin; }, startRun };
+window.__outrun = {
+  state, account, startRun,
+  get game() { return game; },
+  get admin() { return admin; },
+  get arcade() { return arcade; },
+  get lobbyVisible() { return $('lobby')?.classList.contains('show'); },
+};

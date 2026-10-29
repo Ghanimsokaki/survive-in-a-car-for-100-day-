@@ -9,7 +9,8 @@
     "dev": "node server.mjs",
     "build": "node scripts/build.mjs",
     "test": "node tests/run-all.mjs",
-    "test:build": "node tests/build.mjs"
+    "test:build": "node tests/build.mjs",
+    "games": "node scripts/scan-games.mjs"
   },
   "engines": {
     "node": ">=18"

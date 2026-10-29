@@ -81,7 +81,10 @@ const api = window.__outrun;
 check('app booted', Boolean(api));
 check('signed-in session is restored', api.account.signedIn, api.account.username);
 check('auth overlay skipped for signed-in player', !document.getElementById('auth').classList.contains('show'));
-check('lobby shown directly', document.getElementById('lobby').classList.contains('show'));
+// signed-in players land on the arcade hub, then open the built-in game
+check('arcade hub shown to a signed-in player', Boolean(api.arcade) && !api.arcade.el.classList.contains('hidden'));
+api.arcade.launch('outrun');
+check('the built-in game opens the lobby', document.getElementById('lobby').classList.contains('show'));
 check('account chip shows the username', document.getElementById('accountName').textContent.length > 0, document.getElementById('accountName').textContent);
 
 // profile colours from Supabase drive the lobby state

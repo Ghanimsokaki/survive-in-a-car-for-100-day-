@@ -2,6 +2,7 @@ import * as THREE from '../vendor/three.module.js';
 import { World, ZONES } from './world.js';
 import { Vehicle, ANCHOR_TIERS, anchorTierData } from './vehicle.js';
 import { buildAvatar } from './avatar.js';
+import { buildEnvironment } from './materials.js';
 import { Tornado } from './tornado.js';
 import { Hollow, RaiderCar } from './enemies.js';
 import { Effects } from './effects.js';
@@ -95,6 +96,17 @@ export class Game {
       this.world.sun.shadow.mapSize.set(2048, 2048);
     }
     this.world.setFogRange(this.quality === 'low' ? 70 : 90, this.quality === 'low' ? 300 : 430);
+    // PBR reflections: one cheap procedural panorama, prefiltered once. High
+    // quality only — it costs a render pass and a little VRAM.
+    this.envMap = this.quality === 'high' ? buildEnvironment(this.renderer, this.scene) : null;
+    this.avatarDetail = this.quality === 'high' ? 'high' : this.quality === 'medium' ? 'medium' : 'low';
+    // a cool rim light behind the camera-side shoulder: the cheapest way to make
+    // a character read as a body instead of a flat cut-out on HIGH
+    if (this.quality === 'high') {
+      this.rimLight = new THREE.DirectionalLight(0x8fd0ff, 0.55);
+      this.rimLight.position.set(-7, 6, -9);
+      this.scene.add(this.rimLight);
+    }
     this.effects = new Effects(this.scene, { scale: this.quality === 'low' ? 0.45 : this.quality === 'medium' ? 0.7 : 1 });
     // one reusable warm light for whichever interior you are standing in
     this.interiorLight = new THREE.PointLight(0xffcf96, 0, this.quality === 'low' ? 14 : 22, 1.5);
@@ -188,6 +200,8 @@ export class Game {
     this.scene.add(this.car.group);
 
     this.avatar = buildAvatar({
+      detail: this.avatarDetail,
+      env: this.envMap,
       color: this.profile.color,
       name: this.profile.name,
       custom: this.profile.custom,

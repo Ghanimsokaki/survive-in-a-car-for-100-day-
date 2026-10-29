@@ -24,6 +24,7 @@ const suites = [
   ['modes-avatar.test.mjs', 'GAME MODES + PERF + AVATAR'],
   ['tornado-anchor.test.mjs', 'TORNADO LAB + ANCHOR CRAFTING'],
   ['records-storm.test.mjs', 'RECORDS + STORM METER'],
+  ['arcade.test.mjs', 'ARCADE + COMMUNITY GAMES'],
 ];
 
 await run(process.execPath, ['build.mjs']);

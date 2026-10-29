@@ -1,0 +1,13 @@
+{
+  "id": "last-convoy",
+  "title": "Last Convoy",
+  "author": "ghanimz",
+  "blurb": "Escort the fuel truck down Route 9. It is slow, it is loud, and everything on this road wants it.",
+  "tags": ["escort", "action", "solo"],
+  "version": "1.0.0",
+  "entry": "index.html",
+  "icon": "icon.svg",
+  "accent": "#ffb347",
+  "players": "1",
+  "featured": true
+}
