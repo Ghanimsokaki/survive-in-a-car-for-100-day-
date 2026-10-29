@@ -22,9 +22,9 @@
 
   /* ------------------------------------------------------------- weapons */
   const MODULES = [
-    { id: 'light-cannon', name: 'LIGHT CANNON', kind: 'gun', cost: 120, dmg: 9, rate: 1.1, range: 300, blurb: 'Fast, cheap, low damage.' },
-    { id: 'heavy-cannon', name: 'HEAVY CANNON', kind: 'gun', cost: 340, dmg: 26, rate: 0.42, range: 360, blurb: 'Slow reload, hits like a hammer.' },
-    { id: 'torpedo', name: 'TORPEDO TUBES', kind: 'torpedo', cost: 420, dmg: 70, rate: 0.18, range: 460, blurb: 'Slow, unguided, devastating at range.' },
+    { id: 'light-cannon', name: 'LIGHT CANNON', kind: 'gun', cost: 120, dmg: 16, rate: 1.1, range: 300, blurb: 'Fast, cheap, reliable.' },
+    { id: 'heavy-cannon', name: 'HEAVY CANNON', kind: 'gun', cost: 340, dmg: 42, rate: 0.42, range: 360, blurb: 'Slow reload, hits like a hammer.' },
+    { id: 'torpedo', name: 'TORPEDO TUBES', kind: 'torpedo', cost: 420, dmg: 120, rate: 0.18, range: 460, blurb: 'Slow, unguided, devastating at range.' },
     { id: 'flak', name: 'FLAK BATTERY', kind: 'aa', cost: 260, dmg: 6, rate: 2.2, range: 280, blurb: 'Shreds incoming jets and aircraft.' },
     { id: 'armour', name: 'ARMOUR BELT', kind: 'armour', cost: 300, hp: 90, blurb: 'Welded plate. +90 hull.' },
     { id: 'engine', name: 'TUNED ENGINE', kind: 'engine', cost: 280, speed: 0.22, blurb: '+0.22 speed, quicker turns.' },
@@ -77,7 +77,13 @@
     const armour = fitted.filter((m) => m.kind === 'armour');
     const engines = fitted.filter((m) => m.kind === 'engine');
 
-    const dps = [...guns, ...torpedoes].reduce((sum, m) => sum + m.dmg * m.rate, 0);
+    const weapons = [...guns, ...torpedoes];
+    const dps = weapons.reduce((sum, m) => sum + m.dmg * m.rate, 0);
+    // The battle sim fires one volley per reload: `shot` is the mean damage of a
+    // shell and `reload` keeps turrets × shot / reload === the advertised dps.
+    const rateSum = weapons.reduce((sum, m) => sum + m.rate, 0);
+    const shot = rateSum ? dps / rateSum : 0;
+    const reload = rateSum ? Math.max(0.24, base.turrets / rateSum) : 1;
     return {
       hull: base.id,
       hullName: base.name,
@@ -90,6 +96,8 @@
       armour: armour.length,
       engines: engines.length,
       dps: Math.round(dps * 10) / 10,
+      shot: Math.round(shot * 10) / 10,
+      reload: Math.round(reload * 100) / 100,
       hp: base.hp + armour.reduce((s, m) => s + m.hp, 0),
       speed: Math.round((base.speed + engines.reduce((s, m) => s + m.speed, 0)) * 100) / 100,
       turrets: base.turrets,
@@ -122,7 +130,7 @@
         name: ['RAIDER', 'CORSAIR', 'MARUADER', 'PRIVATEER', 'IRONWOLF', 'DREADNAUGHT'][i % 6],
         hp: Math.round(hull.hp * (0.55 + s * 0.12)),
         speed: Math.round(hull.speed * 100) / 100,
-        dmg: Math.round(6 + s * 2.4),
+        dmg: Math.round(4 + s * 1.4),
         range: 260 + i * 18,
       };
     });

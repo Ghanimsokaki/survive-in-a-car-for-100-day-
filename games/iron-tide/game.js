@@ -334,22 +334,58 @@
     beep(920, 0.16, 0.05);
   }
 
+  /**
+   * Soft aim assist. The guns fire along the bow, and enemies circle, so on a
+   * phone stick a broadside that *almost* lines up would always miss. If the
+   * nearest ship is already within ±0.55 rad of the bow, the shot is nudged onto
+   * it (and the target gets a lock bracket). Pointed the wrong way, no help.
+   */
+  function aimYaw() {
+    const s = session;
+    let best = null, bestD = Infinity;
+    for (const e of s.ships) {
+      if (e.dead) continue;
+      const d = Math.hypot(e.x - s.x, e.y - s.y);
+      if (d < bestD) { bestD = d; best = e; }
+    }
+    if (!best) { s.lock = null; return s.yaw; }
+    // lead a circling ship: two passes of "where will it be when the shell lands"
+    let px = best.x, py = best.y;
+    for (let i = 0; i < 2; i++) {
+      const t = Math.hypot(px - s.x, py - s.y) / 620;
+      px = best.x + (best.vx || 0) * t;
+      py = best.y + (best.vy || 0) * t;
+    }
+    const want = Math.atan2(py - s.y, px - s.x);
+    let diff = want - s.yaw;
+    while (diff > Math.PI) diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+    // wider help at knife range, where a circling hull is hardest to track by eye
+    const cone = bestD < 140 ? 0.95 : 0.55;
+    if (Math.abs(diff) > cone) { s.lock = null; return s.yaw; }
+    s.lock = best;
+    s.lockT = 0.35;
+    return s.yaw + diff * 0.85;
+  }
+
   function fire() {
     if (!session || session.over) return;
     const s = session;
     if (s.fireCd > 0) return;
-    s.fireCd = 0.45;
+    if (!s.lo.turrets || !s.lo.dps) return;      // no guns fitted: nothing to fire
+    s.fireCd = s.lo.reload || 0.45;
     s.shots += 1;
     const turrets = s.lo.turrets;
     const spread = 0.06;
+    const aim = aimYaw();
     for (let i = 0; i < turrets; i++) {
       const off = (i - (turrets - 1) / 2) * 10;
-      const a = s.yaw + (Math.random() - 0.5) * spread;
-      const px = s.x + Math.cos(s.yaw) * 20 - Math.sin(s.yaw) * off;
-      const py = s.y + Math.sin(s.yaw) * 20 + Math.cos(s.yaw) * off;
+      const a = aim + (Math.random() - 0.5) * spread;
+      const px = s.x + Math.cos(s.yaw) * 14 - Math.sin(s.yaw) * off;
+      const py = s.y + Math.sin(s.yaw) * 14 + Math.cos(s.yaw) * off;
       s.bullets.push({
         x: px, y: py, vx: Math.cos(a) * 620, vy: Math.sin(a) * 620,
-        dmg: (s.lo.guns ? 9 : 0) + (s.lo.torpedoes ? 48 : 0), life: 1.5,
+        dmg: s.lo.shot || 0, life: 1.5,
       });
     }
     beep(420, 0.05, 0.04);
@@ -361,6 +397,8 @@
     s.t += dt;
     s.fireCd = Math.max(0, s.fireCd - dt);
     s.banner = Math.max(0, s.banner - dt);
+    s.lockT = Math.max(0, (s.lockT || 0) - dt);
+    if (s.lockT === 0) s.lock = null;
     if (s.banner <= 0) $('banner').classList.remove('show');
 
     // steering
@@ -387,18 +425,26 @@
       const dx = s.x - e.x, dy = s.y - e.y;
       const d = Math.hypot(dx, dy) || 1;
       e.aggro += dt;
-      if (d > e.range * 0.8) {
-        e.x += (dx / d) * e.speed * 46 * dt;
+      const px = e.x, py = e.y;
+      const standoff = Math.max(120, e.range * 0.55);
+      if (d > e.range * 0.9) {
+        e.x += (dx / d) * e.speed * 46 * dt;          // close the distance
         e.y += (dy / d) * e.speed * 46 * dt;
+      } else if (d < standoff) {
+        e.x -= (dx / d) * e.speed * 34 * dt;          // back off, keep the range open
+        e.y -= (dy / d) * e.speed * 34 * dt;
       } else {
         // circle the player instead of ramming
         e.x += (-dy / d) * e.speed * 30 * dt;
         e.y += (dx / d) * e.speed * 30 * dt;
       }
+      // stored so the player's guns can lead a circling target
+      e.vx = (e.x - px) / dt;
+      e.vy = (e.y - py) / dt;
       e.yaw = Math.atan2(dy, dx);
       e.fireCd -= dt;
       if (e.fireCd <= 0 && d < e.range + 90) {
-        e.fireCd = 1.6 + Math.random();
+        e.fireCd = 2.2 + Math.random() * 1.2;
         const a = Math.atan2(dy, dx) + (Math.random() - 0.5) * 0.2;
         s.enemyBullets.push({ x: e.x, y: e.y, vx: Math.cos(a) * 380, vy: Math.sin(a) * 380, dmg: e.dmg, life: 2.4 });
       }
@@ -678,6 +724,36 @@
     for (const e of s.ships) {
       if (e.dead) continue;
       drawShip(e.x + camX, e.y + camY, e.yaw, 22, '#8c2f3a', '#ff8a6b', `${e.name} ${Math.max(0, Math.round(e.hp))}`);
+    }
+
+    // lock bracket on the ship the guns are tracking
+    if (s.lock && !s.lock.dead && s.lockT > 0) {
+      const lx = s.lock.x + camX, ly = s.lock.y + camY;
+      ctx.strokeStyle = 'rgba(109,255,168,.9)';
+      ctx.lineWidth = 1.5;
+      const r = 30, c = 9;
+      for (const [sx, sy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+        ctx.beginPath();
+        ctx.moveTo(lx + sx * r, ly + sy * (r - c));
+        ctx.lineTo(lx + sx * r, ly + sy * r);
+        ctx.lineTo(lx + sx * (r - c), ly + sy * r);
+        ctx.stroke();
+      }
+    }
+
+    // lock bracket on the ship the guns are tracking
+    if (s.lock && !s.lock.dead && s.lockT > 0) {
+      const lx = s.lock.x + camX, ly = s.lock.y + camY;
+      ctx.strokeStyle = 'rgba(109,255,168,.9)';
+      ctx.lineWidth = 1.5;
+      const r = 30, c = 9;
+      for (const [sx, sy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+        ctx.beginPath();
+        ctx.moveTo(lx + sx * r, ly + sy * (r - c));
+        ctx.lineTo(lx + sx * r, ly + sy * r);
+        ctx.lineTo(lx + sx * (r - c), ly + sy * r);
+        ctx.stroke();
+      }
     }
 
     // jets

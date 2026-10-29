@@ -285,4 +285,35 @@ console.log('\nirontide boots');
   }
 }
 
+// ------------------------------------------------------- the guns actually work
+console.log('\nbroadsides land');
+if (globalThis.window.__ironTide) {
+  const tide = globalThis.window.__ironTide;
+  tide.backToDock();
+  tide.startBattle();
+  const s = tide.session;
+  const nearest = () => s.ships.filter((e) => !e.dead)
+    .sort((a, b) => Math.hypot(a.x - s.x, a.y - s.y) - Math.hypot(b.x - s.x, b.y - s.y))[0];
+  const firstTarget = nearest();
+  let killedAt = -1;
+  let frames = 0;
+  for (let i = 0; i < 2400; i++) {      // up to 40 simulated seconds
+    const target = nearest();
+    if (!target) break;
+    // the player turns the bow onto the nearest ship and holds the trigger down
+    s.yaw = Math.atan2(target.y - s.y, target.x - s.x);
+    s.keys.fire = true;
+    s.keys.up = true;
+    tide.tick(1 / 60);
+    frames += 1;
+    if (killedAt < 0 && firstTarget.dead) killedAt = i;
+    if (tide.screen !== 'battle') break;
+  }
+  check('holding fire on a target sinks it', killedAt > 0,
+    killedAt > 0 ? `sank in ${(killedAt / 60).toFixed(1)} s` : `still ${Math.round(firstTarget.hp)} hp`);
+  check('the aim assist locks the ship being fired at', firstTarget.dead || s.lock === firstTarget);
+  check('a full sortie can be won without cheating', tide.screen === 'result' && s.over && s.survived,
+    `${(frames / 60).toFixed(1)} s · hull ${Math.round(s.hull)} · kills ${s.kills}/${s.ships.length}`);
+}
+
 process.exit(problems.length ? 1 : 0);
