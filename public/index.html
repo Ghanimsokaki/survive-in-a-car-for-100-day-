@@ -7,15 +7,29 @@
 <meta name="mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-<!-- installed-app / phone orientation: landscape, fullscreen -->
-<meta name="screen-orientation" content="landscape" />
-<meta name="x5-orientation" content="landscape" />
+<!-- The home (sign-in, lobby, arcade) is portrait; only a run asks for
+     landscape, at the moment the player presses PLAY. Telling the browser the
+     whole app is landscape made phones turn the menu sideways and locked it
+     there, which is the opposite of what a menu wants. -->
+<meta name="screen-orientation" content="any" />
+<meta name="x5-orientation" content="auto" />
+<meta name="full-screen" content="yes" />
+<meta name="x5-fullscreen" content="true" />
 <meta name="format-detection" content="telephone=no" />
 <link rel="manifest" href="./manifest.webmanifest" />
 <link rel="apple-touch-icon" href="./icon.svg" />
 <title>100 Days Outrun — Highway Survival</title>
 <meta name="description" content="A 3D multiplayer post-apocalyptic highway survival run. 100 days, one car, endless storms." />
 <link rel="stylesheet" href="./styles.css" />
+<!-- The home only needs these; the 3D engine is imported on PLAY (see main.js).
+     Naming them here saves the browser a discovery round trip on a phone. -->
+<link rel="modulepreload" href="./js/main.js" />
+<link rel="modulepreload" href="./js/preview.js" />
+<link rel="modulepreload" href="./js/account.js" />
+<link rel="modulepreload" href="./js/authui.js" />
+<link rel="modulepreload" href="./js/arcade.js" />
+<link rel="modulepreload" href="./js/orientation.js" />
+<link rel="dns-prefetch" href="https://fonts.gstatic.com" />
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌪️</text></svg>" />
 </head>
 <body>
@@ -398,7 +412,31 @@
   <button id="rotateDismiss" type="button">PLAY ANYWAY</button>
 </div>
 
-<div id="loading"><div class="spin"></div><span>WARMING THE ENGINE…</span></div>
+<div id="loading"><div class="spin"></div><span id="loadingText">WARMING THE ENGINE…</span></div>
+
+<script>
+  // The menu is allowed to fail open: if the module graph cannot load (old
+  // browser, flaky connection, blocked CDN), this card must not trap the player
+  // behind a spinner forever.
+  (function () {
+    var text = document.getElementById('loadingText');
+    var timer = setTimeout(function () {
+      if (document.documentElement.classList.contains('booted')) return;
+      if (text) text.textContent = 'STILL LOADING — CHECK YOUR CONNECTION';
+    }, 7000);
+    var hard = setTimeout(function () {
+      if (document.documentElement.classList.contains('booted')) return;
+      var el = document.getElementById('loading');
+      if (el) el.classList.add('gone');
+      var auth = document.getElementById('auth');
+      if (auth && !document.getElementById('lobby').classList.contains('show')) auth.classList.add('show');
+      clearTimeout(timer);
+    }, 14000);
+    window.addEventListener('load', function () {
+      if (document.documentElement.classList.contains('booted')) { clearTimeout(timer); clearTimeout(hard); }
+    });
+  })();
+</script>
 
 <script type="module" src="./js/main.js"></script>
 </body>

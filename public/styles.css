@@ -1268,3 +1268,70 @@ body.auto-land.run-live{position:fixed;top:0;left:0;
   touch-action:none}
 body.auto-land.run-live #app,
 body.auto-land.run-live #app canvas{width:100%!important;height:100%!important}
+
+/* ===========================================================================P
+   PORTRAIT HOME — the menu is a menu
+   The arcade is the front page now: on a phone it is held upright, read top to
+   bottom, with the tab bar under the thumb. Landscape belongs to a run only.
+=========================================================================== */
+
+/* nothing on the home should ever scroll sideways */
+body{overflow-x:hidden}
+.arcade{overflow-x:hidden}
+
+@media (max-width:760px){
+  /* tab bar along the bottom instead of a rail on the side: five icons in a
+     column eat a sixth of a 390 px screen, and the bottom is where thumbs are */
+  .arc-body{flex-direction:column;min-height:0}
+  .arc-rail{order:2;width:100%;flex:0 0 auto;flex-direction:row;justify-content:space-between;gap:0;
+    padding:4px 4px calc(4px + env(safe-area-inset-bottom,0px));
+    border-right:0;border-top:1px solid rgba(255,255,255,.08);
+    background:rgba(8,11,17,.96);backdrop-filter:blur(12px)}
+  .arc-nav{flex:1 1 0;flex-direction:column;justify-content:center;align-items:center;gap:3px;
+    min-height:48px;padding:6px 2px;border-radius:8px;font-size:7.5px;letter-spacing:.8px;text-align:center}
+  .arc-nav b{width:auto;font-size:15px;line-height:1}
+  .arc-nav span{display:block;font-size:7px;letter-spacing:.6px;max-width:64px;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .arc-main{order:1;padding:10px 12px 16px}
+
+  /* a phone in portrait reads one card per column at ~150 px; two at 360 px */
+  .arc-grid{grid-template-columns:repeat(auto-fill,minmax(152px,1fr));gap:9px}
+
+  /* the header: search drops under the logo row so nothing is squashed */
+  .arc-top{flex-wrap:wrap;gap:8px;padding:9px 12px}
+  .arc-search{order:3;flex:1 1 100%;max-width:none}
+  .arc-search input{font-size:12px;padding:9px 12px}
+  .arc-top-right{gap:7px}
+  .arc-online{display:none}
+
+  /* friends strip: bigger targets, no clipped names */
+  .arc-friend{width:74px;flex:0 0 74px}
+  .arc-friend b{font-size:9px;max-width:70px}
+
+  /* record rows stack instead of fighting for one line */
+  .arc-rec{flex-wrap:wrap;gap:6px 10px;padding:10px 12px}
+  .arc-rec b{min-width:0;flex:1 1 100%}
+
+  /* player toolbar in portrait: reachable, above the home indicator */
+  .ap-bar{padding:6px 10px calc(6px + env(safe-area-inset-bottom,0px));gap:8px}
+  .ap-bar span:first-child{font-size:9px;letter-spacing:1.4px}
+  .ap-bar button{font-size:8px;padding:8px 10px;min-height:38px}
+  .ap-result{bottom:calc(14px + env(safe-area-inset-bottom,0px));flex-wrap:wrap;justify-content:center;
+    width:calc(100% - 24px);gap:8px}
+}
+
+/* 44 px minimum for anything you have to hit with a thumb */
+@media (pointer:coarse){
+  .arc-nav,.arc-top button,.ap-bar button,.arc-modal-actions button,.arc-modal-actions a,
+  .auth-tabs button,.btn,.mode-card{min-height:44px}
+  .arc-avatar{width:38px;height:38px}
+}
+
+/* a notched phone in portrait: keep the header clear of the notch */
+@media (orientation:portrait) and (pointer:coarse){
+  .arc-top{padding-top:calc(9px + env(safe-area-inset-top,0px))}
+  .auth-wrap{padding-top:calc(14px + env(safe-area-inset-top,0px))}
+}
+
+/* the landscape CSS-rotation fallback must never touch the home */
+body:not(.run-live).auto-land{position:static;width:auto;height:auto;transform:none}

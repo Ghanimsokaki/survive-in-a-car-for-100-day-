@@ -26,6 +26,7 @@ const suites = [
   ['records-storm.test.mjs', 'RECORDS + STORM METER'],
   ['arcade.test.mjs', 'ARCADE + COMMUNITY GAMES'],
   ['fleet.test.mjs', 'FLEET BUILDER + AUTO LANDSCAPE'],
+  ['boot.test.mjs', 'FAST BOOT + PORTRAIT HOME + SUPABASE RELAY'],
 ];
 
 await run(process.execPath, ['build.mjs']);

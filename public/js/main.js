@@ -1,12 +1,10 @@
-import * as THREE from '../vendor/three.module.js';
-import { buildAvatar } from './avatar.js';
-import { buildEnvironment } from './materials.js';
-import { Game } from './game.js';
 import { Account } from './account.js';
 import { AuthUI } from './authui.js';
-import { mountAdmin } from './admin.js';
 import { Arcade } from './arcade.js';
-import { installAutoLandscape, forceLandscape, isPortrait, landscapeState } from './orientation.js';
+import { mountPreview } from './preview.js';
+import {
+  installAutoLandscape, forceLandscape, requestPortrait, isPortrait, landscapeState,
+} from './orientation.js';
 import { MODES, DEFAULT_MODE, modeById } from './modes.js';
 import { loadBook, bestLine, careerLine, resetBook } from './records.js';
 import {
@@ -56,77 +54,30 @@ let authUI = null;
 let starting = false;
 
 // ---------------------------------------------------------------- avatars
-function makePreview(canvas) {
-  if (!canvas) return null;
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, isPhone ? 1.5 : 2));
-  const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(34, 1, 0.1, 60);
-  camera.position.set(0, 1.55, 5.1);
-  camera.lookAt(0, 1.2, 0);
+/**
+ * THE 3D KIT IS LAZY ON PURPOSE.
+ *
+ * `game.js` pulls in three.js plus the world, vehicle, avatar, tornado, HUD and
+ * crafting modules — about a megabyte. The home screens need none of it, so it
+ * is imported on demand: on the first PLAY press, or in the background once the
+ * menu is idle (whichever comes first). That is the difference between staring
+ * at a blank screen while 1 MB parses and getting the sign-in box instantly.
+ */
+let kitPromise = null;
+export function loadGameKit() {
+  if (!kitPromise) {
+    kitPromise = Promise.all([import('./game.js'), import('./admin.js')])
+      .then(([gameMod, adminMod]) => ({ Game: gameMod.Game, mountAdmin: adminMod.mountAdmin }))
+      .catch((err) => { kitPromise = null; throw err; });
+  }
+  return kitPromise;
+}
 
-  scene.add(new THREE.HemisphereLight(0xbfd4ff, 0x3b2c1b, 1.5));
-  const key = new THREE.DirectionalLight(0xffd9a0, 3.2);
-  key.position.set(3, 5, 4);
-  scene.add(key);
-  const rim = new THREE.DirectionalLight(0x5ff0ff, 1.4);
-  rim.position.set(-4, 2, -3);
-  scene.add(rim);
-
-  const disc = new THREE.Mesh(new THREE.CircleGeometry(2.4, 40),
-    new THREE.MeshStandardMaterial({ color: 0x1a2029, roughness: 0.9, metalness: 0.2 }));
-  disc.rotation.x = -Math.PI / 2;
-  scene.add(disc);
-  const ring = new THREE.Mesh(new THREE.RingGeometry(2.35, 2.5, 44),
-    new THREE.MeshBasicMaterial({ color: 0xffb347, transparent: true, opacity: 0.55, side: THREE.DoubleSide }));
-  ring.rotation.x = -Math.PI / 2;
-  ring.position.y = 0.01;
-  scene.add(ring);
-
-  // one prefiltered panorama shared by every preview avatar on the page
-  let previewEnv = null;
-  try { previewEnv = buildEnvironment(renderer, scene); } catch { previewEnv = null; }
-
-  const stage = {
-    canvas, renderer, scene, camera, avatar: null, env: previewEnv,
-    yaw: -0.35, targetYaw: -0.35, dragging: false, lastX: 0,
-    setAvatar(hex, name, custom) {
-      if (stage.avatar) scene.remove(stage.avatar.root);
-      // lobby/auth previews get the full PBR treatment on desktop hardware
-      const detail = isPhone ? 'medium' : 'high';
-      stage.avatar = buildAvatar({ color: hex, name, custom, detail, env: stage.env || null });
-      stage.avatar.root.rotation.y = stage.yaw;
-      scene.add(stage.avatar.root);
-    },
-    resize() {
-      const w = canvas.clientWidth || 380, h = canvas.clientHeight || 220;
-      renderer.setSize(w, h, false);
-      camera.aspect = w / h;
-      camera.updateProjectionMatrix();
-    },
-    render(dt) {
-      if (!stage.avatar) return;
-      stage.yaw += (stage.targetYaw - stage.yaw) * 0.14;
-      if (!stage.dragging) stage.targetYaw += dt * 0.22;
-      stage.avatar.root.rotation.y = stage.yaw;
-      stage.avatar.animate(dt, 0.16, false);
-      renderer.render(scene, camera);
-    },
-  };
-
-  canvas.addEventListener('pointerdown', (e) => {
-    stage.dragging = true; stage.lastX = e.clientX;
-    canvas.setPointerCapture?.(e.pointerId);
-  });
-  canvas.addEventListener('pointermove', (e) => {
-    if (!stage.dragging) return;
-    stage.targetYaw += (e.clientX - stage.lastX) * 0.012;
-    stage.lastX = e.clientX;
-  });
-  const stop = (e) => { stage.dragging = false; canvas.releasePointerCapture?.(e.pointerId); };
-  canvas.addEventListener('pointerup', stop);
-  canvas.addEventListener('pointercancel', stop);
-  return stage;
+/** Warm the kit when the browser is idle, so PLAY does not wait on the network. */
+function warmGameKit() {
+  const run = () => loadGameKit().catch(() => {});
+  if (typeof requestIdleCallback === 'function') requestIdleCallback(run, { timeout: 4000 });
+  else setTimeout(run, 1800);
 }
 
 let authPreview = null;
@@ -184,6 +135,8 @@ function showLobby() {
   $('auth').classList.remove('show');
   document.body.classList.remove('run-live');
   document.documentElement.classList.remove('rot-stage');
+  // the home is portrait again: unlock landscape and leave fullscreen
+  requestPortrait();
   arcade?.hide();
   $('lobby').classList.add('show');
   $('nameInput').value = state.name;
@@ -472,12 +425,16 @@ async function startRun() {
   saveLocal();
   account.saveProfile({ display_name: state.name, body_color: state.color, car_color: state.carColor });
 
-  // phones: go fullscreen + lock to landscape before the world is measured,
-  // so the HUD lays itself out for the orientation the player will actually use
-  if (isPhone && !landscapeTried) {
+  // A run is now live — this is the ONLY moment the app is allowed to turn the
+  // phone. The home screens stay portrait; landscape belongs to gameplay.
+  document.body.classList.add('run-live');
+  // Only wait for the rotation when it can actually help: on a phone that is
+  // already sideways there is nothing to lock, and blocking PLAY for 700 ms to
+  // find that out is exactly the "long loading" the player notices.
+  if (isPhone && !landscapeTried && isPortrait()) {
     await Promise.race([
       goLandscape(),
-      new Promise((resolve) => setTimeout(() => resolve(false), 700)),
+      new Promise((resolve) => setTimeout(() => resolve(false), 380)),
     ]);
   }
   // The arcade hands the iframe a landscape stage, so re-check after the lock.
@@ -492,12 +449,13 @@ async function startRun() {
   if (btn) btn.innerHTML = 'WARMING THE ENGINE…';
   $('lobby').classList.remove('show');
   $('loading').classList.remove('gone');
-  document.body.classList.add('run-live');
 
   await new Promise((r) => setTimeout(r, 140));
 
   try {
-    game = new Game({
+    // only now do we pay for three.js + the game modules
+    const kit = await loadGameKit();
+    game = new kit.Game({
       mount: $('app'),
       profile: {
         name: state.name,
@@ -522,7 +480,7 @@ async function startRun() {
     game.hud.toast('DAY 1 · OAKHAVEN OUTSKIRTS', 'warn');
     setTimeout(() => game?.hud.toast(isPhone ? 'LEFT STICK DRIVES · TAP ⚓ TO ANCHOR' : 'COLLECT FUEL · REACH THE HIGHWAY', ''), 1800);
     if (account.signedIn) account.setPresence({ status: 'playing', room: state.room, day: 1 });
-    admin = mountAdmin({
+    admin = kit.mountAdmin({
       game,
       account,
       survivorName: state.name,
@@ -625,8 +583,8 @@ window.addEventListener('resize', () => {
 
 // ---------------------------------------------------------------------- boot
 async function boot() {
-  authPreview = makePreview($('previewCanvas'));
-  lobbyPreview = makePreview($('previewCanvasLobby'));
+  authPreview = mountPreview($('previewCanvas'));
+  lobbyPreview = mountPreview($('previewCanvasLobby'));
   authPreview?.setAvatar(hexToInt(state.color), 'SURVIVOR');
   lobbyPreview?.setAvatar(hexToInt(state.color), 'SURVIVOR');
   requestAnimationFrame(previewLoop);
@@ -799,6 +757,10 @@ async function boot() {
   }
 
   setTimeout(() => $('loading').classList.add('gone'), 500);
+  // the menu is interactive now; pull the 3D kit in the background so the first
+  // PLAY press does not start a cold megabyte
+  warmGameKit();
+  document.documentElement.classList.add('booted');
 }
 
 boot();

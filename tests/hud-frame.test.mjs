@@ -88,12 +88,13 @@ console.log('\nlandscape frame');
 console.log('\ninstalled app');
 {
   const manifest = JSON.parse(readFileSync(`${ROOT}public/manifest.webmanifest`, 'utf8'));
-  check('the manifest forces landscape', manifest.orientation === 'landscape', manifest.orientation);
-  check('the manifest opens fullscreen', manifest.display === 'fullscreen', manifest.display);
+  // the home is a portrait menu; landscape is requested per run, not by the app
+  check('the manifest does not pin the app to landscape', manifest.orientation === 'any', manifest.orientation);
+  check('the manifest opens standalone (portrait home)', manifest.display === 'standalone', manifest.display);
   check('the manifest ships icons', Array.isArray(manifest.icons) && manifest.icons.length >= 2);
   check('the page links the manifest', /rel="manifest"/.test(html));
-  check('Samsung/Chromium orientation hints are present',
-    /name="screen-orientation" content="landscape"/.test(html));
+  check('Samsung/Chromium orientation hints say "any"',
+    /name="screen-orientation" content="any"/.test(html));
 }
 
 console.log('\norientation');

@@ -10,7 +10,9 @@
  * are exported so the test suite can pin the behaviour without a browser.
  */
 import { ArcadeStats, ratingLabel, rankRuns } from './arcade-stats.js';
-import { installAutoLandscape, isTouchDevice, isPortrait } from './orientation.js';
+import {
+  installAutoLandscape, isTouchDevice, isPortrait, requestLandscape, requestPortrait,
+} from './orientation.js';
 
 export const CATALOGUE_URL = './games/index.json';
 export const BRIDGE = 'outrun-arcade';
@@ -137,6 +139,37 @@ export function cardHtml(game, stats = null) {
 }
 
 /** Reads the generated catalogue; a missing file is not an error (fresh checkout). */
+const CATALOGUE_CACHE_KEY = 'outrun-catalogue-v1';
+const CATALOGUE_TTL = 6 * 60 * 60 * 1000;
+
+/** The last catalogue a browser saw, so the hub paints before any network I/O. */
+export function readCachedCatalogue() {
+  try {
+    const raw = globalThis.localStorage?.getItem(CATALOGUE_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed?.games)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+export function writeCachedCatalogue(catalogue) {
+  try {
+    if (!Array.isArray(catalogue?.games)) return;
+    globalThis.localStorage?.setItem(CATALOGUE_CACHE_KEY, JSON.stringify({
+      ...catalogue,
+      cachedAt: Date.now(),
+    }));
+  } catch { /* private mode, quota, sandboxed iframe — all fine */ }
+}
+
+export function catalogueIsStale(catalogue, now = Date.now()) {
+  if (!catalogue?.cachedAt) return true;
+  return now - Number(catalogue.cachedAt) > CATALOGUE_TTL;
+}
+
 export async function loadCatalogue(fetchImpl = globalThis.fetch) {
   try {
     const res = await fetchImpl(`${CATALOGUE_URL}?v=${Date.now()}`, { cache: 'no-store' });
@@ -347,8 +380,19 @@ export class Arcade {
 
   // ----------------------------------------------------------------- loading
   async refresh() {
-    await this.stats.load();
-    this.games = mergeCatalogues(NATIVE_GAMES, await loadCatalogue(this.fetchImpl));
+    // 1. paint immediately from the cached catalogue (no round trip)
+    const cached = readCachedCatalogue();
+    if (cached) {
+      this.games = mergeCatalogues(NATIVE_GAMES, cached);
+      this.render();
+    }
+    // 2. then pull the ratings and the live catalogue in parallel and repaint
+    const [, catalogue] = await Promise.all([
+      this.stats.load().catch(() => null),
+      loadCatalogue(this.fetchImpl),
+    ]);
+    if (!catalogue.offline) writeCachedCatalogue(catalogue);
+    this.games = mergeCatalogues(NATIVE_GAMES, catalogue);
     this.render();
     return this.games;
   }
@@ -444,6 +488,15 @@ export class Arcade {
 
   openGame(game) {
     this.playing = game;
+    // A game is the one part of the hub that wants landscape. The tap that
+    // opened it is a gesture, so this is where the lock is allowed to happen;
+    // the menu behind it stays portrait.
+    document.body.classList.add('run-live');
+    // the hub never rotates the page itself — it rotates the player stage — so
+    // clear any leftover CSS rotation from an earlier 3D run
+    document.body.classList.remove('auto-land');
+    document.documentElement.classList.remove('rot-stage');
+    if (isPortrait()) requestLandscape();
     const player = this.getPlayer();
     this.nodes.player.classList.remove('hidden');
     this.nodes.result.classList.add('hidden');
@@ -482,6 +535,11 @@ export class Arcade {
 
   closeGame() {
     this.playing = null;
+    document.body.classList.remove('run-live');
+    document.body.classList.remove('auto-land');
+    this.syncStage({ portrait: false, locked: false });
+    // back on the home: upright again, and out of fullscreen
+    requestPortrait();
     this.nodes?.player?.classList.add('hidden');
     if (this.nodes?.frame) {
       this.nodes.frame.src = 'about:blank';

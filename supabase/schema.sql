@@ -319,3 +319,48 @@ grant select, insert, update on public.game_ratings to authenticated;
 grant select on public.game_ratings to anon;
 grant select, insert on public.game_runs to anon, authenticated;
 grant usage, select on sequence public.game_runs_id_seq to anon, authenticated;
+
+-- ---------------------------------------------------------------------------
+-- ROOM RELAY (multiplayer lobby messages)
+--
+-- The polling relay keeps the last few seconds of a room in Postgres when
+-- Supabase is configured. That is what makes two players visible to each other
+-- on a serverless host: a lambda's memory is per-instance and dies on a cold
+-- start, so the old in-memory relay only worked by luck.
+--
+-- A room code is not a secret and these rows expire within minutes, so the
+-- policies are deliberately open: anyone may read a room and add to it, and
+-- anyone may delete rows that are already older than two minutes (which is how
+-- the relay sweeps itself without a cron job). Nothing here can read or write
+-- accounts, profiles or runs.
+-- ---------------------------------------------------------------------------
+create table if not exists public.room_messages (
+  id         bigserial primary key,
+  room       text not null,
+  author     text not null default 'anon',
+  payload    jsonb not null,
+  ts         timestamptz not null default now()
+);
+
+alter table public.room_messages enable row level security;
+create index if not exists room_messages_room_ts_idx on public.room_messages (room, ts desc);
+
+drop policy if exists "rooms are readable" on public.room_messages;
+create policy "rooms are readable" on public.room_messages
+  for select using (true);
+
+drop policy if exists "anyone can speak" on public.room_messages;
+create policy "anyone can speak" on public.room_messages
+  for insert with check (
+    length(room) between 1 and 24
+    and length(author) <= 32
+    and author <> ''
+  );
+
+-- housekeeping only: a client may sweep rows the relay would have dropped anyway
+drop policy if exists "stale rows can be swept" on public.room_messages;
+create policy "stale rows can be swept" on public.room_messages
+  for delete using (ts < now() - interval '2 minutes');
+
+grant select, insert, delete on public.room_messages to anon, authenticated;
+grant usage, select on sequence public.room_messages_id_seq to anon, authenticated;

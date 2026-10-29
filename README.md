@@ -19,6 +19,30 @@ npm test           # headless suites (simulation, accounts, both UI flows)
 
 No install step, no build step. `public/vendor/three.module.js` is vendored, so the game boots even offline.
 
+## ⚡ Fast loading
+
+The menu used to cost a megabyte before it worked: `main.js` statically imported three.js (690 KB) and
+`game.js` (90 KB) plus the world, vehicle, avatar, tornado and HUD modules, so the sign-in box was on screen
+but dead for seconds on a phone. Now:
+
+* **The home is a menu, not a game.** `main.js` statically imports ~126 KB (12 small modules) and nothing
+  from the 3D engine. `import('./game.js')` happens on PLAY — or in the background via
+  `requestIdleCallback` once the menu is interactive, so PLAY is usually instant.
+* **The avatar portrait is 2D.** `public/js/preview.js` draws the sign-in/lobby survivor with the plain
+  canvas API (no WebGL context, no imports). The 3D rig is only built when a run starts.
+* **The catalogue is cached.** `games/index.json` paints from `localStorage` first, then refreshes behind
+  it; ratings load in parallel instead of in front of the shelf.
+* **Config is asked once, in parallel.** `/api/config` and `config.json` are fetched together instead of
+  one after the other, and the boot never waits on them to show the menu.
+* **The wire is small.** The Node server gzips/brotli-compresses text (`three.module.js`: 690 KB → 166 KB),
+  sends `ETag`/`304` on repeat visits, and marks `/vendor/*` immutable for a year. Vercel gets the same
+  cache policy from `vercel.json`.
+* **Nothing can trap you.** If the module graph fails, the boot card turns into "still loading — check your
+  connection" and then fails open to the sign-in screen.
+
+`tests/boot.test.mjs` walks the real import graph and fails the build if three.js or `game.js` ever creeps
+back into the home path, and checks the compression, the 304 and the cache headers against a live server.
+
 ## 🕹 The arcade
 
 The first screen after sign-in is the **arcade**: a hub with the built-in game plus every community game
@@ -168,7 +192,8 @@ The whole game is phone-first:
   drag; **pinch** to zoom the camera.
 * Big 48 px action cluster: anchor, workbench, scavenge, enter/exit rig, attack.
 * No pinch-to-zoom-page, no scroll, no iOS zoom-on-focus, safe-area insets on notched screens.
-* **Landscape is automatic** — see below — and a ☰ in-game menu (tap twice) to leave the run.
+* **The menu is portrait, the run is landscape** — automatic, no tap required (see below) — plus a ☰
+  in-game menu (tap twice) to leave the run.
 * Automatic quality tier: low-end phones drop shadows, pixel ratio and particle/prop budgets; the workbench
   becomes a full-screen sheet and the HUD scales to fit.
 
@@ -184,7 +209,19 @@ The whole game is phone-first:
 | `Enter` | Chat — everyone in the room sees it | same |
 | Drag / wheel / pinch | Orbit + zoom the camera | same |
 
-### Auto landscape (no tap required)
+### The home is portrait, the run is landscape
+
+The sign-in, lobby and arcade are a **portrait** menu: cards stacked down the screen, the tab bar under the
+thumb, no sideways scrolling, 44 px tap targets and safe-area padding for notched phones. The app no longer
+declares `screen-orientation: landscape` in its `<meta>` tags or its web manifest (`orientation: "any"`),
+because a phone that opens the game on a menu should not be yanked sideways before the player has pressed
+anything.
+
+Landscape is requested **only while a run is live** (`body.run-live`): pressing PLAY on the 3D game, or
+opening a game in the arcade. Leaving the run calls `requestPortrait()` — which unlocks the orientation and
+leaves fullscreen — so the home comes back upright.
+
+### Auto landscape during a run
 
 `public/js/orientation.js` is the single owner of orientation, used by the 3D game, the arcade hub and the
 sandboxed community games:
@@ -331,6 +368,27 @@ weapon and chat are relayed ~11×/s. Three transport lanes, one JSON envelope:
 
 Point the client at a remote relay with `?relay=wss://your-relay.example/ws`.
 
+### Where the rooms live
+
+The WebSocket lane (`npm start`) keeps rooms in the process. The polling lane — the one that runs on Vercel,
+where there are no sockets — used to keep them in the lambda's module scope, which means two players only saw
+each other if the platform happened to put them on the same warm instance.
+
+When Supabase is configured, **the server keeps rooms in Postgres instead**: `lib/room-store.mjs` inserts
+each message into `public.room_messages` (room, author, jsonb payload, timestamp) and reads the last 9
+seconds back, so every instance and every lambda shares one room. Stale rows are swept by the relay itself,
+guarded by an RLS delete policy that only allows rows older than two minutes. If the database stops
+answering, the store degrades to the in-memory lane and records the failure, which `/api/health` reports:
+
+```json
+{ "ok": true, "supabase": { "configured": true, "url": "https://….supabase.co", "reachable": true },
+  "relay": { "backend": "supabase", "writes": 118, "reads": 611, "fallbacks": 0 } }
+```
+
+`/api/health?deep=1` also asks the Supabase project itself (`auth/v1/health`), so a deployment can tell
+"the variables are set" apart from "the variables actually work". The Node server prints the same probe at
+boot.
+
 ## ▲ Deploy to Vercel
 
 ```bash
@@ -370,7 +428,8 @@ public/
   js/loot.js          physical loot drops: meshes, magnet drift, pickup, expiry
   js/inventory.js     backpack model + hotbar/backpack UI
   js/recipes.js       15 staples + 1000 generated recipes (seeded, effects)
-  js/orientation.js   auto landscape: fullscreen → orientation lock → CSS rotate
+  js/preview.js       dependency-free 2D avatar portrait for the home screens
+  js/orientation.js   auto landscape during a run; portrait home
   js/arcade.js        arcade hub, sandboxed game player, records + ratings
   js/arcade-stats.js  Supabase ratings/runs/leaderboards (local fallback)
   js/materials.js     procedural PBR material kit, quality tiers
@@ -378,6 +437,7 @@ public/
   js/audio.js         procedural WebAudio engine/wind/impacts
 api/                  Vercel functions: /api/room, /api/health, /api/config, /api/admin
 lib/admin-auth.mjs    server-side owner check (Supabase token → username → allow-list)
+lib/room-store.mjs    room relay storage: Supabase room_messages, memory fallback
 games/                community games: <slug>/{game.json,icon.svg,index.html,…,js}
 games/_shared/sdk.js  the postMessage SDK every community game loads
 scripts/scan-games.mjs  validates every game.json and regenerates games/index.json
@@ -389,7 +449,7 @@ docs/DESIGN.md        game design document
 
 ## 🧪 Tests
 
-`npm test` copies the browser modules into a shim lane and runs thirteen suites with no browser:
+`npm test` copies the browser modules into a shim lane and runs fourteen suites with no browser:
 (`tests/run-all.mjs` is the list; `node tests/build.mjs` must run first after any edit).
 
 * **simulation** — driving, fuel, anchors vs. tornado drift, bosses, scavenging, every recipe, melee,
@@ -408,6 +468,10 @@ docs/DESIGN.md        game design document
 * **fleet builder + auto landscape** — Iron Tide's hulls, modules, jets, slot limits, dock purchases, enemy
   scaling and payouts, plus a full booted game: sail, fire, win, lose, return to dock; and the orientation
   helper's idempotence, listeners and landscape state.
+* **fast boot + portrait home + supabase relay** — the real import graph of `main.js` (no three.js, no
+  game, < 200 KB), the 2D portrait preview, portrait-home/landscape-run orientation, the room store against
+  a fake PostgREST (insert shape, time window, author filter, degradation when the DB is down), and a live
+  server: compression, `ETag`/304, cache headers, `/api/health`, `/api/config` and the relay round trip.
 * **loot + inventory + recipes** — 1000 generated recipes unique and browsable, drops only bank when you
   stand on them, magnet/expiry behaviour, stack caps, hotbar pinning, medkit/fuel/repair use, 24-per-page
   workbench paging + search, and every one of the 1,015 recipes crafting without an error.
