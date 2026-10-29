@@ -79,7 +79,13 @@ const guestBtn = document.getElementById('guestBtn');
 document.getElementById('authUser').value = 'phone_tester';
 guestBtn.dispatch('click');
 await wait(200);
-check('guest button enters the lobby', document.getElementById('lobby').classList.contains('show'));
+// guests land in the arcade hub first, and the built-in game is one card in it
+check('guest lands in the arcade', Boolean(api.arcade) && !api.arcade.el.classList.contains('hidden'));
+check('the arcade lists the built-in game', api.arcade.games.some((g) => g.id === 'outrun' && g.native),
+  api.arcade.games.map((g) => g.id).join(','));
+check('the lobby is not open until you pick a game', !api.lobbyVisible);
+api.arcade.launch('outrun');
+check('picking the built-in game opens the lobby', api.lobbyVisible);
 check('lobby shows the chosen name', document.getElementById('nameInput').value === 'PHONE_TESTER' || api.state.name === 'PHONE_TESTER', api.state.name);
 check('friend panel renders for guests', document.getElementById('friendsList').innerHTML.includes('Sign in'));
 

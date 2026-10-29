@@ -1,0 +1,17 @@
+{
+  "id": "scrapyard-run",
+  "title": "Scrapyard Run",
+  "author": "ghanimz",
+  "blurb": "One bag, one collapsing yard. Grab the best value per kilo and get out before it folds on you.",
+  "tags": [
+    "loot",
+    "risk",
+    "solo"
+  ],
+  "version": "1.0.0",
+  "entry": "index.html",
+  "icon": "icon.svg",
+  "accent": "#ffd578",
+  "players": "1",
+  "featured": false
+}

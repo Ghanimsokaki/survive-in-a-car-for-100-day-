@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+<title>PIT STOP PANIC</title>
+<style>
+  :root{--accent:#6dffa8;--ink:#0b0d12}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--ink);overflow:hidden;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#e8eef8}
+  canvas{width:100%;height:100%;display:block;touch-action:none}
+  #hud{position:fixed;left:12px;top:10px;font-size:11px;letter-spacing:2px;color:#9fb0c6;pointer-events:none;line-height:1.7}
+  #hud b{color:var(--accent)}
+  .center{position:fixed;inset:0;display:grid;place-items:center;text-align:center;padding:20px}
+  .card{max-width:430px;background:rgba(10,13,19,.93);border:1px solid color-mix(in srgb,var(--accent) 45%,transparent);
+    border-radius:12px;padding:18px 20px}
+  .card h1{margin:0 0 6px;font-size:20px;letter-spacing:4px;color:var(--accent)}
+  .card p{margin:0 0 12px;font-size:11px;line-height:1.7;letter-spacing:1px;color:#93a1b5}
+  .card button{font:inherit;font-size:11px;letter-spacing:2px;font-weight:700;padding:10px 18px;border-radius:8px;
+    background:var(--accent);color:#07131a;border:0;cursor:pointer}
+  .card kbd{background:#1a2130;border-radius:4px;padding:1px 5px;color:#cfe0f5;font-size:10px}
+  .hidden{display:none}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud"><div>RIG <b id="hp">100%</b></div><div>FUEL <b id="fuel">0%</b></div><div>TIME <b id="time">60</b></div><div>WAVE <b id="wave">1</b></div></div>
+<div class="center" id="intro"><div class="card">
+  <h1>PIT STOP PANIC</h1>
+  <p>Patch the rig before the infected reach the bay.<br /><kbd>click</kbd>/<kbd>tap</kbd> the glowing bolts · hood first, then tank, then tyres.</p>
+  <button id="go">START</button>
+</div></div>
+<div class="center hidden" id="over"><div class="card">
+  <h1 id="overTitle">RUN OVER</h1>
+  <p id="overText"></p>
+  <button id="again">GO AGAIN</button>
+</div></div>
+<script src="../_shared/sdk.js"></script>
+<script src="game.js"></script>
+</body>
+</html>

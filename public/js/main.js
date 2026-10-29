@@ -1,9 +1,12 @@
 import * as THREE from '../vendor/three.module.js';
 import { buildAvatar } from './avatar.js';
+import { buildEnvironment } from './materials.js';
 import { Game } from './game.js';
 import { Account } from './account.js';
 import { AuthUI } from './authui.js';
 import { mountAdmin } from './admin.js';
+import { Arcade } from './arcade.js';
+import { installAutoLandscape, forceLandscape, isPortrait, landscapeState } from './orientation.js';
 import { MODES, DEFAULT_MODE, modeById } from './modes.js';
 import { loadBook, bestLine, careerLine, resetBook } from './records.js';
 import {
@@ -48,6 +51,7 @@ try {
 const account = new Account();
 let game = null;
 let admin = null;
+let arcade = null;
 let authUI = null;
 let starting = false;
 
@@ -79,12 +83,18 @@ function makePreview(canvas) {
   ring.position.y = 0.01;
   scene.add(ring);
 
+  // one prefiltered panorama shared by every preview avatar on the page
+  let previewEnv = null;
+  try { previewEnv = buildEnvironment(renderer, scene); } catch { previewEnv = null; }
+
   const stage = {
-    canvas, renderer, scene, camera, avatar: null,
+    canvas, renderer, scene, camera, avatar: null, env: previewEnv,
     yaw: -0.35, targetYaw: -0.35, dragging: false, lastX: 0,
     setAvatar(hex, name, custom) {
       if (stage.avatar) scene.remove(stage.avatar.root);
-      stage.avatar = buildAvatar({ color: hex, name, custom });
+      // lobby/auth previews get the full PBR treatment on desktop hardware
+      const detail = isPhone ? 'medium' : 'high';
+      stage.avatar = buildAvatar({ color: hex, name, custom, detail, env: stage.env || null });
       stage.avatar.root.rotation.y = stage.yaw;
       scene.add(stage.avatar.root);
     },
@@ -144,9 +154,37 @@ function refreshPreviews() {
   if (summary) summary.textContent = describeCustom(state.custom);
 }
 
+// ------------------------------------------------------------------ arcade
+/**
+ * The hub. Everything starts here: the built-in 100 Days Outrun plus every
+ * community game merged from ./games/index.json.
+ */
+function showArcade() {
+  $('auth').classList.remove('show');
+  $('lobby').classList.remove('show');
+  if (!arcade) {
+    arcade = new Arcade({
+      account,
+      onPlayNative: () => showLobby(),
+      getPlayer: () => ({
+        name: state.name || 'WANDERER',
+        color: state.color,
+        room: state.room,
+        custom: state.custom,
+        quality: state.quality,
+      }),
+    });
+  }
+  arcade.show();
+  arcade.refresh();
+}
+
 // ------------------------------------------------------------------- lobby
 function showLobby() {
   $('auth').classList.remove('show');
+  document.body.classList.remove('run-live');
+  document.documentElement.classList.remove('rot-stage');
+  arcade?.hide();
   $('lobby').classList.add('show');
   $('nameInput').value = state.name;
   $('roomInput').value = state.room;
@@ -442,11 +480,19 @@ async function startRun() {
       new Promise((resolve) => setTimeout(() => resolve(false), 700)),
     ]);
   }
+  // The arcade hands the iframe a landscape stage, so re-check after the lock.
+  // If the device still refuses to turn, the run itself is rotated in CSS:
+  // `auto-land` marks "portrait + no lock", `run-live` says the stage is up.
+  if (isPhone && isPortrait() && !landscapeState().locked) {
+    document.body.classList.add('auto-land');
+    document.documentElement.classList.add('rot-stage');
+  }
 
   const btn = $('playBtn');
   if (btn) btn.innerHTML = 'WARMING THE ENGINE…';
   $('lobby').classList.remove('show');
   $('loading').classList.remove('gone');
+  document.body.classList.add('run-live');
 
   await new Promise((r) => setTimeout(r, 140));
 
@@ -491,7 +537,7 @@ async function startRun() {
   } catch (err) {
     console.error(err);
     $('loading').classList.add('gone');
-    $('lobby').classList.add('show');
+    showArcade();
     if (btn) btn.innerHTML = 'START THE RUN <span>▸</span>';
     setFriendNote(`Could not start: ${err.message}`, 'err');
     starting = false;
@@ -517,23 +563,11 @@ setInterval(() => {
  * iOS refuses both and falls back to the rotate hint. Never throws, never blocks.
  */
 let landscapeTried = false;
+/** Kept as a thin alias: the real work lives in orientation.js now. */
 async function goLandscape() {
   if (!isPhone) return false;
   landscapeTried = true;
-  try {
-    const el = document.documentElement;
-    if (!document.fullscreenElement && el?.requestFullscreen) {
-      await el.requestFullscreen({ navigationUI: 'hide' });
-    }
-  } catch {}
-  try {
-    const orientation = typeof screen !== 'undefined' ? screen.orientation : null;
-    if (orientation?.lock) {
-      await orientation.lock('landscape');
-      return true;
-    }
-  } catch {}
-  return false;
+  return forceLandscape();
 }
 
 function phoneSetup() {
@@ -549,7 +583,11 @@ function phoneSetup() {
     if (rotateDismissed || rotateSeen) { rotate.classList.remove('show'); return; }
     const portrait = window.innerHeight > window.innerWidth;
     const playing = game && game.started && !game.dead && !game.won && !game.paused;
-    if (portrait && playing) { rotateSeen = true; rotate.classList.add('show'); }
+    // if the run is already rotated into landscape for us, asking the player to
+    // turn the phone would be noise — the picture is sideways on purpose
+    const alreadyWide = document.body.classList.contains('auto-land')
+      && document.body.classList.contains('run-live');
+    if (portrait && playing && !alreadyWide) { rotateSeen = true; rotate.classList.add('show'); }
     else rotate.classList.remove('show');
   };
   window.addEventListener('orientationchange', () => setTimeout(sync, 220));
@@ -693,6 +731,10 @@ async function boot() {
     await account.refreshFriends();
     setFriendNote('Friend list updated.', 'ok');
   });
+  $('arcadeBtn')?.addEventListener('click', () => {
+    $('lobby').classList.remove('show');
+    showArcade();
+  });
   $('signOutBtn')?.addEventListener('click', async () => {
     await account.signOut();
     applyProfileToState(account.profile);
@@ -703,7 +745,7 @@ async function boot() {
   });
 
   account.on((kind) => {
-    if (kind === 'friends') renderFriends();
+    if (kind === 'friends') { renderFriends(); arcade?.renderFriends(); }
     if (kind === 'profile') renderAccountChip();
   });
 
@@ -714,11 +756,11 @@ async function boot() {
       paintCustom();
       buildSwatches($('carRow'), CAR_COLORS, 'carColor');
       refreshPreviews();
-      showLobby();
+      showArcade();
     },
     onGuest: (profile) => {
       applyProfileToState(profile);
-      showLobby();
+      showArcade();
     },
     onColorsChanged: (colors) => {
       state.color = colors.body;
@@ -739,6 +781,9 @@ async function boot() {
   });
 
   phoneSetup();
+  // AUTO LANDSCAPE: installs on load, then retries on the first gesture, on
+  // rotation back to portrait, and on leaving fullscreen.
+  installAutoLandscape({ when: 'phone' });
   probeRelay();
 
   if (account.signedIn) {
@@ -746,7 +791,7 @@ async function boot() {
     paintCustom();
     buildSwatches($('carRow'), CAR_COLORS, 'carColor');
     refreshPreviews();
-    showLobby();
+    showArcade();
     account.refreshFriends();
   } else {
     authUI.show();
@@ -758,4 +803,10 @@ async function boot() {
 
 boot();
 
-window.__outrun = { state, account, get game() { return game; }, get admin() { return admin; }, startRun };
+window.__outrun = {
+  state, account, startRun,
+  get game() { return game; },
+  get admin() { return admin; },
+  get arcade() { return arcade; },
+  get lobbyVisible() { return $('lobby')?.classList.contains('show'); },
+};

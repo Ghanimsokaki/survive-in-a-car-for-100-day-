@@ -1,0 +1,17 @@
+{
+  "id": "pit-stop-panic",
+  "title": "Pit Stop Panic",
+  "author": "ghanimz",
+  "blurb": "Patch the rig before the infected reach the bay. Tap the bolts, keep the hose moving, survive the wave.",
+  "tags": [
+    "co-op",
+    "timing",
+    "solo"
+  ],
+  "version": "1.0.0",
+  "entry": "index.html",
+  "icon": "icon.svg",
+  "accent": "#6dffa8",
+  "players": "1",
+  "featured": false
+}

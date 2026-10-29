@@ -114,7 +114,19 @@ export function installDOM({ width = 1280, height = 720 } = {}) {
     },
     createTextNode: (t) => ({ nodeType: 3, textContent: t }),
     body: new El('body'),
-    documentElement: { style: { setProperty() {} } },
+    documentElement: (() => {
+      // real <html>: classList + inline style, both used by the auto-landscape path
+      const set = new Set();
+      return {
+        style: { setProperty() {}, removeProperty() {} },
+        classList: {
+          add: (c) => set.add(c),
+          remove: (c) => set.delete(c),
+          contains: (c) => set.has(c),
+          toggle: (c, on) => { const want = on === undefined ? !set.has(c) : on; want ? set.add(c) : set.delete(c); return want; },
+        },
+      };
+    })(),
     addEventListener() {},
   };
 

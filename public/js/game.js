@@ -2,6 +2,7 @@ import * as THREE from '../vendor/three.module.js';
 import { World, ZONES } from './world.js';
 import { Vehicle, ANCHOR_TIERS, anchorTierData } from './vehicle.js';
 import { buildAvatar } from './avatar.js';
+import { buildEnvironment } from './materials.js';
 import { Tornado } from './tornado.js';
 import { Hollow, RaiderCar } from './enemies.js';
 import { Effects } from './effects.js';
@@ -15,6 +16,7 @@ import { Inventory, InventoryUI } from './inventory.js';
 import { rollLoot, isMaterial, ITEMS, itemName } from './items.js';
 import { MODES, DEFAULT_MODE, modeById as resolveMode, goalLabel } from './modes.js';
 import { loadBook, saveBook, commitRun, freshLabels, modeStats } from './records.js';
+import { stageSize, toStagePoint } from './orientation.js';
 
 export { RECIPES };
 
@@ -95,6 +97,17 @@ export class Game {
       this.world.sun.shadow.mapSize.set(2048, 2048);
     }
     this.world.setFogRange(this.quality === 'low' ? 70 : 90, this.quality === 'low' ? 300 : 430);
+    // PBR reflections: one cheap procedural panorama, prefiltered once. High
+    // quality only — it costs a render pass and a little VRAM.
+    this.envMap = this.quality === 'high' ? buildEnvironment(this.renderer, this.scene) : null;
+    this.avatarDetail = this.quality === 'high' ? 'high' : this.quality === 'medium' ? 'medium' : 'low';
+    // a cool rim light behind the camera-side shoulder: the cheapest way to make
+    // a character read as a body instead of a flat cut-out on HIGH
+    if (this.quality === 'high') {
+      this.rimLight = new THREE.DirectionalLight(0x8fd0ff, 0.55);
+      this.rimLight.position.set(-7, 6, -9);
+      this.scene.add(this.rimLight);
+    }
     this.effects = new Effects(this.scene, { scale: this.quality === 'low' ? 0.45 : this.quality === 'medium' ? 0.7 : 1 });
     // one reusable warm light for whichever interior you are standing in
     this.interiorLight = new THREE.PointLight(0xffcf96, 0, this.quality === 'low' ? 14 : 22, 1.5);
@@ -147,7 +160,7 @@ export class Game {
   // ------------------------------------------------------------------ setup
   setupGraphics() {
     const coarse = window.matchMedia?.('(pointer: coarse)')?.matches;
-    const smallest = Math.min(window.innerWidth, window.innerHeight);
+    const smallest = Math.min(stageSize().w, stageSize().h);
     const cores = navigator.hardwareConcurrency || 4;
     const lowEnd = Boolean(coarse && (smallest < 640 || cores <= 4));
     // a manual setting always wins over the heuristics
@@ -166,7 +179,7 @@ export class Game {
     this.perfTimer = 0;
     this.fps = 60;
     this.renderer.setPixelRatio(this.targetPixelRatio());
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    this.renderer.setSize(stageSize().w, stageSize().h);
     this.renderer.shadowMap.enabled = this.quality !== 'low';
     this.renderer.shadowMap.type = this.quality === 'high' ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -176,7 +189,7 @@ export class Game {
     this.mount.appendChild(this.renderer.domElement);
 
     this.scene = new THREE.Scene();
-    this.camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.1, 1200);
+    this.camera = new THREE.PerspectiveCamera(62, stageSize().w / stageSize().h, 0.1, 1200);
     this.scene.fog = new THREE.Fog(0xb9a68a, this.quality === 'low' ? 70 : 90, this.quality === 'low' ? 300 : 430);
     this.scene.background = new THREE.Color(0xb9a68a);
   }
@@ -188,6 +201,8 @@ export class Game {
     this.scene.add(this.car.group);
 
     this.avatar = buildAvatar({
+      detail: this.avatarDetail,
+      env: this.envMap,
       color: this.profile.color,
       name: this.profile.name,
       custom: this.profile.custom,
@@ -343,7 +358,8 @@ export class Game {
     this.pointers = new Map();
     let pinchStart = 0, pinchBase = 0;
 
-    const stickZone = (e) => this.touchMode && e.clientX < window.innerWidth * 0.46;
+    const stickZone = (e) => this.touchMode
+      && toStagePoint(e.clientX, e.clientY).x < stageSize().w * 0.46;
 
     canvas.addEventListener('pointerdown', (e) => {
       try { canvas.setPointerCapture(e.pointerId); } catch {}
@@ -352,8 +368,9 @@ export class Game {
         this.startStick(e);
         return;
       }
+      const pt = toStagePoint(e.clientX, e.clientY);
       this.pointers.set(e.pointerId, {
-        mode: 'look', x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, moved: false,
+        mode: 'look', x: pt.x, y: pt.y, sx: pt.x, sy: pt.y, moved: false,
       });
       const look = [...this.pointers.values()].filter((p) => p.mode === 'look');
       if (look.length === 2) {
@@ -367,9 +384,10 @@ export class Game {
       const p = this.pointers.get(e.pointerId);
       if (!p) return;
       if (p.mode === 'stick') { this.moveStick(e); return; }
-      const dx = e.clientX - p.x, dy = e.clientY - p.y;
-      p.x = e.clientX; p.y = e.clientY;
-      if (Math.abs(e.clientX - p.sx) + Math.abs(e.clientY - p.sy) > 5) p.moved = true;
+      const pt = toStagePoint(e.clientX, e.clientY);
+      const dx = pt.x - p.x, dy = pt.y - p.y;
+      p.x = pt.x; p.y = pt.y;
+      if (Math.abs(pt.x - p.sx) + Math.abs(pt.y - p.sy) > 5) p.moved = true;
       this.camYaw -= dx * (this.touchMode ? 0.0055 : 0.006);
       this.camPitch = clamp(this.camPitch + dy * 0.004, -0.15, 0.85);
       this.dragLook = 1;
@@ -465,18 +483,21 @@ export class Game {
 
   startStick(e) {
     this.stickActive = true;
-    this.stickOrigin = { x: e.clientX, y: e.clientY };
+    // stage space: the stick graphic lives inside the (possibly rotated) stage
+    const pt = toStagePoint(e.clientX, e.clientY);
+    this.stickOrigin = { x: pt.x, y: pt.y };
     const s = this.stickEl;
     s.style.opacity = '0.95';
-    s.style.left = `${e.clientX - 60}px`;
-    s.style.top = `${e.clientY - 60}px`;
+    s.style.left = `${pt.x - 60}px`;
+    s.style.top = `${pt.y - 60}px`;
     s.style.bottom = 'auto';
     this.moveStick(e);
   }
 
   moveStick(e) {
-    const dx = e.clientX - this.stickOrigin.x;
-    const dy = e.clientY - this.stickOrigin.y;
+    const pt = toStagePoint(e.clientX, e.clientY);
+    const dx = pt.x - this.stickOrigin.x;
+    const dy = pt.y - this.stickOrigin.y;
     const mag = Math.min(1, Math.hypot(dx, dy) / 48);
     const ang = Math.atan2(dy, dx);
     this.touchAxes.x = Math.cos(ang) * mag;
@@ -2100,10 +2121,12 @@ export class Game {
   }
 
   resize() {
-    this.camera.aspect = window.innerWidth / window.innerHeight;
+    // stageSize() swaps the axes when the app is CSS-rotated into landscape on a
+    // platform that refuses the real orientation lock (iOS Safari).
+    this.camera.aspect = stageSize().w / stageSize().h;
     this.camera.updateProjectionMatrix();
     this.renderer.setPixelRatio(this.targetPixelRatio());
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    this.renderer.setSize(stageSize().w, stageSize().h);
   }
 
   /**

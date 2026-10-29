@@ -1,0 +1,128 @@
+{
+  "version": 1,
+  "generatedAt": "2026-10-29T12:57:00.145Z",
+  "count": 6,
+  "games": [
+    {
+      "id": "iron-tide",
+      "title": "IRON TIDE",
+      "author": "ghanimz",
+      "blurb": "Build your own ship, buy jets for the hangar, and sink other fleets at sea. Earn credits, refit, sail again.",
+      "version": "1.0.0",
+      "entry": "index.html",
+      "icon": "icon.svg",
+      "tags": [
+        "naval",
+        "builder",
+        "pve",
+        "solo"
+      ],
+      "accent": "#59c9ff",
+      "players": "1",
+      "featured": true,
+      "files": 5,
+      "bytes": 50708,
+      "path": "games/iron-tide"
+    },
+    {
+      "id": "last-convoy",
+      "title": "LAST CONVOY",
+      "author": "ghanimz",
+      "blurb": "Escort the fuel truck down Route 9. It is slow, it is loud, and everything on this road wants it.",
+      "version": "1.0.0",
+      "entry": "index.html",
+      "icon": "icon.svg",
+      "tags": [
+        "escort",
+        "action",
+        "solo"
+      ],
+      "accent": "#ffb347",
+      "players": "1",
+      "featured": true,
+      "files": 4,
+      "bytes": 15346,
+      "path": "games/last-convoy"
+    },
+    {
+      "id": "radio-tower",
+      "title": "RADIO TOWER",
+      "author": "ghanimz",
+      "blurb": "Hold the relay until dawn. Every wave is faster, and the tower is the only thing keeping the map alive.",
+      "version": "1.0.0",
+      "entry": "index.html",
+      "icon": "icon.svg",
+      "tags": [
+        "defence",
+        "waves",
+        "solo"
+      ],
+      "accent": "#6be0ff",
+      "players": "1",
+      "featured": true,
+      "files": 4,
+      "bytes": 10934,
+      "path": "games/radio-tower"
+    },
+    {
+      "id": "pit-stop-panic",
+      "title": "PIT STOP PANIC",
+      "author": "ghanimz",
+      "blurb": "Patch the rig before the infected reach the bay. Tap the bolts, keep the hose moving, survive the wave.",
+      "version": "1.0.0",
+      "entry": "index.html",
+      "icon": "icon.svg",
+      "tags": [
+        "co-op",
+        "timing",
+        "solo"
+      ],
+      "accent": "#6dffa8",
+      "players": "1",
+      "featured": false,
+      "files": 4,
+      "bytes": 12370,
+      "path": "games/pit-stop-panic"
+    },
+    {
+      "id": "scrapyard-run",
+      "title": "SCRAPYARD RUN",
+      "author": "ghanimz",
+      "blurb": "One bag, one collapsing yard. Grab the best value per kilo and get out before it folds on you.",
+      "version": "1.0.0",
+      "entry": "index.html",
+      "icon": "icon.svg",
+      "tags": [
+        "loot",
+        "risk",
+        "solo"
+      ],
+      "accent": "#ffd578",
+      "players": "1",
+      "featured": false,
+      "files": 4,
+      "bytes": 11785,
+      "path": "games/scrapyard-run"
+    },
+    {
+      "id": "signal-lost",
+      "title": "SIGNAL LOST",
+      "author": "ghanimz",
+      "blurb": "The dark only shows what your radio pings reveal. Find eight beacons before the battery gives out.",
+      "version": "1.0.0",
+      "entry": "index.html",
+      "icon": "icon.svg",
+      "tags": [
+        "explore",
+        "fog",
+        "solo"
+      ],
+      "accent": "#c58cff",
+      "players": "1",
+      "featured": false,
+      "files": 4,
+      "bytes": 12254,
+      "path": "games/signal-lost"
+    }
+  ]
+}

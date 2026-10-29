@@ -29,6 +29,7 @@ try {
   }
 } catch { /* no .env — fine */ }
 const PUBLIC = path.join(__dirname, 'public');
+const GAMES = path.join(__dirname, 'games');   // community games, PR'd into the repo
 const PORT = Number(process.env.PORT || 8000);
 const HOST = process.env.HOST || '0.0.0.0';
 
@@ -202,9 +203,16 @@ const server = createServer(async (req, res) => {
   }
 
   // ------------------------------------------------ static files
-  let rel = pathname === '/' ? '/index.html' : pathname;
-  const filePath = path.join(PUBLIC, path.normalize(rel).replace(/^([/\\])+/, ''));
-  if (!filePath.startsWith(PUBLIC)) {
+  // /games/* lives outside ./public so contributors add a folder, not a build
+  // step. Everything else is served straight out of ./public.
+  const isGamePath = pathname === '/games' || pathname.startsWith('/games/');
+  const rootDir = isGamePath ? GAMES : PUBLIC;
+  let rel = isGamePath
+    ? pathname.replace(/^\/games\/?/, '')
+    : (pathname === '/' ? '/index.html' : pathname);
+  if (isGamePath && (rel === '' || rel === '/')) rel = 'index.json';
+  const filePath = path.join(rootDir, path.normalize(rel).replace(/^([/\\])+/, ''));
+  if (!filePath.startsWith(rootDir)) {
     res.writeHead(403).end('Forbidden');
     return;
   }
@@ -218,6 +226,11 @@ const server = createServer(async (req, res) => {
     });
     res.end(data);
   } catch {
+    // game folders are literal: a missing file is a 404, not the hub page
+    if (isGamePath) {
+      res.writeHead(404, { 'content-type': 'text/plain' }).end('Game file not found');
+      return;
+    }
     // SPA-ish fallback for unknown paths
     try {
       const data = await readFile(path.join(PUBLIC, 'index.html'));
