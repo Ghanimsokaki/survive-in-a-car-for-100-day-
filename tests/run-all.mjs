@@ -23,6 +23,7 @@ const suites = [
   ['hud-frame.test.mjs', 'HUD FRAME + ORIENTATION'],
   ['modes-avatar.test.mjs', 'GAME MODES + PERF + AVATAR'],
   ['tornado-anchor.test.mjs', 'TORNADO LAB + ANCHOR CRAFTING'],
+  ['records-storm.test.mjs', 'RECORDS + STORM METER'],
 ];
 
 await run(process.execPath, ['build.mjs']);

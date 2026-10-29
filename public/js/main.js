@@ -5,6 +5,7 @@ import { Account } from './account.js';
 import { AuthUI } from './authui.js';
 import { mountAdmin } from './admin.js';
 import { MODES, DEFAULT_MODE, modeById } from './modes.js';
+import { loadBook, bestLine, careerLine, resetBook } from './records.js';
 import {
   SKIN_TONES, OUTFIT_COLORS, HAIR_STYLES, HAIR_COLORS, ACCESSORIES,
   DEFAULT_CUSTOM, normalizeCustom, resolveCustom, describeCustom,
@@ -623,12 +624,29 @@ async function boot() {
   });
   // game modes: several runs inside the run
   const modeRow = $('modeRow');
+  const recordBook = loadBook();
   const paintMode = () => {
     const mode = modeById(state.mode);
     if ($('modeName')) $('modeName').textContent = mode.name;
     if ($('modeBlurb')) $('modeBlurb').textContent = mode.blurb;
     modeRow?.querySelectorAll('[data-mode]').forEach((b) => b.classList.toggle('on', b.dataset.mode === mode.id));
   };
+  const paintCareer = () => {
+    if ($('careerLine')) $('careerLine').textContent = careerLine(recordBook);
+  };
+  paintCareer();
+  $('clearRecords')?.addEventListener('click', () => {
+    resetBook();
+    Object.keys(recordBook.modes).forEach((k) => delete recordBook.modes[k]);
+    Object.assign(recordBook.career, { runs: 0, wins: 0, km: 0, kills: 0, looted: 0, crafted: 0, seconds: 0, bestDay: 0 });
+    paintCareer();
+    modeRow?.querySelectorAll('[data-mode]').forEach((b) => {
+      const line = b.querySelector('.mode-best');
+      if (line) line.textContent = bestLine(recordBook, b.dataset.mode);
+    });
+    $('careerLine')?.classList.add('flash');
+    setTimeout(() => $('careerLine')?.classList.remove('flash'), 700);
+  });
   if (modeRow) {
     modeRow.innerHTML = MODES.map((m) => `
       <button type="button" class="mode-card" data-mode="${m.id}" style="--m:${m.accent}">
@@ -636,6 +654,7 @@ async function boot() {
         <b>${m.name}</b>
         <em>${m.sub}</em>
         <i>${m.tags.join(' · ')}</i>
+        <span class="mode-best">${bestLine(recordBook, m.id)}</span>
       </button>`).join('');
     modeRow.addEventListener('click', (e) => {
       const btn = e.target.closest('[data-mode]');

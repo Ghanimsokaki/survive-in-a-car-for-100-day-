@@ -14,6 +14,7 @@ import { LootField } from './loot.js';
 import { Inventory, InventoryUI } from './inventory.js';
 import { rollLoot, isMaterial, ITEMS, itemName } from './items.js';
 import { MODES, DEFAULT_MODE, modeById as resolveMode, goalLabel } from './modes.js';
+import { loadBook, saveBook, commitRun, freshLabels, modeStats } from './records.js';
 
 export { RECIPES };
 
@@ -222,6 +223,9 @@ export class Game {
     this.distance = 0;
     this.materials = { scrap: 2, steel: 0, titanium: 0, carbon: 0, leather: 1, chem: 0, cores: 0, fuel: 0 };
     this.benchTier = this.mode.startBench || 1;
+    this.records = loadBook();
+    this.bestBefore = Math.round(modeStats(this.records, this.mode.id).best.day || 0);
+    if (this.hud?.setBest) this.hud.setBest(this.bestBefore);
     this.owned = new Set(['fists']);
     this.weapon = 'fists';
     this.durability = {};
@@ -687,6 +691,16 @@ export class Game {
   newDay() {
     const target = this.mode.targetDay;
     this.day = Number.isFinite(target) ? Math.min(target, this.day + 1) : this.day + 1;
+    // live best-day tracker: turns amber the moment you pass your own record
+    if (this.hud?.setBest) {
+      const passed = this.bestBefore > 0 && this.day > this.bestBefore;
+      this.hud.setBest(Math.max(this.bestBefore, this.day), passed);
+      if (passed && !this.bestCheered) {
+        this.bestCheered = true;
+        this.hud.toast(`NEW BEST DAY ${this.day} — RECORD BROKEN`, 'good');
+        this.hud.chat('', `You just outlived every previous run in ${this.mode.name}.`, '#6dffa8', true);
+      }
+    }
     const m = MILESTONES[this.day];
     if (m) {
       this.hud.toast(`DAY ${this.day} · ${m[0]}`, 'warn');
@@ -1509,7 +1523,11 @@ export class Game {
   }
 
   updateTornadoes(dt) {
-    if (!this.tornadoes.length) { this.stormCat = 0; return; }
+    if (!this.tornadoes.length) {
+      this.stormCat = 0;
+      this.hud?.stormMeter?.(null);
+      return;
+    }
     let closest = 9999;
     for (let i = this.tornadoes.length - 1; i >= 0; i--) {
       const t = this.tornadoes[i];
@@ -1567,6 +1585,42 @@ export class Game {
     }
     this.car.airY = damp(this.car.airY, 0, 1.6, dt);
     if (closest > 240) this.hud.storm(null);
+    this.updateStormMeter(dt);
+  }
+
+  /** Feeds the live storm readout + the hypercane lightning. */
+  updateStormMeter(dt) {
+    let near = null;
+    for (const t of this.tornadoes) {
+      const d = Math.hypot(t.pos.x - this.pos.x, t.pos.z - this.pos.z);
+      if (!near || d < near.dist) near = { t, dist: d };
+    }
+    if (!near || near.dist > 200) { this.hud.stormMeter(null); return; }
+    const force = near.t.forceAt(this.pos.x, this.pos.z);
+    this.hud.stormMeter({
+      category: near.t.category,
+      dist: near.dist,
+      pull: force ? force.strength : 0,
+      inCar: this.inCar,
+      anchored: Boolean(this.inCar && this.car.anchored),
+      slip: this.inCar ? this.car.anchorSlip(near.t.category) : 1,
+      tier: this.car?.anchorTier || 1,
+      chase: Boolean(near.t.chase),
+    });
+    // category 4+ storms throw sheet lightning across the whole screen
+    if (near.t.category >= 4 && near.dist < 160) {
+      this._lightningAt = (this._lightningAt || 0) + dt;
+      if (this._lightningAt > 3.4 && Math.random() < dt * 0.9) {
+        this._lightningAt = 0;
+        if (this.flash) {
+          this.flash.style.background = '#cfe4ff';
+          this.flash.style.opacity = '0.3';
+          setTimeout(() => (this.flash.style.opacity = '0'), 110);
+        }
+        this.audio.noiseBurst?.(0.45, 260, 0.16, 'lowpass');
+        this.shakeAmt = Math.max(this.shakeAmt, 0.18);
+      }
+    }
   }
 
   updateSpawning(dt) {
@@ -1778,6 +1832,14 @@ export class Game {
         this.hud.prompt('ANCHORED · TAP ⚓ OR HOLD THROTTLE TO DRIVE OFF');
         return;
       }
+      if (this.stormWarning && this.car.anchorTier < 4) {
+        const next = ANCHOR_TIERS[this.car.anchorTier];
+        const ready = next && Object.entries(next.cost).every(([k, v]) => (this.materials[k] || 0) >= v);
+        this.hud.prompt(ready
+          ? `STORM INBOUND · ${this.touchMode ? 'OPEN' : '[TAB]'} WORKBENCH TO FIT TIER ${next.tier} ANCHORS`
+          : `STORM INBOUND · DEPLOY ANCHORS · T${this.car.anchorTier} GRIPS ${Math.round((1 - anchorTierData(this.car.anchorTier).slip) * 100)}%`);
+        return;
+      }
       const drops = this.loot?.count || 0;
       const b = this.world.nearestBuilding(this.pos.x, this.pos.z, 26);
       if (drops) this.hud.prompt(`${drops} DROP${drops === 1 ? '' : 'S'} ON THE GROUND · DRIVE OVER THEM`);
@@ -1815,7 +1877,9 @@ export class Game {
     const px = this.pos.x, pz = this.pos.z;
     this.hollows.forEach((h) => blips.push({ x: h.pos.x - px, z: h.pos.z - pz, kind: 'enemy', size: 2.4 }));
     this.raiders.forEach((r) => blips.push({ x: r.pos.x - px, z: r.pos.z - pz, kind: 'enemy', size: 3.4 }));
-    this.tornadoes.forEach((t) => blips.push({ x: t.pos.x - px, z: t.pos.z - pz, kind: 'tornado' }));
+    this.tornadoes.forEach((t) => blips.push({
+      x: t.pos.x - px, z: t.pos.z - pz, kind: 'tornado', cat: t.category, chase: t.chase,
+    }));
     this.world.pitStops.forEach((s) => blips.push({ x: s.x - px, z: s.z - pz, kind: 'pit' }));
     this.world.buildings.forEach((b) => blips.push({
       x: b.x - px, z: b.z - pz, kind: 'house', size: 3.2,
@@ -1863,6 +1927,33 @@ export class Game {
     this.shakeAmt = Math.max(this.shakeAmt, 0.35);
   }
 
+  /** Folds a finished run into the local record book and returns the outcome. */
+  recordRun(run) {
+    if (!this.records) this.records = loadBook();
+    const outcome = commitRun(this.records, run.mode || this.mode.id, run);
+    this.records = outcome.book;
+    this.records = saveBook(this.records);
+    this.lastRecord = outcome;
+    return outcome;
+  }
+
+  /** Everything the run-over card + the account backend want to know. */
+  runSummary(won) {
+    return {
+      mode: this.mode.id,
+      days: this.day,
+      day: this.day,
+      distance: Math.round(this.distance),
+      kills: this.kills,
+      itemsLooted: this.itemsLooted,
+      crafted: this.craftedCount,
+      seconds: Math.round(this.time || 0),
+      anchorTier: this.car?.anchorTier || 1,
+      stormCat: this.stormCat || 0,
+      won,
+    };
+  }
+
   die() {
     if (this.dead) return;
     this.dead = true;
@@ -1872,19 +1963,19 @@ export class Game {
     this.hud.closeBench();
     this.audio.crash();
     this.hud.storm(null);
+    const wrecked = this.runSummary(false);
+    const record = this.recordRun(wrecked);
     this.hud.showGameOver('WRECKED', `${this.mode.name} · the highway claimed another survivor.`, [
       { k: 'DAYS SURVIVED', v: this.day },
       { k: 'DISTANCE', v: `${(this.distance / 1000).toFixed(1)} KM` },
       { k: 'SCAVENGERS DOWN', v: this.kills },
       { k: 'ITEMS LOOTED', v: this.itemsLooted },
       { k: 'ITEMS CRAFTED', v: this.craftedCount },
+      { k: 'ANCHORS', v: `TIER ${this.car?.anchorTier || 1}` },
       { k: 'ZONE REACHED', v: ZONES[this.zone].short },
-    ]);
+    ], record);
     this.net.event('boom', { x: this.pos.x, z: this.pos.z });
-    this.onRunEnd?.({
-      day: this.day, distance: Math.round(this.distance), kills: this.kills,
-      itemsLooted: this.itemsLooted, crafted: this.craftedCount, won: false,
-    });
+    this.onRunEnd?.({ ...wrecked, record });
   }
 
   win() {
@@ -1894,6 +1985,8 @@ export class Game {
     this.invUI?.hide();
     this.hud.closeBench();
     this.hud.storm(null);
+    const cleared = this.runSummary(true);
+    const record = this.recordRun(cleared);
     this.hud.showGameOver('YOU LIVED', `${this.mode.name} cleared — ${Number.isFinite(this.mode.targetDay) ? this.mode.targetDay + ' days' : this.day + ' days'}. One rig. The coast is yours.`, [
       { k: 'DAYS SURVIVED', v: this.day },
       { k: 'DISTANCE', v: `${(this.distance / 1000).toFixed(1)} KM` },
@@ -1901,12 +1994,9 @@ export class Game {
       { k: 'ITEMS LOOTED', v: this.itemsLooted },
       { k: 'ITEMS CRAFTED', v: this.craftedCount },
       { k: 'STATUS', v: 'ESCAPED' },
-    ]);
+    ], record);
     this.net.event('win', { x: this.pos.x, z: this.pos.z });
-    this.onRunEnd?.({
-      day: 100, distance: Math.round(this.distance), kills: this.kills,
-      itemsLooted: this.itemsLooted, crafted: this.craftedCount, won: true,
-    });
+    this.onRunEnd?.({ ...cleared, record });
   }
 
   // ------------------------------------------------------------ multiplayer

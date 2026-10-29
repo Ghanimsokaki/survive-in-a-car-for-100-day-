@@ -183,6 +183,11 @@
         </div>
 
         <div class="field">
+          <span>CAREER <button id="clearRecords" class="mini wide" type="button" title="Erase local records">RESET</button></span>
+          <p id="careerLine" class="career-line">NO RUNS YET — THE HIGHWAY IS WAITING</p>
+        </div>
+
+        <div class="field">
           <span>GRAPHICS</span>
           <div id="qualityRow" class="seg">
             <button type="button" data-quality="auto" class="on">AUTO</button>
@@ -224,10 +229,12 @@
             <div><kbd>E</kbd><span>Enter / exit car</span></div>
             <div><kbd>F</kbd><span>Attack</span></div>
             <div><kbd>G</kbd><span>Scavenge</span></div>
-            <div><kbd>TAB</kbd><span>Workbench</span></div>
+            <div><kbd>TAB</kbd><span>Workbench · anchors</span></div>
             <div><kbd>SHIFT</kbd><span>Sprint / boost</span></div>
             <div><kbd>DRAG</kbd><span>Look around</span></div>
           </div>
+          <p class="keys-note">Storms strain your spikes: <b>RIG SYSTEMS</b> at the top of the workbench upgrades
+            anchors (4 tiers, up to a Cat 5 ground lock). Your best run per mode is saved on this device.</p>
         </details>
       </div>
     </div>
@@ -247,6 +254,7 @@
       <span class="tb-label">SURVIVAL</span>
       <strong><span id="dayNum">1</span><em id="dayGoal">/100</em></strong>
       <span id="modeTag" class="mode-tag">100 DAYS</span>
+      <span id="bestRow" class="best-row hidden">BEST DAY 0</span>
     </div>
     <div class="tb-block zone">
       <span class="tb-label">ZONE</span>
@@ -305,6 +313,7 @@
   <div id="prompt"></div>
   <div id="toasts"></div>
   <div id="stormBanner" class="hidden"></div>
+  <div id="stormMeter" class="storm-meter hidden"></div>
   <div id="crosshair">+</div>
   <button id="mobileMenuBtn" class="mobile-menu" type="button" aria-label="Menu">☰</button>
   <button id="adminBtn" class="admin-fab hidden" type="button" title="Owner console (backquote)"><span>⌘</span> OWNER</button>
@@ -334,6 +343,7 @@
         </div>
         <div class="recipe-bar">
           <input id="recipeSearch" placeholder="Search recipes…" autocomplete="off" autocapitalize="none" spellcheck="false" />
+          <button id="recipeAffordable" class="filter-chip" type="button" title="Show only what your storage can build">CAN CRAFT</button>
           <span id="recipeCount" class="recipe-count"></span>
         </div>
         <div id="recipeGrid" class="recipes"></div>
@@ -369,6 +379,7 @@
   <div class="go-card">
     <h2 id="goTitle">WRECKED</h2>
     <p id="goSub">The highway claimed another survivor.</p>
+    <div id="goRecord" class="go-record"></div>
     <div id="goStats" class="go-stats"></div>
     <div class="go-btns">
       <button id="respawnBtn" class="play-btn small" type="button">ROLL AGAIN</button>

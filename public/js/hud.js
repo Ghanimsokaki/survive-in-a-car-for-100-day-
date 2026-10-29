@@ -1,4 +1,5 @@
 import { clamp, fmt } from './utils.js';
+import { freshLabels, TRACKED, fmtValue } from './records.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -8,15 +9,18 @@ export class HUD {
       hud: $('hud'), day: $('dayNum'), dayFill: $('dayFill'), zone: $('zoneName'),
       speed: $('speedVal'), dist: $('distVal'), weather: $('weatherVal'),
       radar: $('radar'), meters: {}, vitals: $('vitals'), weapon: $('weaponRow'),
-      anchorRow: $('anchorRow'), dayGoal: $('dayGoal'), modeTag: $('modeTag'), fpsRow: $('fpsRow'), anchorBtn: $('anchorBtn'), benchBtn: $('benchBtn'), scavBtn: $('scavBtn'),
-      prompt: $('prompt'), toasts: $('toasts'), storm: $('stormBanner'),
+      anchorRow: $('anchorRow'), dayGoal: $('dayGoal'), modeTag: $('modeTag'), fpsRow: $('fpsRow'),
+      bestRow: $('bestRow'), anchorBtn: $('anchorBtn'), benchBtn: $('benchBtn'), scavBtn: $('scavBtn'),
+      prompt: $('prompt'), toasts: $('toasts'), storm: $('stormBanner'), stormMeter: $('stormMeter'),
       chatLog: $('chatLog'), chatInput: $('chatInput'), party: $('party'),
       bench: $('bench'), benchTier: $('benchTier'), inv: $('invList'), recipes: $('recipeGrid'),
       systems: $('rigSystems'),
       tabs: [...document.querySelectorAll('.tabs button')], benchClose: $('benchClose'),
       search: $('recipeSearch'), count: $('recipeCount'), page: $('recipePage'),
+      affordable: $('recipeAffordable'),
       prev: $('recipePrev'), next: $('recipeNext'),
       gameover: $('gameover'), goTitle: $('goTitle'), goSub: $('goSub'), goStats: $('goStats'),
+      goRecord: $('goRecord'),
       crosshair: $('crosshair'),
     };
     document.querySelectorAll('.meter').forEach((m) => {
@@ -30,6 +34,10 @@ export class HUD {
     this.page = 0;
     this.pageSize = 24;
     this.search = '';
+    this.affordableOnly = (() => {
+      try { return localStorage.getItem('outrun-bench-filter') === '1'; } catch { return false; }
+    })();
+    if (this.el.affordable) this.el.affordable.classList.toggle('on', this.affordableOnly);
     this.el.tabs.forEach((t) => t.addEventListener('click', () => {
       this.tab = t.dataset.tab;
       this.page = 0;
@@ -43,6 +51,13 @@ export class HUD {
     });
     this.el.prev?.addEventListener('click', () => { this.page = Math.max(0, this.page - 1); this.renderRecipes(); });
     this.el.next?.addEventListener('click', () => { this.page += 1; this.renderRecipes(); });
+    this.el.affordable?.addEventListener('click', () => {
+      this.affordableOnly = !this.affordableOnly;
+      this.el.affordable.classList.toggle('on', this.affordableOnly);
+      try { localStorage.setItem('outrun-bench-filter', this.affordableOnly ? '1' : '0'); } catch { /* ignore */ }
+      this.page = 0;
+      this.renderRecipes();
+    });
   }
 
   show() { this.el.hud.classList.remove('hidden'); }
@@ -55,6 +70,17 @@ export class HUD {
     this.el.dayFill.style.width = `${clamp(progress * 100, 0, 100)}%`;
     if (zoneName) this.el.zone.textContent = zoneName;
   }
+  /** Personal best for the mode you are playing, shown under the day counter. */
+  setBest(day, worldRecord = false) {
+    const el = this.el.bestRow;
+    if (!el) return;
+    const best = Math.round(Number(day) || 0);
+    if (!best) { el.classList.add('hidden'); return; }
+    el.classList.remove('hidden');
+    el.textContent = `BEST DAY ${best}`;
+    el.classList.toggle('new', Boolean(worldRecord));
+  }
+
   /** Mode chip in the top bar (called with the live mode object). */
   setMode(mode) {
     if (!mode) return;
@@ -127,6 +153,35 @@ export class HUD {
     this.el.storm.classList.remove('hidden');
   }
 
+  /**
+   * Live vortex readout while a storm is on you: category, range, how hard it
+   * is pulling, and what your spikes are doing about it. This is the piece the
+   * anchor upgrades are actually visible in.
+   */
+  stormMeter(info) {
+    const el = this.el.stormMeter;
+    if (!el) return;
+    if (!info) { el.classList.add('hidden'); this._meterKey = ''; return; }
+    const cat = Math.max(1, Math.min(5, Math.round(info.category || 1)));
+    const dist = Math.max(0, Math.round(info.dist || 0));
+    const pull = Math.round((info.pull || 0) * 100);
+    const slip = info.slip ?? 1;
+    let state;
+    let kind;
+    if (!info.inCar) { state = 'ON FOOT · RUN'; kind = 'bad'; }
+    else if (!info.anchored) { state = 'SPIKES UP — ANCHOR NOW'; kind = 'bad'; }
+    else if (slip === 0) { state = `GROUND LOCK · HOLDS CAT ${cat}`; kind = 'good'; }
+    else if (slip < 0.15) { state = `HOLDING ${Math.round((1 - slip) * 100)}% · T${info.tier}`; kind = 'ok'; }
+    else { state = `SLIPPING ${Math.round(slip * 100)}% · UPGRADE ANCHORS`; kind = 'bad'; }
+    const key = `${cat}|${dist}|${pull}|${kind}|${state}`;
+    if (this._meterKey === key) return;
+    this._meterKey = key;
+    el.className = `storm-meter ${kind}`;
+    el.innerHTML = `<b>CAT ${cat}</b>
+      <span class="sm-bar"><i style="width:${Math.max(6, pull)}%"></i></span>
+      <em>${dist} M · ${state}</em>`;
+  }
+
   chat(name, text, color = '#ffb347', sys = false) {
     const p = document.createElement('p');
     if (sys) { p.className = 'sys'; p.textContent = text; }
@@ -188,10 +243,18 @@ export class HUD {
       const py = cy + (dz / range) * R;
       const size = b.size || 3;
       if (b.kind === 'tornado') {
-        ctx.fillStyle = 'rgba(255,77,94,.85)';
-        ctx.beginPath(); ctx.arc(px, py, 6 + Math.sin(performance.now() / 220) * 1.6, 0, Math.PI * 2); ctx.fill();
-        ctx.strokeStyle = 'rgba(255,77,94,.45)';
-        ctx.beginPath(); ctx.arc(px, py, 11, 0, Math.PI * 2); ctx.stroke();
+        // blip grows + brightens with the category, so a Cat 5 reads as a
+        // threat from across the map instead of the same dot as a Cat 1
+        const cat = Math.max(1, Math.min(5, b.cat || 2));
+        const r = 4 + cat * 1.7 + Math.sin(performance.now() / 220) * 1.4;
+        ctx.fillStyle = cat >= 4 ? 'rgba(255,90,60,.95)' : 'rgba(255,77,94,.85)';
+        ctx.beginPath(); ctx.arc(px, py, r, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = cat >= 4 ? 'rgba(255,140,90,.55)' : 'rgba(255,77,94,.45)';
+        ctx.beginPath(); ctx.arc(px, py, r + 5, 0, Math.PI * 2); ctx.stroke();
+        if (b.chase) {
+          ctx.strokeStyle = 'rgba(255,255,255,.6)';
+          ctx.beginPath(); ctx.arc(px, py, r + 8, 0, Math.PI * 2); ctx.stroke();
+        }
       } else if (b.kind === 'pit') {
         ctx.fillStyle = '#6dffa8';
         ctx.fillRect(px - size, py - size, size * 2, size * 2);
@@ -296,6 +359,12 @@ export class HUD {
   renderRecipes() {
     if (!this.recipes) return;
     let list = this.recipes.filter((r) => r.tab === this.tab);
+    if (this.affordableOnly) {
+      // rig-track cards carry their next-tier price, so this filter also answers
+      // "can I afford the anchor upgrade I just looked at?"
+      list = list.filter((r) => !r.maxed && Object.entries(r.cost || {})
+        .every(([k, v]) => (this.inv[k] || 0) >= v));
+    }
     if (this.search) {
       const q = this.search;
       list = list.filter((r) => r.name.toLowerCase().includes(q) || String(r.desc || '').toLowerCase().includes(q));
@@ -353,11 +422,33 @@ export class HUD {
     this.renderRecipes();
   }
 
-  showGameOver(title, sub, stats) {
+  showGameOver(title, sub, stats, record) {
     this.el.goTitle.textContent = title;
     this.el.goSub.textContent = sub;
     this.el.goStats.innerHTML = stats.map((s) => `<div><span>${s.k}</span><b>${s.v}</b></div>`).join('');
+    this.renderRecord(record);
     this.el.gameover.classList.add('show');
+  }
+
+  /**
+   * "NEW RECORD · DAY · DIST" banner plus the personal-best line, so the run
+   * card answers the one question players actually ask: was that any good?
+   */
+  renderRecord(record) {
+    const host = this.el.goRecord;
+    if (!host) return;
+    if (!record) { host.innerHTML = ''; host.className = 'go-record'; return; }
+    const badges = freshLabels(record.fresh);
+    const bestDay = Math.round(record.best?.day || 0);
+    const bestDist = fmtValue(TRACKED.find((f) => f.key === 'distance'), record.best?.distance || 0);
+    const head = record.first
+      ? '<span class="rec-chip first">FIRST RUN LOGGED</span>'
+      : badges.length
+        ? `<span class="rec-chip">NEW RECORD · ${badges.join(' · ')}</span>`
+        : '<span class="rec-chip none">NO NEW RECORD</span>';
+    host.className = `go-record ${badges.length ? 'fresh' : ''}`;
+    host.innerHTML = `${head}
+      <span class="rec-best">PERSONAL BEST · DAY ${bestDay} · ${bestDist}</span>`;
   }
   hideGameOver() { this.el.gameover.classList.remove('show'); }
 }
