@@ -1,4 +1,5 @@
 import * as THREE from '../vendor/three.module.js';
+import { tier, resolveQuality, QUALITY_ORDER } from './graphics.js';
 import { rand, randInt, pick, clamp, lerp, canvasTex, mulberry32 } from './utils.js';
 import { createBuilding, placeBuilding, setRoofVisible, updateDoor, pointInside, hitsWalls, hitsFootprint, BUILDING_KINDS } from './buildings.js';
 
@@ -112,6 +113,44 @@ const SKY_FRAG = `
   }
 `;
 
+
+/**
+ * A soft cloud puff drawn into a canvas: a handful of stacked radial gradients
+ * with a hard alpha falloff, so one 128 px texture can be scaled to 200 m wide
+ * without banding. Cached per module import.
+ */
+let CLOUD_TEXTURE = null;
+export function cloudTexture() {
+  if (CLOUD_TEXTURE) return CLOUD_TEXTURE;
+  const size = 128;
+  let canvas = null;
+  try {
+    canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+  } catch { canvas = null; }
+  if (!canvas || !canvas.getContext) { CLOUD_TEXTURE = null; return null; }
+  const c = canvas.getContext('2d');
+  c.clearRect(0, 0, size, size);
+  const blobs = [
+    [64, 70, 44], [42, 76, 30], [88, 78, 32], [58, 58, 30], [76, 62, 26],
+  ];
+  for (const [x, y, r] of blobs) {
+    const g = c.createRadialGradient(x, y, r * 0.15, x, y, r);
+    g.addColorStop(0, 'rgba(255,255,255,0.92)');
+    g.addColorStop(0.55, 'rgba(255,255,255,0.42)');
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    c.fillStyle = g;
+    c.beginPath();
+    c.arc(x, y, r, 0, Math.PI * 2);
+    c.fill();
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  CLOUD_TEXTURE = tex;
+  return tex;
+}
+
 export class World {
   constructor(scene, seed = 1, quality = 'auto') {
     this.scene = scene;
@@ -214,6 +253,13 @@ export class World {
     this.dust.visible = false;
 
     this.textures = { asphalt: tex };
+    try {
+      // anisotropic filtering is what keeps the road from smearing at ULTRA's
+      // longer draw distance; it is free on every GPU made since 2012
+      const maxAniso = 16;
+      tex.anisotropy = Math.min(maxAniso, this.anisotropy || 4);
+      tex.needsUpdate = true;
+    } catch { /* texture without anisotropy support */ }
 
     // ---------------------------------------------------------- ground detail
     this.groundTextures = [0, 1, 2, 3, 4].map((i) => {
@@ -255,15 +301,107 @@ export class World {
     this.scene.background = null;
 
     this.textures = { asphalt: tex };
+    try {
+      // anisotropic filtering is what keeps the road from smearing at ULTRA's
+      // longer draw distance; it is free on every GPU made since 2012
+      const maxAniso = 16;
+      tex.anisotropy = Math.min(maxAniso, this.anisotropy || 4);
+      tex.needsUpdate = true;
+    } catch { /* texture without anisotropy support */ }
     const coarse = window.matchMedia?.('(pointer: coarse)')?.matches;
-    const lowEnd = this.quality === 'low' ? true
-      : this.quality === 'high' ? false
-      : Boolean(coarse && (Math.min(window.innerWidth, window.innerHeight) < 640 || (navigator.hardwareConcurrency || 8) <= 4));
-    this.propBudget = lowEnd ? 56 : 88;
+    const known = QUALITY_ORDER.includes(this.quality);
+    const autoTier = resolveQuality({
+      choice: known ? this.quality : 'auto',
+      coarse: Boolean(coarse),
+      smallest: Math.min(window.innerWidth, window.innerHeight),
+      cores: navigator.hardwareConcurrency || 8,
+    });
+    this.tier = tier(autoTier);
+    const lowEnd = autoTier === 'low';
+    this.propBudget = this.tier.props;
     this.lowEnd = lowEnd;
+    this.anisotropy = this.tier.anisotropy;
     this.buildProps();
     this.buildPitStops();
     this.buildBuildings();
+    // the sky gets its cloud layers straight away (1–3 depending on the tier)
+    if (this.tier.clouds) this.buildClouds(this.tier.clouds);
+  }
+
+  /**
+   * The game hands its resolved tier over once, so the world can size its cloud
+   * layers and weather particles to the same budget as the renderer.
+   */
+  applyTier(t) {
+    if (!t) return;
+    this.tier = t;
+    this.propBudget = t.props;
+    this.lowEnd = t.id === 'low';
+    this.anisotropy = t.anisotropy;
+    if (this.textures?.asphalt) {
+      try {
+        this.textures.asphalt.anisotropy = Math.min(16, t.anisotropy);
+        this.textures.asphalt.needsUpdate = true;
+      } catch { /* ignore */ }
+    }
+    // extra cloud layers for the higher tiers: banked haze on the horizon
+    if (t.clouds > (this.cloudLayers || 0) && typeof this.buildClouds === 'function') {
+      this.buildClouds(t.clouds);
+    }
+  }
+
+  /**
+   * CLOUDS — three drifting layers of soft sprites at different heights.
+   *
+   * This is the cheapest big-looking thing in the whole scene: one canvas
+   * texture, additive-ish alpha, no lighting, no shadow pass. ULTRA gets three
+   * layers (high wispy, mid cumulus, low haze), HIGH gets two, MEDIUM one, LOW
+   * none. They scroll with the camera and drift on their own, so the sky is
+   * never a flat gradient.
+   */
+  buildClouds(layers = 1) {
+    if (this.cloudGroup) {
+      this.scene.remove(this.cloudGroup);
+      try { this.cloudGroup.children.forEach((c) => c.material?.map?.dispose?.()); } catch { /* ignore */ }
+      this.cloudGroup = null;
+    }
+    const count = Math.max(0, Math.min(3, Math.round(layers)));
+    this.cloudLayers = count;
+    if (!count) return null;
+
+    if (!this.cloudTexture) this.cloudTexture = cloudTexture();
+    const group = new THREE.Group();
+    group.renderOrder = -1;
+    const heights = [96, 74, 54];
+    const scales = [1.0, 0.8, 0.55];
+    for (let layer = 0; layer < count; layer++) {
+      const puffs = 14 + layer * 6;
+      for (let i = 0; i < puffs; i++) {
+        const mat = new THREE.SpriteMaterial({
+          map: this.cloudTexture,
+          color: layer === 0 ? 0xfff2dd : layer === 1 ? 0xf6e6cf : 0xe9dcc6,
+          transparent: true,
+          opacity: (layer === 0 ? 0.5 : 0.38) * (0.75 + Math.random() * 0.4),
+          depthWrite: false,
+          fog: false,
+        });
+        const sprite = new THREE.Sprite(mat);
+        const spread = 420;
+        sprite.position.set(
+          rand(-spread, spread),
+          heights[layer] + rand(-12, 18),
+          rand(-spread, spread),
+        );
+        const size = rand(90, 190) * scales[layer];
+        sprite.scale.set(size, size * rand(0.42, 0.62), 1);
+        sprite.userData.drift = rand(1.2, 3.4) * (layer === 0 ? 1.3 : 1);
+        sprite.userData.layer = layer;
+        group.add(sprite);
+      }
+    }
+    this.cloudGroup = group;
+    this.scene.add(group);
+    return group;
   }
 
   makeWeather(count, color, size, spread) {
@@ -603,6 +741,18 @@ export class World {
   // ----------------------------------------------------------------- update
   update(dt, focus, zoneIndex) {
     this.zoneIndex = zoneIndex;
+    if (this.cloudGroup) {
+      const wrap = 520;
+      for (const c of this.cloudGroup.children) {
+        c.position.x += c.userData.drift * dt;
+        if (c.position.x - focus.x > wrap) c.position.x = focus.x - wrap;
+        else if (focus.x - c.position.x > wrap) c.position.x = focus.x + wrap;
+        c.position.z += c.userData.layer === 0 ? dt * 1.6 : dt * 0.9;
+        if (c.position.z - focus.z > wrap) c.position.z = focus.z - wrap;
+        else if (focus.z - c.position.z > wrap) c.position.z = focus.z + wrap;
+      }
+      this.cloudGroup.visible = this.nightFactor < 0.82;
+    }
     this.road.position.z = focus.z;
     this.ground.position.set(0, -0.01, focus.z);
     this.mountains.position.z = focus.z;
@@ -744,10 +894,17 @@ export class World {
     this.dust.material.color.setHex(kind === 'heat' ? 0xffc27a : 0xd8b483);
     this.dust.material.opacity = kind === 'heat' ? 0.09 : 0.22;
     if (this.scene.fog) {
-      if (kind === 'dust') this.scene.fog.far = 150;
-      else if (kind === 'heat') this.scene.fog.far = 300;
-      else if (kind === 'rain' || kind === 'storm') this.scene.fog.far = 300;
-      else this.scene.fog.far = 430;
+      // Weather used to hard-code a 430 m horizon, which silently threw away the
+      // graphics tier's draw distance (ULTRA's 760 m became 430 the first time
+      // the sky changed). Scale the tier's distance instead.
+      const far = this.fogFar || 430;
+      const near = this.fogNear || 90;
+      const scale = kind === 'dust' ? 0.35
+        : kind === 'heat' ? 0.7
+          : kind === 'rain' || kind === 'storm' || kind === 'acid' ? 0.7
+            : 1;
+      this.scene.fog.far = Math.round(far * scale);
+      this.scene.fog.near = Math.round(near * (scale < 1 ? 0.8 : 1));
     }
   }
 

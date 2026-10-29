@@ -13,6 +13,7 @@ import { ArcadeStats, ratingLabel, rankRuns } from './arcade-stats.js';
 import {
   installAutoLandscape, isTouchDevice, isPortrait, requestLandscape, requestPortrait,
 } from './orientation.js';
+import { applyPostClass } from './graphics.js';
 
 export const CATALOGUE_URL = './games/index.json';
 export const BRIDGE = 'outrun-arcade';
@@ -220,6 +221,7 @@ export class Arcade {
           <input id="arcSearch" placeholder="Search games, creators, tags…" autocomplete="off" spellcheck="false" />
         </label>
         <div class="arc-top-right">
+          <button class="arc-fs" data-fullscreen="label" type="button" title="Fullscreen (Alt+Enter)">⤢ FULLSCREEN</button>
           <span id="arcOnline" class="arc-online">SOLO</span>
           <button id="arcProfileBtn" class="arc-avatar" type="button" title="Account">?</button>
         </div>
@@ -492,6 +494,9 @@ export class Arcade {
     // opened it is a gesture, so this is where the lock is allowed to happen;
     // the menu behind it stays portrait.
     document.body.classList.add('run-live');
+    // community games get the same warm screen glow the 3D run has (HIGH is the
+    // sensible default: they are 2D canvases, so the cost is a CSS gradient)
+    applyPostClass(document.documentElement, 'high');
     // the hub never rotates the page itself — it rotates the player stage — so
     // clear any leftover CSS rotation from an earlier 3D run
     document.body.classList.remove('auto-land');

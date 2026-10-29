@@ -3,6 +3,10 @@ import { AuthUI } from './authui.js';
 import { Arcade } from './arcade.js';
 import { mountPreview } from './preview.js';
 import {
+  installFullscreen, toggleFullscreen, isFullscreen, readPreference,
+} from './fullscreen.js';
+import { TIERS, describeTier, isKnownQuality } from './graphics.js';
+import {
   installAutoLandscape, forceLandscape, requestPortrait, isPortrait, landscapeState,
 } from './orientation.js';
 import { MODES, DEFAULT_MODE, modeById } from './modes.js';
@@ -40,7 +44,7 @@ const saveLocal = () => {
 try {
   const saved = JSON.parse(localStorage.getItem('outrun-profile') || '{}');
   if (saved.room) state.room = saved.room;
-  if (['auto', 'low', 'medium', 'high'].includes(saved.quality)) state.quality = saved.quality;
+  if (['auto', 'low', 'medium', 'high', 'ultra'].includes(saved.quality)) state.quality = saved.quality;
   if (MODES.some((m) => m.id === saved.mode)) state.mode = saved.mode;
   if (saved.custom) state.custom = normalizeCustom(saved.custom);
 } catch {}
@@ -79,6 +83,8 @@ function warmGameKit() {
   if (typeof requestIdleCallback === 'function') requestIdleCallback(run, { timeout: 4000 });
   else setTimeout(run, 1800);
 }
+
+let fullscreenCtl = null;
 
 let authPreview = null;
 let lobbyPreview = null;
@@ -449,6 +455,11 @@ async function startRun() {
   if (btn) btn.innerHTML = 'WARMING THE ENGINE…';
   $('lobby').classList.remove('show');
   $('loading').classList.remove('gone');
+  // PLAY is a gesture: this is the only reliable moment to re-enter fullscreen
+  // for a player who chose it last time. Failure is silent by design.
+  if (!isFullscreen() && readPreference()) {
+    toggleFullscreen({ on: true }).then(() => fullscreenCtl?.sync()).catch(() => {});
+  }
 
   await new Promise((r) => setTimeout(r, 140));
 
@@ -668,6 +679,15 @@ async function boot() {
     qualityRow?.querySelectorAll('[data-quality]').forEach((b) => {
       b.classList.toggle('on', b.dataset.quality === state.quality);
     });
+    const hint = $('qualityHint');
+    if (hint) {
+      if (isKnownQuality(state.quality)) {
+        const t = TIERS[state.quality];
+        hint.innerHTML = `<b>${t.label}</b> — ${describeTier(state.quality)}. ${t.blurb}`;
+      } else {
+        hint.textContent = 'AUTO — picked for this device when the run starts';
+      }
+    }
   };
   qualityRow?.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-quality]');
@@ -737,6 +757,12 @@ async function boot() {
       authPreview?.setAvatar(hexToInt(state.color), state.name || 'SURVIVOR', state.custom);
     },
   });
+
+  // FULLSCREEN: one installer wires every [data-fullscreen] button on the page
+  // (arcade bar, lobby header, in-game exit) plus Alt+Enter / Shift+F.
+  // (delegated: every [data-fullscreen] button — lobby, arcade bar, in-run toggle
+  // — is handled by the installer itself, so there is no double toggle)
+  fullscreenCtl = installFullscreen();
 
   phoneSetup();
   // AUTO LANDSCAPE: installs on load, then retries on the first gesture, on

@@ -104,6 +104,9 @@ console.log('\nbackpack + hotbar');
 console.log('\nusing items');
 {
   g.hp = 40;
+  // start from a known inventory: earlier phases loot at random, and a stray
+  // medkit made this assertion flap
+  if (g.inventory.count('medkit')) g.inventory.remove('medkit', g.inventory.count('medkit'));
   g.inventory.add('medkit', 2);
   const slot = g.inventory.hotbar.indexOf('medkit');
   const used = g.invUI.useSlot(slot);

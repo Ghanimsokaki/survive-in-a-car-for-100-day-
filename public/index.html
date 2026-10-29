@@ -35,6 +35,13 @@
 <body>
 <div id="app"></div>
 <div id="vignette"></div>
+<!-- screen-space post layer: driven by the graphics tier (`html.q-high`, `q-ultra`) -->
+<div id="postfx" aria-hidden="true">
+  <div class="pf-glow"></div>
+  <div class="pf-flare"></div>
+  <div class="pf-grain"></div>
+  <div class="pf-edge"></div>
+</div>
 <div id="flash"></div>
 
 <!-- ============ SIGN IN (ROBLOX-STYLE) ============ -->
@@ -142,6 +149,7 @@
   <div class="lobby-card">
     <div class="lobby-head">
       <button id="arcadeBtn" class="arcade-back" type="button" title="Back to the arcade">◀ ARCADE</button>
+      <button id="fsLobby" class="fs-btn" data-fullscreen="label" type="button" title="Fullscreen (Alt+Enter)">⤢ FULLSCREEN</button>
       <div class="logo-mark">100</div>
       <div class="lobby-title">
         <h1>DAYS OUTRUN</h1>
@@ -209,7 +217,9 @@
             <button type="button" data-quality="low">LOW</button>
             <button type="button" data-quality="medium">MED</button>
             <button type="button" data-quality="high">HIGH</button>
+            <button type="button" data-quality="ultra">ULTRA</button>
           </div>
+          <p id="qualityHint" class="quality-hint">AUTO — picked for this device</p>
         </div>
 
         <button id="playBtn" class="play-btn">START THE RUN <span>▸</span></button>
@@ -412,6 +422,7 @@
   <button id="rotateDismiss" type="button">PLAY ANYWAY</button>
 </div>
 
+<button id="fsExit" class="fs-exit" data-fullscreen="icon" type="button" title="Fullscreen (Alt+Enter)" aria-label="Toggle fullscreen">⤢</button>
 <div id="loading"><div class="spin"></div><span id="loadingText">WARMING THE ENGINE…</span></div>
 
 <script>

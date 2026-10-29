@@ -262,10 +262,51 @@ running around by everyone else in the room.
 * **Weather:** dust storms, EMP thunderstorms, acid rain (eats hull and blades), heatwaves, gale winds,
   and drifting **tornadoes (Cat 1–5)** that pull and lift anything not anchored.
 
-## ⚙️ Graphics setting
-The lobby has a **GRAPHICS** switch — `AUTO / LOW / MED / HIGH` — remembered across sessions. LOW drops the
-resolution cap, shadows and half the scenery detail; HIGH forces full density and shadows. AUTO keeps the
-old device heuristics (coarse pointer + core count + screen size).
+## ⚙️ Graphics: AUTO · LOW · MED · HIGH · **ULTRA**
+
+The lobby has a **GRAPHICS** switch, remembered across sessions. Every renderer decision now comes from one
+table (`public/js/graphics.js`) instead of scattered `quality === 'high'` ternaries, so a tier is a complete
+description of the scene:
+
+| | LOW | MED | HIGH | **ULTRA** |
+| --- | --- | --- | --- | --- |
+| render scale cap | 1× | 1.4× | 1.85× | **2.5×** |
+| shadows | off | 1K | 2K soft | **4K soft, 78 m frustum** |
+| draw distance | 300 m | 430 m | 560 m | **760 m** |
+| scenery props | 56 | 72 | 96 | **124** |
+| cloud layers | — | 1 | 2 | **3** |
+| PBR environment | — | — | ✓ | **✓ stronger** |
+| avatar detail | low | medium | high | **ultra (26-segment parts)** |
+| particles | 0.45× | 0.7× | 1× | **1.5×** |
+| post layer | — | vignette | + glow | **+ grain + lens flare** |
+
+* **ULTRA is opt-in** — never auto-selected, because a weak integrated GPU would stutter before the frame
+  governor noticed. It still degrades gracefully: the governor trades resolution (down to 0.7×) to hold the
+  frame rate.
+* The **post layer** (bloom-ish sun glow, anamorphic flare, film grain, chromatic edge falloff) is pure CSS
+  over the canvas — `html.q-high` / `q-ultra`, and only while `body.run-live` — so none of it costs a render
+  pass. `prefers-reduced-motion` turns the grain animation off.
+* The **clouds** are new: 1–3 layers of soft sprites on a procedural canvas texture, drifting and recycling
+  around the camera (`World.buildClouds`). They fade out at night with the rest of the sky.
+* AUTO now only drops to LOW on genuinely weak hardware (`≤ 3 cores` or a sub-360 px viewport); a modern
+  phone gets MEDIUM, which keeps its shadows.
+* Weather used to hard-code a 430 m horizon and silently threw away the tier's draw distance — it now scales
+  the tier's value instead (storm = 70 %, dust = 35 %, clear = 100 %).
+
+## ⛶ Fullscreen
+
+One button in three places — the arcade top bar, the lobby header and the in-game HUD — plus **Alt+Enter**
+and **Shift+F** (never inside a text field, so chatting is safe). `public/js/fullscreen.js`:
+
+* Calls `requestFullscreen({ navigationUI: 'hide' })` inside the click/keydown gesture (the only time
+  browsers allow it), with `webkitRequestFullscreen` / `msRequestFullscreen` fallbacks.
+* **Degrades instead of breaking**: iOS Safari refuses fullscreen for anything that is not a video, so the
+  module reports `unsupported`, the button dims, and the rest of the game carries on (the CSS-rotated
+  landscape stage still works).
+* Remembers the preference, and re-applies it on the next **PLAY** tap — a real gesture, so it is allowed —
+  never automatically on load.
+* Syncs on `fullscreenchange`, so Esc / F11 / a system swipe keeps the icon honest, and adds safe-area
+  padding for the notch once the browser chrome is gone.
 
 ## 🏚 Enterable buildings
 
@@ -429,6 +470,8 @@ public/
   js/inventory.js     backpack model + hotbar/backpack UI
   js/recipes.js       15 staples + 1000 generated recipes (seeded, effects)
   js/preview.js       dependency-free 2D avatar portrait for the home screens
+  js/graphics.js      the quality tier table every renderer setting reads from
+  js/fullscreen.js    fullscreen API wrapper: buttons, Alt+Enter, iOS fallback
   js/orientation.js   auto landscape during a run; portrait home
   js/arcade.js        arcade hub, sandboxed game player, records + ratings
   js/arcade-stats.js  Supabase ratings/runs/leaderboards (local fallback)
@@ -449,7 +492,7 @@ docs/DESIGN.md        game design document
 
 ## 🧪 Tests
 
-`npm test` copies the browser modules into a shim lane and runs fourteen suites with no browser:
+`npm test` copies the browser modules into a shim lane and runs fifteen suites with no browser:
 (`tests/run-all.mjs` is the list; `node tests/build.mjs` must run first after any edit).
 
 * **simulation** — driving, fuel, anchors vs. tornado drift, bosses, scavenging, every recipe, melee,
@@ -472,6 +515,10 @@ docs/DESIGN.md        game design document
   game, < 200 KB), the 2D portrait preview, portrait-home/landscape-run orientation, the room store against
   a fake PostgREST (insert shape, time window, author filter, degradation when the DB is down), and a live
   server: compression, `ETag`/304, cache headers, `/api/health`, `/api/config` and the relay round trip.
+* **graphics tiers + fullscreen** — the tier table (monotonic pixel cap / shadow size / draw distance /
+  props / clouds), auto-detect, a real `Game` booted at all four tiers (4K shadows, PBR env, rim + fill
+  lights, fog, avatar detail, cloud sprites drifting and wrapping), material/segment scaling, and the
+  fullscreen module: enter/exit, the keyboard shortcuts, chat-field safety, and the iOS refusal path.
 * **loot + inventory + recipes** — 1000 generated recipes unique and browsable, drops only bank when you
   stand on them, magnet/expiry behaviour, stack caps, hotbar pinning, medkit/fuel/repair use, 24-per-page
   workbench paging + search, and every one of the 1,015 recipes crafting without an error.
