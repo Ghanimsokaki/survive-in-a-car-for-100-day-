@@ -262,6 +262,7 @@ export class Account {
       body_color: p.body_color || '#ffb347',
       car_color: p.car_color || '#d24a2b',
       best_day: p.best_day || 0,
+      customization: p.customization || null,
       created_at: p.created_at,
     };
   }
@@ -275,6 +276,7 @@ export class Account {
       body_color: colors.body || '#ffb347',
       car_color: colors.car || '#d24a2b',
       best_day: 0,
+      customization: colors.custom || {},
     };
     const out = await this.sb.upsert('profiles', row, 'id');
     const p = out?.[0] || row;
@@ -285,6 +287,7 @@ export class Account {
       body_color: p.body_color || row.body_color,
       car_color: p.car_color || row.car_color,
       best_day: p.best_day || 0,
+      customization: p.customization || row.customization || null,
     };
   }
 
@@ -299,9 +302,20 @@ export class Account {
       if (patch.body_color !== undefined) dbPatch.body_color = patch.body_color;
       if (patch.car_color !== undefined) dbPatch.car_color = patch.car_color;
       if (patch.best_day !== undefined) dbPatch.best_day = patch.best_day;
+      if (patch.customization !== undefined) dbPatch.customization = patch.customization;
       if (Object.keys(dbPatch).length) {
         try { await this.sb.update('profiles', `id=eq.${this.profile.id}`, dbPatch); }
-        catch (e) { this.lastError = explainAuthError(e); }
+        catch (e) {
+          // an older schema without the customization column must not break saving
+          if ('customization' in dbPatch) {
+            delete dbPatch.customization;
+            if (Object.keys(dbPatch).length) {
+              try { await this.sb.update('profiles', `id=eq.${this.profile.id}`, dbPatch); } catch (e2) { this.lastError = explainAuthError(e2); }
+            }
+          } else {
+            this.lastError = explainAuthError(e);
+          }
+        }
       }
     }
   }

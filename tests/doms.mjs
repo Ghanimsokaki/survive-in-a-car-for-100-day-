@@ -36,7 +36,7 @@ export class El {
     this.dataset = {};
     this.classList = new ClassList();
     this.children = [];
-    this.innerHTML = '';
+    this._html = '';
     this.textContent = '';
     this.value = '';
     this.disabled = false;
@@ -75,6 +75,11 @@ export class El {
   blur() { this.dispatch('blur'); }
   setAttribute() {}
   getAttribute() { return null; }
+  set innerHTML(v) {
+    this._html = String(v);
+    if (this._html === '') this.children.length = 0;  // real DOM drops the children too
+  }
+  get innerHTML() { return this._html; }
   set innerText(v) { this.textContent = v; }
   get innerText() { return this.textContent; }
 }

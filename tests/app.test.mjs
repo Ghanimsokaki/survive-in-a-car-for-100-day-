@@ -83,11 +83,25 @@ check('guest button enters the lobby', document.getElementById('lobby').classLis
 check('lobby shows the chosen name', document.getElementById('nameInput').value === 'PHONE_TESTER' || api.state.name === 'PHONE_TESTER', api.state.name);
 check('friend panel renders for guests', document.getElementById('friendsList').innerHTML.includes('Sign in'));
 
-// colours drive the avatar + state
-const swatches = document.getElementById('colorRow').children;
-check('body swatches built', swatches.length > 3, `${swatches.length} swatches`);
-swatches[2].dispatch('click');
-check('picking a colour updates state', api.state.color === '#5ff0ff', api.state.color);
+// the survivor look drives the avatar + state
+const skinSwatches = document.getElementById('skinRow').children;
+check('skin swatches built', skinSwatches.length > 3, `${skinSwatches.length} swatches`);
+skinSwatches[3].dispatch('click');
+check('picking a skin tone updates the profile colour',
+  api.state.custom.skin === 'bronze' && api.state.color === '#a96f4d', `${api.state.custom.skin} ${api.state.color}`);
+
+const outfitSwatches = document.getElementById('colorRow').children;
+check('outfit swatches built', outfitSwatches.length > 3, `${outfitSwatches.length} swatches`);
+outfitSwatches[4].dispatch('click');
+check('picking an outfit updates the look', api.state.custom.outfit === 'cyan', api.state.custom.outfit);
+
+const hairChips = document.getElementById('hairRow').children;
+check('hair chips built', hairChips.length >= 6, `${hairChips.length} styles`);
+hairChips[5].dispatch('click');
+check('picking hair updates the look', api.state.custom.hair === 'mohawk', api.state.custom.hair);
+
+document.getElementById('randomLook').dispatch('click');
+check('randomise produces a valid look', typeof api.state.custom.skin === 'string' && api.state.custom.height >= 0.9);
 
 // room code handling
 document.getElementById('roomInput').value = 'phone-room-7';

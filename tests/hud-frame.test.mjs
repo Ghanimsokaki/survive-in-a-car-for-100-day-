@@ -80,7 +80,9 @@ console.log('\nlandscape frame');
   const hotbar = pick('#hotbar');
   check('landscape only tightens the gap, never re-docks the bar',
     !hotbar || /gap:3px/.test(hotbar.body), hotbar?.body || 'inherits the portrait frame');
-  check('landscape lifts the prompt clear of the cluster', /bottom:calc\(102px/.test(pick('#prompt')?.body || ''));
+  const promptRules = landscape.filter((r) => r.selector === '#prompt');
+  check('landscape lifts the prompt clear of the cluster',
+    promptRules.some((r) => /bottom:calc\(102px/.test(r.body)), `${promptRules.length} rules`);
 }
 
 console.log('\ninstalled app');

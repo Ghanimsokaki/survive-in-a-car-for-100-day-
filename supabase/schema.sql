@@ -16,6 +16,9 @@ create table if not exists public.profiles (
   created_at   timestamptz not null default now()
 );
 
+-- survivor customisation (skin/outfit/hair/accessory/height/build), safe to re-run
+alter table public.profiles add column if not exists customization jsonb not null default '{}'::jsonb;
+
 alter table public.profiles enable row level security;
 
 drop policy if exists "profiles are readable by signed-in players" on public.profiles;

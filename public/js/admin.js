@@ -56,6 +56,7 @@ export class AdminPanel {
     this.el = null;
     this.tick = 0;
     this.fps = 0;
+    this.chase = false;
     this._lastFrame = performance.now();
     this.build();
     this.verify();
@@ -144,13 +145,7 @@ export class AdminPanel {
               <button data-act="boss" type="button">BOSS RIG</button>
             </div>
             <div class="admin-row wrap">
-              <button data-act="cat1" type="button">STORM CAT 1</button>
-              <button data-act="cat3" type="button">STORM CAT 3</button>
-              <button data-act="cat5" type="button">STORM CAT 5</button>
-            </div>
-            <div class="admin-row wrap">
               <button data-act="clearHostiles" type="button">CLEAR HOSTILES</button>
-              <button data-act="clearStorms" type="button">CLEAR STORMS</button>
               <button data-act="nextBuilding" type="button">RESHUFFLE BUILDINGS</button>
             </div>
             <div class="admin-row">
@@ -161,6 +156,45 @@ export class AdminPanel {
               </label>
               <button data-act="placeBuilding" type="button">PLACE AHEAD</button>
             </div>
+          </section>
+
+          <section class="admin-sec wide">
+            <h3>TORNADO LAB <small>summon storms on you</small></h3>
+            <div class="admin-row wrap">
+              <label>CATEGORY
+                <select id="admCat">
+                  <option value="1">1 · GALE</option>
+                  <option value="2">2 · MINI</option>
+                  <option value="3" selected>3 · TORNADO</option>
+                  <option value="4">4 · TWIN-CELL</option>
+                  <option value="5">5 · HYPERCANE</option>
+                </select>
+              </label>
+              <label>DIRECTION
+                <select id="admDir">
+                  <option value="ahead">AHEAD</option>
+                  <option value="onme" selected>ON TOP OF ME</option>
+                  <option value="behind">BEHIND</option>
+                  <option value="left">LEFT</option>
+                  <option value="right">RIGHT</option>
+                  <option value="ring">RING AROUND ME</option>
+                </select>
+              </label>
+              <label>DISTANCE <input id="admDist" type="number" min="12" max="260" step="5" value="70" /> m</label>
+            </div>
+            <div class="admin-row wrap">
+              <button data-act="tornadoSpawn" type="button" class="prime">SPAWN TORNADO</button>
+              <button data-act="tornadoMulti" type="button">SPAWN ×3</button>
+              <button data-act="tornadoChase" type="button" id="admChase">HUNTER: OFF</button>
+            </div>
+            <div class="admin-row wrap">
+              <button data-act="cat1" type="button">CAT 1</button>
+              <button data-act="cat3" type="button">CAT 3</button>
+              <button data-act="cat5" type="button">CAT 5</button>
+              <button data-act="tornadoAtPlayer" type="button">DROP ON PLAYER</button>
+              <button data-act="clearStorms" type="button">CLEAR STORMS</button>
+            </div>
+            <p class="admin-note" id="admStormNote">Summoned storms ignore the two-storm world cap and arrive instantly.</p>
           </section>
 
           <section class="admin-sec">
@@ -379,15 +413,56 @@ export class AdminPanel {
       case 'hollow': g.spawnHollow(3); break;
       case 'raider': g.spawnRaider(false); break;
       case 'boss': g.spawnRaider(true); break;
-      case 'cat1': g.spawnTornado(1); break;
-      case 'cat3': g.spawnTornado(3); break;
-      case 'cat5': g.spawnTornado(5); break;
+      case 'tornadoSpawn': this.summonStorm(1); break;
+      case 'tornadoMulti': this.summonStorm(3); break;
+      case 'tornadoAtPlayer': this.summonStorm(1, { distance: 16, bearing: null }); break;
+      case 'tornadoChase': {
+        this.chase = !this.chase;
+        this.el.querySelector('#admChase').textContent = `HUNTER: ${this.chase ? 'ON' : 'OFF'}`;
+        this.el.querySelector('#admChase').classList.toggle('on', this.chase);
+        g.hud.toast(`STORM HUNTER ${this.chase ? 'ARMED — every summon locks on' : 'DISARMED'}`, this.chase ? 'warn' : '');
+        break;
+      }
+      case 'cat1': this.summonStorm(1, { quick: true }); break;
+      case 'cat3': this.summonStorm(3, { quick: true }); break;
+      case 'cat5': this.summonStorm(5, { quick: true }); break;
       case 'clearHostiles': g.clearHostiles(); break;
       case 'clearStorms': g.clearStorms(); break;
       case 'ban': this.banFromForm(); break;
       default: break;
     }
     this.refresh();
+  }
+
+  /** Compass bearings relative to wherever the rig is pointing. */
+  summonStorm(count = 1, { distance, bearing, quick = false } = {}) {
+    const g = this.game;
+    if (!g?.adminTornado) return null;
+    const category = Number(this.el.querySelector('#admCat')?.value) || 3;
+    const dir = quick ? 'ahead' : (this.el.querySelector('#admDir')?.value || 'onme');
+    const dist = Number.isFinite(distance)
+      ? distance
+      : Math.max(12, Math.min(260, Number(this.el.querySelector('#admDist')?.value) || 70));
+    const facing = g.car ? g.car.yaw : 0;
+    const compass = {
+      ahead: facing, behind: facing + Math.PI,
+      left: facing - Math.PI / 2, right: facing + Math.PI / 2,
+      onme: facing, ring: null,
+    };
+    const ring = dir === 'ring' || (!quick && count > 1);
+    const storms = g.adminTornado({
+      category,
+      distance: dir === 'onme' ? Math.max(14, dist) : dist,
+      bearing: ring ? null : (Number.isFinite(bearing) ? bearing : (compass[dir] ?? facing)),
+      count: ring ? Math.max(count, 3) : count,
+      chase: Boolean(this.chase),
+      maxLife: 150,
+    });
+    const note = this.el.querySelector('#admStormNote');
+    if (note) {
+      note.textContent = `${g.tornadoes.length} storm${g.tornadoes.length === 1 ? '' : 's'} in the world · Cat ${category} · ${dir.toUpperCase()}${this.chase ? ' · HUNTING' : ''}`;
+    }
+    return storms;
   }
 
   async peerAction(action, id) {

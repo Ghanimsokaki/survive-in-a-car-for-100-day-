@@ -11,7 +11,13 @@ const CAT_DATA = {
 
 /** A drifting vortex that yanks vehicles and survivors toward its core. */
 export class Tornado {
-  constructor(scene, category = 2, origin = new THREE.Vector3()) {
+  /**
+   * @param {object} [opts]
+   * @param {boolean} [opts.chase]    lock onto the player instead of drifting
+   * @param {number}  [opts.maxLife]  seconds before it dissipates on its own
+   * @param {string}  [opts.summonedBy] owner tag, shown in the debug/admin HUD
+   */
+  constructor(scene, category = 2, origin = new THREE.Vector3(), opts = {}) {
     this.scene = scene;
     this.category = clamp(category, 1, 5);
     const d = CAT_DATA[this.category];
@@ -19,8 +25,10 @@ export class Tornado {
     this.strength = d.strength;
     this.height = d.height;
     this.wind = d.wind;
+    this.chase = Boolean(opts.chase);
+    this.summonedBy = opts.summonedBy || '';
     this.life = 0;
-    this.maxLife = rand(70, 120);
+    this.maxLife = Number.isFinite(opts.maxLife) ? opts.maxLife : rand(70, 120);
     this.dead = false;
     this.group = new THREE.Group();
     this.group.position.copy(origin);
@@ -120,7 +128,11 @@ export class Tornado {
     // drift, biased to stay near the player
     const toPlayer = new THREE.Vector3(focus.x - this.group.position.x, 0, focus.z - this.group.position.z);
     const dist = toPlayer.length();
-    if (dist > 300) toPlayer.normalize().multiplyScalar(6);
+    if (this.chase) {
+      // a summoned storm hunts you: always closing, never parking on top of you
+      if (dist > 46) toPlayer.normalize().multiplyScalar(11);
+      else toPlayer.multiplyScalar(-0.9);
+    } else if (dist > 300) toPlayer.normalize().multiplyScalar(6);
     else if (dist > 70) toPlayer.normalize().multiplyScalar(1.4);
     else toPlayer.multiplyScalar(-0.05);
     this.drift.x = damp(this.drift.x, clamp(this.drift.x + toPlayer.x * dt, -8, 8), 1.2, dt);
@@ -151,6 +163,9 @@ export class Tornado {
     if (this.life > this.maxLife) this.dissipate();
     return !this.dead;
   }
+
+  /** Alias so an admin "clear storms" sweep disposes everything properly. */
+  die() { this.dissipate(); }
 
   dissipate() {
     this.dead = true;

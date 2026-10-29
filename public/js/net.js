@@ -130,7 +130,10 @@ export class Net {
 
   send(msg) {
     if (!this.alive) return;
-    const payload = { ...msg, id: this.id, name: this.profile.name, color: this.profile.color, carColor: this.profile.carColor, ts: Date.now() };
+    const payload = {
+      ...msg, id: this.id, name: this.profile.name, color: this.profile.color,
+      carColor: this.profile.carColor, custom: this.profile.custom || null, ts: Date.now(),
+    };
     if (this.bc) { try { this.bc.postMessage(payload); } catch {} }
     if (this.ws && this.ws.readyState === 1) {
       try { this.ws.send(JSON.stringify(payload)); } catch {}
@@ -167,7 +170,10 @@ export class Net {
     if (msg.t === 'hello' || msg.t === 'state') {
       let p = this.peers.get(msg.id);
       if (!p) {
-        p = { id: msg.id, name: msg.name || 'SURVIVOR', color: msg.color || 0xffb347, carColor: msg.carColor || 0xd24a2b, first: true };
+        p = {
+          id: msg.id, name: msg.name || 'SURVIVOR', color: msg.color || 0xffb347,
+          carColor: msg.carColor || 0xd24a2b, custom: msg.custom || null, first: true,
+        };
         this.peers.set(msg.id, p);
         this.onCount?.(this.peers.size);
         if (msg.t === 'hello') {
