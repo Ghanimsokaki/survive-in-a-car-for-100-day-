@@ -135,9 +135,10 @@ export function buildCar({ color = 0xd24a2b, armored = 0, anchorTier = 1, lights
   body.add(exhaust);
 
   function setAnchored(on, tier = 1) {
-    spikes.forEach((s, i) => {
+    const scale = [1, 1.12, 1.32, 1.55][clamp(tier - 1, 0, 3)];
+    spikes.forEach((s) => {
       s.visible = on;
-      s.scale.setScalar(tier >= 3 ? 1.35 : 1);
+      s.scale.setScalar(scale);
       s.position.y = on ? 0.02 : 0.16;
     });
   }
@@ -152,6 +153,20 @@ export function buildCar({ color = 0xd24a2b, armored = 0, anchorTier = 1, lights
 
   return { group, body, wheels, spikes, setAnchored, setArmor, setColor, exhaust, beams, materials: { paint, dark, steel, glass } };
 }
+
+/**
+ * Anchor spike upgrade track. Higher tiers grip harder, deploy at speed and
+ * shrug off bigger vortices: `slip` is the fraction of a tornado's pull that
+ * still reaches the rig while anchored (0 = nothing moves it).
+ */
+export const ANCHOR_TIERS = [
+  { tier: 1, name: 'STOCK SPIKES', slip: 0.3, deploySpeed: 13, liftGuard: 1, cost: null },
+  { tier: 2, name: 'HYDRAULIC SPIKES', slip: 0.16, deploySpeed: 21, liftGuard: 2, cost: { steel: 3, titanium: 2 } },
+  { tier: 3, name: 'DEEP-CORE CLAWS', slip: 0.06, deploySpeed: 29, liftGuard: 3, cost: { steel: 5, titanium: 4, carbon: 2 } },
+  { tier: 4, name: 'TEMPERED GROUND LOCK', slip: 0, deploySpeed: 38, liftGuard: 5, cost: { titanium: 6, carbon: 4, cores: 2 } },
+];
+
+export const anchorTierData = (tier) => ANCHOR_TIERS[clamp(Math.round(tier || 1), 1, 4) - 1];
 
 /** Arcade driving model + damage state for one vehicle. */
 export class Vehicle {
@@ -195,8 +210,22 @@ export class Vehicle {
     if (this.chassis <= 0) this.dead = true;
   }
 
+  get anchorGrip() { return 1 - anchorTierData(this.anchorTier).slip; }
+  /** Fastest you may still slam the spikes down at this tier (m/s). */
+  get anchorDeploySpeed() { return anchorTierData(this.anchorTier).deploySpeed; }
+  /**
+   * Fraction of a vortex's pull that gets through the spikes. A Cat 5 strains
+   * even a tier-3 set; tier 4 holds a hypercane dead still.
+   */
+  anchorSlip(category = 3) {
+    const base = anchorTierData(this.anchorTier).slip;
+    if (base === 0) return 0; // the ground lock does not care how big the storm is
+    const strain = base * Math.max(0, category - 1) * 0.18 + 0.015 * Math.max(0, category - 1);
+    return clamp(base + strain, 0, 0.9);
+  }
+
   toggleAnchor(force) {
-    if (Math.abs(this.speed) > 13 && !this.anchored) return false;
+    if (Math.abs(this.speed) > this.anchorDeploySpeed && !this.anchored) return false;
     this.anchored = force === undefined ? !this.anchored : !!force;
     this.mesh.setAnchored(this.anchored, this.anchorTier);
     if (this.anchored) this.speed *= 0.2;
@@ -206,6 +235,7 @@ export class Vehicle {
   upgradeAnchor() {
     this.anchorTier = Math.min(4, this.anchorTier + 1);
     this.mesh.setAnchored(this.anchored, this.anchorTier);
+    return this.anchorTier;
   }
   upgradeArmor() {
     this.armorLevel = Math.min(3, this.armorLevel + 1);

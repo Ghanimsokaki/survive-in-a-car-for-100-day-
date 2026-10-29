@@ -43,18 +43,34 @@ g.day = 13; g.newDay();
 check('day advances', g.day === 14);
 check('storm spawns a tornado', g.tornadoes.length === 1, `cat ${g.tornadoes[0]?.category}`);
 
-// anchored rig ignores the vortex, free rig does not
+// anchor tiers vs the vortex: pinned distance, frozen drift, so the numbers
+// are the spike grip and nothing else
 const t = g.tornadoes[0];
-t.group.position.set(g.car.pos.x + 25, 0, g.car.pos.z);
-g.car.speed = 0; g.toggleAnchor(true);
-const before = g.car.pos.clone();
-step(120);
-const driftAnchored = g.car.pos.distanceTo(before);
-g.toggleAnchor(false);
-const before2 = g.car.pos.clone();
-step(120);
-const driftFree = g.car.pos.distanceTo(before2);
-check('anchor negates tornado pull', driftAnchored < 0.5, `${driftAnchored.toFixed(2)} m`);
+g.keys.forward = 0; g.keys.back = 0; g.keys.boost = false;
+const driftFor = (tier, anchored) => {
+  g.car.anchorTier = tier;
+  if (g.car.anchored) g.car.toggleAnchor(false);
+  g.car.speed = 0;
+  g.car.pos.set(0, 0, 0);
+  g.pos.set(0, 0, 0); // the vortex force is sampled at the player marker
+  const start = g.car.pos.clone();
+  for (let i = 0; i < 90; i++) {
+    t.group.position.set(25, 0, 0);
+    t.drift.set(0, 0, 0);
+    if (anchored && !g.car.anchored) g.car.toggleAnchor(true);
+    g.updateTornadoes(1 / 60);
+  }
+  const d = g.car.pos.distanceTo(start);
+  if (g.car.anchored) g.car.toggleAnchor(false);
+  return d;
+};
+const driftFree = driftFor(1, false);
+const driftAnchored = driftFor(1, true);
+check('stock anchors resist the bulk of the pull', driftAnchored < driftFree * 0.6,
+  `${driftAnchored.toFixed(2)} m anchored vs ${driftFree.toFixed(2)} m free`);
+// tier 4 is the "holds a hypercane" promise on the crafting card
+const driftTier4 = driftFor(4, true);
+check('tier-4 ground lock holds dead still', driftTier4 < 0.25, `${driftTier4.toFixed(2)} m`);
 check('free rig is dragged', driftFree > 1, `${driftFree.toFixed(2)} m`);
 
 g.tornadoes.forEach((x) => x.dissipate()); g.tornadoes = [];

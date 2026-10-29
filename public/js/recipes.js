@@ -25,8 +25,8 @@ export const RECIPES = [
   { id: 'tirepatch', name: 'TIRE PATCH KIT', tab: 'repairs', tier: 1, cost: { leather: 2, scrap: 1 }, desc: 'Re-tread the rubber (+35 tire tread).', effect: { type: 'tires', amount: 35 } },
   { id: 'fullfix', name: 'FULL RIG OVERHAUL', tab: 'repairs', tier: 3, tierReq: 3, cost: { steel: 4, titanium: 2, leather: 2 }, desc: 'Engine, chassis and tires back to 100%.', effect: { type: 'repair', chassis: 100, engine: 100, tires: 100 } },
 
-  { id: 'armor', name: 'REINFORCED ARMOR PLATING', tab: 'upgrades', tier: 2, tierReq: 1, cost: { steel: 4, titanium: 1 }, desc: 'Welded hull plates. Absorbs 28% of impact damage. Stacks ×3.', upgrade: 'armor' },
-  { id: 'anchors', name: 'HYDRAULIC ANCHOR SPIKE SET', tab: 'upgrades', tier: 2, tierReq: 1, cost: { steel: 3, titanium: 2 }, desc: 'Deeper spikes, stronger hold. Negates tornado lift. Max tier 4.', upgrade: 'anchors' },
+  { id: 'armor', name: 'REINFORCED ARMOR PLATING', tab: 'upgrades', tier: 2, tierReq: 1, cost: { steel: 4, titanium: 1 }, desc: 'Welded hull plates. Absorbs 28% of impact damage. Stacks ×3.', upgrade: 'armor', system: true },
+  { id: 'anchors', name: 'ANCHOR SPIKE UPGRADE', tab: 'upgrades', tier: 2, tierReq: 1, cost: { steel: 3, titanium: 2 }, desc: 'Deeper spikes, stronger hold against vortex pull. Four tiers.', upgrade: 'anchors', system: true },
   { id: 'bench2', name: 'MOBILE WELDING RIG', tab: 'upgrades', tier: 2, cost: { steel: 5, carbon: 2 }, desc: 'Upgrade the car workbench to Tier 2.', upgrade: 'bench' },
   { id: 'bench3', name: 'HYDRAULIC PRESS BAY', tab: 'upgrades', tier: 3, tierReq: 2, cost: { steel: 6, titanium: 3 }, desc: 'Upgrade the car workbench to Tier 3.', upgrade: 'bench' },
   { id: 'bench4', name: 'TITANIUM FORGE', tab: 'upgrades', tier: 4, tierReq: 3, cost: { titanium: 5, cores: 1 }, desc: 'Upgrade the car workbench to Tier 4.', upgrade: 'bench' },
@@ -42,7 +42,7 @@ const ADJ = [
 const NOUN = {
   weapons: ['PIPE', 'MACHETE', 'KATANA', 'BLADE', 'SPIKE BAT', 'CLEAVER', 'HATCHET', 'SPEAR', 'SAW', 'KNUCKLES', 'STUN ROD', 'CHAIN FLAIL', 'GUISARME', 'SHIV'],
   repairs: ['FUEL CAN', 'SIPHON KIT', 'REPAIR PATCH', 'TREAD KIT', 'COOLANT', 'SEALANT', 'WELD KIT', 'TOOL ROLL', 'OIL DRUM'],
-  upgrades: ['HULL PLATE', 'ANCHOR SET', 'SUSPENSION', 'TURBO', 'INTAKE', 'ROLL CAGE', 'SPIKE BUMPER', 'FUEL CELL', 'SCAVENGER RIG', 'COOLING RIG'],
+  upgrades: ['HULL PLATE', 'WINCH RIG', 'SUSPENSION', 'TURBO', 'INTAKE', 'ROLL CAGE', 'SPIKE BUMPER', 'FUEL CELL', 'SCAVENGER RIG', 'COOLING RIG'],
   gear: ['TOOLBOX', 'BATTERY', 'WIRING LOOM', 'AMMO CRATE', 'BLUEPRINT FOLDER', 'SIGNAL BOX', 'MED POUCH', 'LOCKPICK SET', 'RANGEFINDER'],
   consumables: ['MEDKIT', 'RATION PACK', 'FLARE BUNDLE', 'STIM SHOT', 'FIELD BANDAGE', 'WATER CAN', 'FUEL CAN', 'ANTISEPTIC'],
 };

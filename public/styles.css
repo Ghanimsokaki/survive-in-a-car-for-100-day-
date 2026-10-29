@@ -942,3 +942,56 @@ body.touch{-webkit-user-select:none;user-select:none;overscroll-behavior:none}
   #diag{width:172px;transform:scale(.78)}
   .diag-sub{gap:5px}
 }
+
+/* ---------------------------------------------------------------------------
+   RIG SYSTEMS — the pinned anchor/armour tracks at the top of the workbench.
+   The anchor upgrade used to hide on page one of a thousand generated recipes;
+   now it is the first thing you see, on every tab, with its tier pips.
+--------------------------------------------------------------------------- */
+.rig-systems{display:flex;flex-direction:column;gap:6px;margin:0 0 10px}
+.rig-systems:empty{display:none}
+.sys{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:9px;
+  background:linear-gradient(90deg,rgba(255,179,71,.10),rgba(255,179,71,.02) 60%,transparent);
+  border:1px solid rgba(255,179,71,.28)}
+.sys[data-sys="anchors"]{background:linear-gradient(90deg,rgba(107,224,255,.12),rgba(107,224,255,.02) 60%,transparent);
+  border-color:rgba(107,224,255,.32)}
+.sys-ico{font-size:20px;line-height:1;filter:drop-shadow(0 0 8px rgba(107,224,255,.4))}
+.sys-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.sys-main b{font-size:10px;letter-spacing:1.6px;color:var(--ink);display:flex;align-items:center;gap:7px}
+.sys-main b u{text-decoration:none;font-size:8px;letter-spacing:1px;color:#8b93a5;
+  border:1px solid rgba(255,255,255,.14);border-radius:20px;padding:1px 7px}
+.sys-blurb{font-size:8.5px;letter-spacing:.7px;color:#8b93a5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sys-next{font-size:8px;letter-spacing:1px;color:var(--amber);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sys-right{display:flex;align-items:center;gap:9px;flex-shrink:0}
+.sys-pips{display:flex;gap:3px}
+.sys-pips i{width:9px;height:9px;border-radius:2px;background:rgba(255,255,255,.12);display:block}
+.sys-pips i.on{background:var(--cyan,#6be0ff);box-shadow:0 0 7px rgba(107,224,255,.65)}
+.sys-cost{display:flex;flex-wrap:wrap;gap:5px;max-width:150px;justify-content:flex-end}
+.sys-cost em{font-style:normal;font-size:7.5px;letter-spacing:.8px;color:#9fb6c8;
+  background:rgba(255,255,255,.05);border-radius:4px;padding:2px 5px}
+.sys-cost em.no{color:#ff8f9a;background:rgba(255,90,110,.1)}
+.sys-btn{font:inherit;font-size:8px;letter-spacing:1.4px;font-weight:700;padding:7px 11px;border-radius:6px;
+  background:var(--cyan,#6be0ff);color:#04202b;border:1px solid var(--cyan,#6be0ff);cursor:pointer;white-space:nowrap}
+.sys-btn:disabled{background:transparent;color:#5f6a7b;border-color:rgba(255,255,255,.12);cursor:not-allowed}
+.sys[data-sys="armor"] .sys-btn{background:var(--amber);border-color:var(--amber);color:#180e02}
+.sys[data-sys="armor"] .sys-btn:disabled{background:transparent;color:#5f6a7b;border-color:rgba(255,255,255,.12)}
+
+/* recipe cards that belong to a pinned rig track get a marker so they line up
+   with the strip above instead of looking like another generated recipe */
+.recipe .recipe-sys{display:inline-block;margin-left:6px;font-size:7px;letter-spacing:1px;
+  color:#04202b;background:var(--cyan,#6be0ff);border-radius:3px;padding:1px 4px;vertical-align:middle}
+
+/* phone: the strip collapses to one compact row per track */
+@media (max-width:860px),(max-height:600px){
+  .sys{flex-wrap:wrap;gap:6px;padding:7px 8px}
+  .sys-blurb{display:none}
+  .sys-right{width:100%;justify-content:space-between}
+  .sys-cost{max-width:none}
+  .sys-main b u{font-size:7px}
+}
+
+/* admin tornado lab */
+.admin-row button.prime{background:var(--cyan,#6be0ff);color:#04202b;border-color:var(--cyan,#6be0ff);font-weight:700}
+.admin-row button.prime:hover{filter:brightness(1.12)}
+.admin-row button.on{background:var(--amber);color:#180e02;border-color:var(--amber)}
+.admin-sec h3 small{font-size:7.5px;letter-spacing:1.2px;color:#5f6a7b;margin-left:6px;font-weight:400}

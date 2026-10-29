@@ -1,6 +1,6 @@
 import * as THREE from '../vendor/three.module.js';
 import { World, ZONES } from './world.js';
-import { Vehicle } from './vehicle.js';
+import { Vehicle, ANCHOR_TIERS, anchorTierData } from './vehicle.js';
 import { buildAvatar } from './avatar.js';
 import { Tornado } from './tornado.js';
 import { Hollow, RaiderCar } from './enemies.js';
@@ -743,22 +743,88 @@ export class Game {
     if (kind === 'dust') this.hud.toast('DUST STORM — VISIBILITY DROPPING', 'warn');
   }
 
-  spawnTornado(category) {
-    if (this.tornadoes.length >= 2) return;
-    const cat = clamp(category, 1, 5);
-    const angle = rand(0, Math.PI * 2);
-    const dist = rand(160, 260);
-    const pos = new THREE.Vector3(this.pos.x + Math.cos(angle) * dist, 0, this.pos.z + Math.sin(angle) * dist);
-    const t = new Tornado(this.scene, cat, pos);
+  /**
+   * Puts a vortex in the world.
+   * @param {number} category 1–5
+   * @param {object} [opts] { x, z, distance, bearing, ignoreCap, chase, maxLife, summonedBy, arrive }
+   *   `distance`/`bearing` place it relative to the player when x/z are absent.
+   */
+  spawnTornado(category, opts = {}) {
+    const cat = clamp(Math.round(category || 3), 1, 5);
+    const cap = opts.ignoreCap ? 8 : 2;
+    if (this.tornadoes.length >= cap) {
+      if (!opts.silent) this.hud.toast('THE SKY IS ALREADY FULL OF STORMS', 'warn');
+      return null;
+    }
+    let x = Number.isFinite(opts.x) ? opts.x : null;
+    let z = Number.isFinite(opts.z) ? opts.z : null;
+    if (x === null || z === null) {
+      const dist = Number.isFinite(opts.distance) ? opts.distance : rand(160, 260);
+      const bearing = Number.isFinite(opts.bearing) ? opts.bearing : rand(0, Math.PI * 2);
+      x = this.pos.x + Math.sin(bearing) * dist;
+      z = this.pos.z + Math.cos(bearing) * dist;
+    }
+    const pos = new THREE.Vector3(clamp(x, -260, 260), 0, z);
+    const t = new Tornado(this.scene, cat, pos, {
+      chase: Boolean(opts.chase),
+      maxLife: opts.maxLife,
+      summonedBy: opts.summonedBy,
+    });
     this.tornadoes.push(t);
     this.stormCat = Math.max(this.stormCat, cat);
-    const names = { 1: 'CATEGORY 1 GALE VORTEX', 2: 'CATEGORY 2 MINI-TORNADO', 3: 'CATEGORY 3 TORNADO', 4: 'CATEGORY 4 TWIN-CELL', 5: 'CATEGORY 5 HYPERCANE' };
-    this.hud.storm(names[cat], 'DEPLOY ANCHORS · STAY CLEAR OF THE CORE');
-    this.hud.toast(`⚠ ${names[cat]} INBOUND`, 'bad');
-    this.audio.alarm();
-    setTimeout(() => {
-      if (this.tornadoes.length === 0) this.hud.storm(null);
-    }, 6000);
+    if (opts.arrive) {
+      // summoned storms arrive immediately instead of sliding in from 200 m out
+      t.drift.set(0, 0, 0);
+    }
+    if (!opts.silent) {
+      const names = { 1: 'CATEGORY 1 GALE VORTEX', 2: 'CATEGORY 2 MINI-TORNADO', 3: 'CATEGORY 3 TORNADO', 4: 'CATEGORY 4 TWIN-CELL', 5: 'CATEGORY 5 HYPERCANE' };
+      this.hud.storm(names[cat], 'DEPLOY ANCHORS · STAY CLEAR OF THE CORE');
+      this.hud.toast(`⚠ ${names[cat]} INBOUND`, 'bad');
+      this.audio.alarm();
+      setTimeout(() => {
+        if (this.tornadoes.length === 0) this.hud.storm(null);
+      }, 6000);
+    }
+    return t;
+  }
+
+  /** Spawns a vortex at an explicit world position (used by the owner console). */
+  spawnTornadoAt(category, x, z, opts = {}) {
+    return this.spawnTornado(category, { ...opts, x, z });
+  }
+
+  /**
+   * Owner-console storm control: category + distance + compass bearing, with an
+   * optional lock-on ("chase") and the normal two-storm cap lifted.
+   */
+  adminTornado({ category = 5, distance = 70, bearing = null, count = 1, chase = false, maxLife = 120, announce = true } = {}) {
+    const placed = [];
+    const n = clamp(Math.round(count) || 1, 1, 8);
+    const base = Number.isFinite(bearing) ? bearing : this.car ? this.car.yaw + Math.PI : 0;
+    for (let i = 0; i < n; i++) {
+      const spread = n === 1 ? 0 : (i / n) * Math.PI * 2;
+      const t = this.spawnTornado(category, {
+        distance: clamp(Number(distance) || 70, 12, 260),
+        bearing: base + spread,
+        ignoreCap: true,
+        chase,
+        maxLife,
+        summonedBy: 'admin',
+        silent: true,
+        arrive: true,
+      });
+      if (t) placed.push(t);
+    }
+    if (placed.length) {
+      const names = { 1: 'CATEGORY 1 GALE VORTEX', 2: 'CATEGORY 2 MINI-TORNADO', 3: 'CATEGORY 3 TORNADO', 4: 'CATEGORY 4 TWIN-CELL', 5: 'CATEGORY 5 HYPERCANE' };
+      if (announce) {
+        this.hud.storm(names[placed[0].category], chase ? 'SUMMONED · IT IS HUNTING YOU' : 'SUMMONED BY THE OWNER · DEPLOY ANCHORS');
+        this.hud.toast(`⚡ ${placed.length}× ${names[placed[0].category]} SUMMONED${chase ? ' · LOCKED ON' : ''}`, 'bad');
+        this.audio.alarm();
+      }
+      this.stormCat = Math.max(this.stormCat, ...placed.map((t) => t.category));
+    }
+    return placed;
   }
 
   // -------------------------------------------------------------- movement
@@ -887,8 +953,9 @@ export class Game {
   toggleAnchor() {
     if (!this.inCar) { this.keys.jump = true; return; }
     if (this.car.dead) return;
-    if (!this.car.anchored && Math.abs(this.car.speed) > 13) {
-      this.hud.toast('SLOW BELOW 45 KM/H TO DEPLOY ANCHORS', 'warn');
+    if (!this.car.anchored && Math.abs(this.car.speed) > this.car.anchorDeploySpeed) {
+      const kmh = Math.round(this.car.anchorDeploySpeed * 3.6);
+      this.hud.toast(`SLOW BELOW ${kmh} KM/H TO DEPLOY T${this.car.anchorTier} ANCHORS`, 'warn');
       return;
     }
     this.car.toggleAnchor();
@@ -898,7 +965,10 @@ export class Game {
       this.car.speed = Math.max(this.car.speed, 0);
     }
     this.audio.blip(this.car.anchored ? 420 : 620, 0.14, 'square', 0.11);
-    this.hud.toast(this.car.anchored ? 'ANCHOR SPIKES DEPLOYED' : 'ANCHORS RELEASED', this.car.anchored ? 'good' : '');
+    const tier = anchorTierData(this.car.anchorTier);
+    this.hud.toast(this.car.anchored
+      ? `ANCHORS DEPLOYED · ${tier.name}${tier.slip === 0 ? ' · HOLDS ANY STORM' : ''}`
+      : 'ANCHORS RELEASED', this.car.anchored ? 'good' : '');
     this.net.event('anchor', { on: this.car.anchored, x: this.car.pos.x, z: this.car.pos.z });
   }
 
@@ -1248,12 +1318,65 @@ export class Game {
   }
 
   // ------------------------------------------------------------------ craft
+  /**
+   * The rig's own upgrade tracks, always shown at the top of the workbench so
+   * the anchor set can never get lost among the 1000 generated recipes.
+   */
+  benchSystems() {
+    const tier = anchorTierData(this.car.anchorTier);
+    const nextAnchor = ANCHOR_TIERS[this.car.anchorTier] || null;
+    const armorCost = { steel: 4, titanium: 1 };
+    return [
+      {
+        key: 'anchors', icon: '⚓', label: 'ANCHOR SPIKES', recipe: 'anchors',
+        level: this.car.anchorTier, maxLevel: 4, pips: (n) => n,
+        current: tier.name,
+        blurb: tier.slip === 0
+          ? 'Holds a Category 5 hypercane dead still.'
+          : `${Math.round((1 - tier.slip) * 100)}% grip · fires under ${Math.round(tier.deploySpeed * 3.6)} km/h · holds up to Cat ${tier.liftGuard}.`,
+        nextLabel: nextAnchor ? `→ ${nextAnchor.name} · ${Math.round((1 - nextAnchor.slip) * 100)}% grip · Cat ${nextAnchor.liftGuard}` : 'FULLY UPGRADED',
+        cost: nextAnchor ? nextAnchor.cost : {},
+        maxed: !nextAnchor,
+      },
+      {
+        key: 'armor', icon: '🛡', label: 'HULL PLATING', recipe: 'armor',
+        level: this.car.armorLevel + 1 > 3 ? 3 : this.car.armorLevel, maxLevel: 3,
+        current: this.car.armorLevel >= 3 ? 'REINFORCED HULL' : this.car.armorLevel ? `PLATES LV${this.car.armorLevel}` : 'BARE CHASSIS',
+        blurb: this.car.armorLevel ? `${Math.round((1 - Math.pow(0.72, this.car.armorLevel)) * 100)}% impact absorbed.` : 'No plates welded on yet.',
+        nextLabel: this.car.armorLevel >= 3 ? 'FULLY UPGRADED' : `→ PLATES LV${this.car.armorLevel + 1} · absorbs ${Math.round((1 - Math.pow(0.72, this.car.armorLevel + 1)) * 100)}%`,
+        cost: armorCost,
+        maxed: this.car.armorLevel >= 3,
+      },
+    ].map((s) => ({
+      ...s,
+      affordable: Object.entries(s.cost).every(([k, v]) => (this.materials[k] || 0) >= v),
+      tierOk: !s.maxed,
+    }));
+  }
+
   /** Every recipe, with its live "can't craft this any more" state. */
   benchRecipes() {
     return ALL_RECIPES.map((r) => {
       let maxed = false;
       if (r.upgrade === 'armor' && this.car.armorLevel >= 3) maxed = true;
-      if (r.upgrade === 'anchors' && this.car.anchorTier >= 4) maxed = true;
+      // the anchor track escalates: the card always shows the *next* tier
+      if (r.upgrade === 'anchors') {
+        const next = ANCHOR_TIERS[this.car.anchorTier] || null;
+        if (!next) {
+          maxed = true;
+          return {
+            ...r, maxed, cost: {}, level: 4, maxLevel: 4,
+            name: 'GROUND LOCK ANCHORS · TIER 4',
+            desc: 'MAXED · holds a Category 5 hypercane dead still.',
+          };
+        }
+        return {
+          ...r, maxed, level: this.car.anchorTier, maxLevel: 4,
+          cost: next.cost,
+          name: `ANCHOR SPIKE UPGRADE · TIER ${next.tier}`,
+          desc: `${next.name} · ${Math.round((1 - next.slip) * 100)}% grip · fires under ${Math.round(next.deploySpeed * 3.6)} km/h · holds up to Cat ${next.liftGuard}.`,
+        };
+      }
       if (r.upgrade === 'bench' && this.benchTier >= (r.tier || 2)) maxed = true;
       if (r.effect?.type === 'perk') {
         const got = this.perks?.[r.effect.perk] || 0;
@@ -1271,7 +1394,7 @@ export class Game {
       this.invUI?.hide();
       this.paused = true;
       this.hud.ownedWeapons = [...this.owned];
-      this.hud.openBench(this.benchTier, this.materials, this.benchRecipes());
+      this.hud.openBench(this.benchTier, this.materials, this.benchRecipes(), this.benchSystems());
       this.audio.blip(560, 0.1, 'triangle', 0.08);
     } else {
       this.paused = false;
@@ -1284,7 +1407,11 @@ export class Game {
     if (!r) return;
     if ((r.tierReq || 1) > this.benchTier) { this.hud.toast(`NEED WORKBENCH TIER ${r.tierReq}`, 'bad'); return; }
     if (r.weapon && this.owned.has(r.weapon)) return;
-    for (const [k, v] of Object.entries(r.cost)) {
+    // the anchor track's price comes from the tier table, not the static recipe
+    const cost = r.upgrade === 'anchors'
+      ? (ANCHOR_TIERS[this.car.anchorTier]?.cost || r.cost)
+      : r.cost;
+    for (const [k, v] of Object.entries(cost)) {
       if ((this.materials[k] || 0) < v) { this.hud.toast(`NOT ENOUGH ${k.toUpperCase()}`, 'bad'); return; }
     }
     if (r.upgrade === 'armor' && this.car.armorLevel >= 3) return;
@@ -1296,7 +1423,7 @@ export class Game {
       if ((this.perks[p] || 0) >= cap - 1e-9) { this.hud.toast('THAT UPGRADE IS MAXED OUT', 'warn'); return; }
     }
 
-    for (const [k, v] of Object.entries(r.cost)) this.materials[k] -= v;
+    for (const [k, v] of Object.entries(cost)) this.materials[k] -= v;
     this.craftedCount += 1;
 
     if (r.weapon) {
@@ -1310,7 +1437,9 @@ export class Game {
       this.hud.toast(`ARMOR PLATING LV${this.car.armorLevel}`, 'good');
     } else if (r.upgrade === 'anchors') {
       this.car.upgradeAnchor();
-      this.hud.toast(`ANCHOR TIER ${this.car.anchorTier}`, 'good');
+      const t = anchorTierData(this.car.anchorTier);
+      this.hud.toast(`⚓ ANCHOR TIER ${this.car.anchorTier} · ${t.name}`, 'good');
+      this.hud.chat('', `ANCHOR SPIKES → TIER ${this.car.anchorTier}: ${t.slip === 0 ? 'holds any storm' : `${Math.round((1 - t.slip) * 100)}% grip`}`, '#6dffa8');
     } else if (r.upgrade === 'bench') {
       this.benchTier = Math.max(this.benchTier, r.tier);
       if (this.hud.benchTier) this.hud.benchTier.textContent = `TIER ${this.benchTier}`;
@@ -1324,6 +1453,7 @@ export class Game {
     this.hud.tier = this.benchTier;
     this.hud.inv = this.materials;
     this.hud.recipes = this.benchRecipes();
+    this.hud.systems = this.benchSystems();
     this.hud.refreshBench();
   }
 
@@ -1390,7 +1520,23 @@ export class Game {
       if (force) {
         if (this.inCar) {
           if (this.car.anchored) {
-            if (d < 40) this.hud.storm('ANCHORS HOLDING', `CATEGORY ${t.category} VORTEX · ${Math.round(d)}m`);
+            const slip = this.car.anchorSlip(t.category);
+            if (slip > 0) {
+              // spikes bite, but a weak set still gets dragged and hammered
+              this.car.pos.x += force.x * dt * slip;
+              this.car.pos.z += force.z * dt * slip;
+              this.car.airY = clamp(this.car.airY + force.lift * dt * 0.04 * slip, 0, 1.6);
+              this.car.yaw += force.x * dt * 0.004 * slip;
+              if (slip > 0.3 && d < 46) this.car.damage(dt * 2.4 * slip, 'chassis');
+            }
+            if (d < 60) {
+              this.hud.storm(
+                slip === 0 ? 'ANCHORS HOLDING — SOLID' : 'ANCHORS STRAINING',
+                slip === 0
+                  ? `CATEGORY ${t.category} VORTEX · ${Math.round(d)}m · ${anchorTierData(this.car.anchorTier).name}`
+                  : `CATEGORY ${t.category} VORTEX · ${Math.round(d)}m · UPGRADE ANCHORS`,
+              );
+            }
           } else {
             this.car.pos.x += force.x * dt * 0.75;
             this.car.pos.z += force.z * dt * 0.75;
@@ -1613,7 +1759,10 @@ export class Game {
   }
 
   clearStorms() {
-    [...this.tornadoes].forEach((t) => { t.die?.(); this.scene.remove?.(t.group); });
+    [...this.tornadoes].forEach((t) => {
+      if (typeof t.dissipate === 'function') t.dissipate();
+      else { t.dead = true; t.die?.(); this.scene.remove?.(t.group); }
+    });
     this.tornadoes.length = 0;
     this.stormCat = 0;
     this.hud.storm(null);

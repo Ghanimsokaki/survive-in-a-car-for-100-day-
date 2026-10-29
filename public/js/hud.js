@@ -12,6 +12,7 @@ export class HUD {
       prompt: $('prompt'), toasts: $('toasts'), storm: $('stormBanner'),
       chatLog: $('chatLog'), chatInput: $('chatInput'), party: $('party'),
       bench: $('bench'), benchTier: $('benchTier'), inv: $('invList'), recipes: $('recipeGrid'),
+      systems: $('rigSystems'),
       tabs: [...document.querySelectorAll('.tabs button')], benchClose: $('benchClose'),
       search: $('recipeSearch'), count: $('recipeCount'), page: $('recipePage'),
       prev: $('recipePrev'), next: $('recipeNext'),
@@ -83,7 +84,10 @@ export class HUD {
     this.el.vitals.textContent = `HP ${Math.max(0, Math.round(v.hp))}`;
     this.el.vitals.style.color = v.hp < 35 ? '#ff6d7b' : '#ff9aa4';
     this.el.weapon.textContent = v.weapon;
-    this.el.anchorRow.textContent = v.anchored ? 'ANCHORED · TAP TO RELEASE' : `SPIKES T${v.anchorTier} READY`;
+    const anchorPips = '●'.repeat(v.anchorTier || 1) + '○'.repeat(Math.max(0, 4 - (v.anchorTier || 1)));
+    this.el.anchorRow.textContent = v.anchored
+      ? `ANCHORED T${v.anchorTier} ${anchorPips} · TAP TO RELEASE`
+      : `ANCHORS T${v.anchorTier} ${anchorPips}`;
     if (this.el.fpsRow && typeof v.fps === 'number') this.el.fpsRow.textContent = `${v.fps} FPS`;
     this.el.anchorRow.style.color = v.anchored ? '#6dffa8' : '#8b93a5';
     this.el.anchorBtn.classList.toggle('on', !!v.anchored);
@@ -230,12 +234,50 @@ export class HUD {
   }
 
   // ------------------------------------------------------------ workbench
-  openBench(tier, inv, recipes) {
+  openBench(tier, inv, recipes, systems) {
     this.tier = tier; this.inv = inv; this.recipes = recipes;
+    if (systems) this.systems = systems;
     this.el.bench.classList.add('show');
     this.el.benchTier.textContent = `TIER ${tier}`;
     this.renderInv();
+    this.renderSystems();
     this.renderRecipes();
+  }
+
+  /**
+   * Pinned rig-upgrade strip. The anchor set lives here on *every* tab so it
+   * can't disappear into page 4 of a thousand generated recipes.
+   */
+  renderSystems() {
+    const host = this.el.systems;
+    if (!host || !this.systems) return;
+    host.innerHTML = this.systems.map((s) => {
+      const pips = Array.from({ length: s.maxLevel }, (_, i) =>
+        `<i class="${i < s.level ? 'on' : ''}"></i>`).join('');
+      const cost = Object.entries(s.cost || {}).map(([k, v]) => {
+        const ok = (this.inv[k] || 0) >= v;
+        return `<em class="${ok ? '' : 'no'}">${v}× ${k.toUpperCase()}</em>`;
+      }).join('') || '<em>READY</em>';
+      const can = !s.maxed && s.affordable && s.tierOk;
+      return `<div class="sys" data-sys="${s.key}">
+        <span class="sys-ico">${s.icon}</span>
+        <div class="sys-main">
+          <b>${s.label}<u>T${s.level}/${s.maxLevel}</u></b>
+          <span class="sys-blurb">${s.current} — ${s.blurb}</span>
+          <span class="sys-next">${s.nextLabel}</span>
+        </div>
+        <div class="sys-right">
+          <span class="sys-pips">${pips}</span>
+          <span class="sys-cost">${cost}</span>
+          <button class="sys-btn" data-craft="${s.recipe}" ${can ? '' : 'disabled'}>
+            ${s.maxed ? 'MAXED' : s.affordable ? (s.key === 'anchors' ? 'UPGRADE ⚓' : 'CRAFT') : 'NEED MATS'}
+          </button>
+        </div>
+      </div>`;
+    }).join('');
+    host.querySelectorAll('.sys-btn').forEach((b) => {
+      b.addEventListener('click', () => this.onCraft?.(b.dataset.craft));
+    });
   }
   closeBench() { this.el.bench.classList.remove('show'); }
   get benchOpen() { return this.el.bench.classList.contains('show'); }
@@ -283,7 +325,10 @@ export class HUD {
         const ok = (this.inv[k] || 0) >= v;
         return `<i class="${ok ? '' : 'no'}">${v}× ${k.toUpperCase()}</i>`;
       }).join('');
-      const badge = r.tier ? `<span class="recipe-tier t${r.tier}">T${r.tier}</span>` : '';
+      // staples that belong to a pinned rig track are labelled so they read as
+      // part of the strip above, not as another generated recipe
+      const sysTag = r.system ? '<span class="recipe-sys">RIG</span>' : '';
+      const badge = `${sysTag}${r.tier ? `<span class="recipe-tier t${r.tier}">T${r.tier}</span>` : ''}`;
       const req = tierOk ? '' : ` · NEEDS TIER ${r.tierReq}`;
       return `<div class="recipe" data-id="${r.id}">
         <div class="recipe-top">
@@ -304,6 +349,7 @@ export class HUD {
   refreshBench() {
     if (!this.inv) return;
     this.renderInv();
+    this.renderSystems();
     this.renderRecipes();
   }
 
