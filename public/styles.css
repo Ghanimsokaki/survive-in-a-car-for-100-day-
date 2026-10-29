@@ -1235,3 +1235,36 @@ body.arcade-open{overflow:hidden}
   .arc-friend{width:66px;flex:0 0 66px;padding:6px 4px}
   .af-dot,.af-plus{width:24px;height:24px}
 }
+
+/* ===========================================================================P
+   AUTO LANDSCAPE
+   Browsers that refuse screen.orientation.lock (iOS Safari) get a CSS rotation
+   instead. `body.auto-land` is toggled by orientation.js; the arcade player is
+   rotated as a whole so community games always get a wide stage.
+=========================================================================== */
+.ap-stage{position:relative}
+.arc-player.force-landscape .ap-stage{position:fixed;top:0;left:0;
+  width:var(--stage-w,100vh);height:var(--stage-h,100vw);
+  transform:rotate(90deg) translateY(-100%);
+  transform-origin:top left}
+.arc-player.force-landscape .ap-bar{position:fixed;left:0;bottom:0;right:0;z-index:2;
+  padding:4px 10px;font-size:9px}
+
+/* the hub itself: readable portrait, but nudge the player sideways */
+body.auto-land .arc-player .ap-bar span:first-child{font-size:9px}
+
+/* ---- the real fallback: rotate the whole 3D app, not just its toolbar ----
+   Only while a run is live, so the lobby, sign-in and arcade stay upright.
+   The transform makes <body> the containing block for every fixed child
+   (canvas, HUD, stick, toasts), so they all lay themselves out in the
+   100vh × 100vw "stage" that the player sees sideways. game.js measures the
+   same stage via stageSize() and maps touches via toStagePoint().          */
+html.rot-stage{height:100%;overflow:hidden;background:#050a10;overscroll-behavior:none}
+body.auto-land.run-live{position:fixed;top:0;left:0;
+  width:100vh;height:100vw;overflow:hidden;
+  transform:rotate(90deg) translateY(-100%);
+  transform-origin:top left;
+  -webkit-transform:rotate(90deg) translateY(-100%);
+  touch-action:none}
+body.auto-land.run-live #app,
+body.auto-land.run-live #app canvas{width:100%!important;height:100%!important}

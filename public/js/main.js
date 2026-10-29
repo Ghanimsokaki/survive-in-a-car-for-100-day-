@@ -6,6 +6,7 @@ import { Account } from './account.js';
 import { AuthUI } from './authui.js';
 import { mountAdmin } from './admin.js';
 import { Arcade } from './arcade.js';
+import { installAutoLandscape, forceLandscape, isPortrait, landscapeState } from './orientation.js';
 import { MODES, DEFAULT_MODE, modeById } from './modes.js';
 import { loadBook, bestLine, careerLine, resetBook } from './records.js';
 import {
@@ -181,6 +182,8 @@ function showArcade() {
 // ------------------------------------------------------------------- lobby
 function showLobby() {
   $('auth').classList.remove('show');
+  document.body.classList.remove('run-live');
+  document.documentElement.classList.remove('rot-stage');
   arcade?.hide();
   $('lobby').classList.add('show');
   $('nameInput').value = state.name;
@@ -477,11 +480,19 @@ async function startRun() {
       new Promise((resolve) => setTimeout(() => resolve(false), 700)),
     ]);
   }
+  // The arcade hands the iframe a landscape stage, so re-check after the lock.
+  // If the device still refuses to turn, the run itself is rotated in CSS:
+  // `auto-land` marks "portrait + no lock", `run-live` says the stage is up.
+  if (isPhone && isPortrait() && !landscapeState().locked) {
+    document.body.classList.add('auto-land');
+    document.documentElement.classList.add('rot-stage');
+  }
 
   const btn = $('playBtn');
   if (btn) btn.innerHTML = 'WARMING THE ENGINE…';
   $('lobby').classList.remove('show');
   $('loading').classList.remove('gone');
+  document.body.classList.add('run-live');
 
   await new Promise((r) => setTimeout(r, 140));
 
@@ -552,23 +563,11 @@ setInterval(() => {
  * iOS refuses both and falls back to the rotate hint. Never throws, never blocks.
  */
 let landscapeTried = false;
+/** Kept as a thin alias: the real work lives in orientation.js now. */
 async function goLandscape() {
   if (!isPhone) return false;
   landscapeTried = true;
-  try {
-    const el = document.documentElement;
-    if (!document.fullscreenElement && el?.requestFullscreen) {
-      await el.requestFullscreen({ navigationUI: 'hide' });
-    }
-  } catch {}
-  try {
-    const orientation = typeof screen !== 'undefined' ? screen.orientation : null;
-    if (orientation?.lock) {
-      await orientation.lock('landscape');
-      return true;
-    }
-  } catch {}
-  return false;
+  return forceLandscape();
 }
 
 function phoneSetup() {
@@ -584,7 +583,11 @@ function phoneSetup() {
     if (rotateDismissed || rotateSeen) { rotate.classList.remove('show'); return; }
     const portrait = window.innerHeight > window.innerWidth;
     const playing = game && game.started && !game.dead && !game.won && !game.paused;
-    if (portrait && playing) { rotateSeen = true; rotate.classList.add('show'); }
+    // if the run is already rotated into landscape for us, asking the player to
+    // turn the phone would be noise — the picture is sideways on purpose
+    const alreadyWide = document.body.classList.contains('auto-land')
+      && document.body.classList.contains('run-live');
+    if (portrait && playing && !alreadyWide) { rotateSeen = true; rotate.classList.add('show'); }
     else rotate.classList.remove('show');
   };
   window.addEventListener('orientationchange', () => setTimeout(sync, 220));
@@ -778,6 +781,9 @@ async function boot() {
   });
 
   phoneSetup();
+  // AUTO LANDSCAPE: installs on load, then retries on the first gesture, on
+  // rotation back to portrait, and on leaving fullscreen.
+  installAutoLandscape({ when: 'phone' });
   probeRelay();
 
   if (account.signedIn) {

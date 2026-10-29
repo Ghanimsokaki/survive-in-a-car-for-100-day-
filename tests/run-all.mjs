@@ -25,6 +25,7 @@ const suites = [
   ['tornado-anchor.test.mjs', 'TORNADO LAB + ANCHOR CRAFTING'],
   ['records-storm.test.mjs', 'RECORDS + STORM METER'],
   ['arcade.test.mjs', 'ARCADE + COMMUNITY GAMES'],
+  ['fleet.test.mjs', 'FLEET BUILDER + AUTO LANDSCAPE'],
 ];
 
 await run(process.execPath, ['build.mjs']);

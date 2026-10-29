@@ -10,6 +10,7 @@
  * are exported so the test suite can pin the behaviour without a browser.
  */
 import { ArcadeStats, ratingLabel, rankRuns } from './arcade-stats.js';
+import { installAutoLandscape, isTouchDevice, isPortrait } from './orientation.js';
 
 export const CATALOGUE_URL = './games/index.json';
 export const BRIDGE = 'outrun-arcade';
@@ -288,6 +289,13 @@ export class Arcade {
 
     window.addEventListener('message', this.onMessage);
     this.nodes.createSnippet.textContent = this.manifestTemplate();
+
+    // AUTO LANDSCAPE: lock the device sideways for the hub and for every game
+    // played inside it. iOS refuses the lock, so the player frame is also
+    // rotated in CSS — the game always gets a wide stage either way.
+    installAutoLandscape({ when: 'any', onChange: (st) => this.syncStage(st) });
+    window.addEventListener('resize', () => this.syncStage());
+    window.addEventListener('orientationchange', () => setTimeout(() => this.syncStage(), 200));
   }
 
   manifestTemplate() {
@@ -302,6 +310,24 @@ export class Arcade {
   "entry": "index.html",
   "icon": "icon.svg"
 }`;
+  }
+
+  /**
+   * Rotates the sandboxed game frame when the device refuses a real landscape
+   * lock. The iframe keeps its true pixel size (games measure themselves with
+   * Arcade.fit), so the rotate transform only changes what the player sees.
+   */
+  syncStage(info = null) {
+    if (!this.nodes?.player) return;
+    const portrait = info ? info.portrait : isPortrait();
+    const touch = isTouchDevice();
+    const rotate = touch && portrait;
+    this.nodes.player.classList.toggle('force-landscape', rotate);
+    this.nodes.player.classList.toggle('locked-landscape', Boolean(info?.locked));
+    if (rotate) {
+      document.documentElement.style.setProperty('--stage-w', `${window.innerHeight}px`);
+      document.documentElement.style.setProperty('--stage-h', `${window.innerWidth}px`);
+    }
   }
 
   showCreate() {
@@ -330,6 +356,8 @@ export class Arcade {
   show() {
     this.el.classList.remove('hidden');
     document.body.classList.add('arcade-open');
+    // the hub rotates its own player stage, so the page itself stays upright
+    document.documentElement.classList.remove('rot-stage');
     this.render();
   }
 
@@ -419,6 +447,7 @@ export class Arcade {
     const player = this.getPlayer();
     this.nodes.player.classList.remove('hidden');
     this.nodes.result.classList.add('hidden');
+    this.syncStage();
     this.nodes.playerTitle.textContent = game.title;
     this.nodes.playerStatus.textContent = 'LOADING…';
     // relative URL: the iframe is same-path but sandboxed without same-origin,

@@ -98,7 +98,15 @@ console.log('\ninstalled app');
 
 console.log('\norientation');
 {
-  check('the run asks for fullscreen + landscape', /requestFullscreen/.test(mainJs) && /lock\('landscape'\)/.test(mainJs));
+  // landscape handling moved into its own module in round 10, so check both
+  const orientJs = readFileSync(`${ROOT}public/js/orientation.js`, 'utf8');
+  check('the run asks for fullscreen + landscape',
+    /requestFullscreen/.test(orientJs) && /lock\('landscape'\)/.test(orientJs));
+  check('main.js delegates the lock to the shared helper',
+    /installAutoLandscape/.test(mainJs) && /forceLandscape/.test(mainJs));
+  check('auto landscape retries on gesture and rotation',
+    /pointerdown/.test(orientJs) && /orientationchange/.test(orientJs));
+  check('iOS gets a CSS rotation fallback', /auto-land/.test(orientJs));
   check('the lock is best-effort, never blocking', /Promise\.race/.test(mainJs) && /catch \{\}/.test(mainJs));
   check('the rotate overlay can trigger the lock', /id="rotateLock"/.test(html));
   check('the overlay can still be dismissed', /id="rotateDismiss"/.test(html));

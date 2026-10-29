@@ -1,0 +1,13 @@
+{
+  "id": "iron-tide",
+  "title": "Iron Tide",
+  "author": "ghanimz",
+  "blurb": "Build your own ship, buy jets for the hangar, and sink other fleets at sea. Earn credits, refit, sail again.",
+  "tags": ["naval", "builder", "pve", "solo"],
+  "version": "1.0.0",
+  "entry": "index.html",
+  "icon": "icon.svg",
+  "accent": "#59c9ff",
+  "players": "1",
+  "featured": true
+}

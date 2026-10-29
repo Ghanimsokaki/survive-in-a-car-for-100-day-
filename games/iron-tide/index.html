@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+<title>Iron Tide</title>
+<style>
+  :root{--accent:#59c9ff;--ink:#050a10;--panel:#0b1520;--line:rgba(89,201,255,.22)}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--ink);overflow:hidden;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#dfeef8;
+    -webkit-user-select:none;user-select:none}
+  canvas{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none}
+  .screen{position:fixed;inset:0;display:flex;flex-direction:column;pointer-events:none}
+  .screen.hidden{display:none}
+  .topbar{display:flex;align-items:center;gap:12px;padding:10px 14px;
+    background:linear-gradient(180deg,rgba(5,10,16,.95),rgba(5,10,16,.55));pointer-events:auto}
+  .topbar h1{margin:0;font-size:14px;letter-spacing:5px;color:var(--accent);font-weight:800}
+  .topbar .spacer{flex:1}
+  .wallet{font-size:11px;letter-spacing:1.6px;color:#ffd578}
+  .wallet b{font-size:14px}
+  .tabs{display:flex;gap:6px}
+  .tabs button{font:inherit;font-size:9px;letter-spacing:2px;font-weight:700;padding:7px 12px;border-radius:7px;
+    background:#0d1a26;border:1px solid var(--line);color:#9fb8cc;cursor:pointer}
+  .tabs button.on{background:rgba(89,201,255,.16);border-color:var(--accent);color:#d8f2ff}
+  .body{flex:1;min-height:0;display:flex;gap:14px;padding:0 14px 14px;pointer-events:auto}
+  .col{flex:1;min-width:0;overflow-y:auto;display:flex;flex-direction:column;gap:8px;padding-right:4px}
+  .card{background:linear-gradient(180deg,rgba(13,26,38,.94),rgba(8,17,26,.94));
+    border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+  .card h2{margin:0 0 8px;font-size:9.5px;letter-spacing:2.4px;color:#7fb6d6}
+  .opt{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;cursor:pointer;
+    background:#091420;border:1px solid rgba(255,255,255,.06);margin-bottom:6px;transition:.12s}
+  .opt:hover{border-color:var(--line)}
+  .opt.on{border-color:var(--accent);background:rgba(89,201,255,.1)}
+  .opt.locked{opacity:.55}
+  .opt .ico{width:34px;height:34px;border-radius:6px;flex:0 0 34px;display:grid;place-items:center;
+    font-size:17px;background:#0f2233;border:1px solid rgba(255,255,255,.08)}
+  .opt .grow{flex:1;min-width:0}
+  .opt b{display:block;font-size:10px;letter-spacing:1.4px;color:#e6f4ff}
+  .opt em{display:block;font-style:normal;font-size:8px;letter-spacing:.7px;color:#7b93a6;line-height:1.5}
+  .opt .price{font-size:10px;letter-spacing:1.2px;color:#ffd578;white-space:nowrap}
+  .opt .price.free{color:#6dffa8}
+  .stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+  .stat{background:#08121c;border:1px solid rgba(255,255,255,.06);border-radius:7px;padding:6px 8px}
+  .stat span{display:block;font-size:7px;letter-spacing:1.4px;color:#6d8496}
+  .stat b{font-size:13px;letter-spacing:1px;color:#cfeaff}
+  .big{width:100%;font:inherit;font-size:11px;letter-spacing:3px;font-weight:800;padding:12px;border-radius:9px;
+    background:var(--accent);color:#02131c;border:0;cursor:pointer;margin-top:6px}
+  .big:disabled{background:#16242f;color:#5c7285;cursor:not-allowed}
+  .ghost{width:100%;font:inherit;font-size:9px;letter-spacing:2px;padding:9px;border-radius:8px;margin-top:6px;
+    background:#0d1a26;border:1px solid var(--line);color:#9fb8cc;cursor:pointer}
+  .hint{font-size:8px;letter-spacing:.8px;line-height:1.6;color:#6d8496;margin:0}
+  .warn{color:#ff9aa4}
+  .hidden{display:none !important}
+
+  /* battle HUD */
+  #battleHud{position:fixed;inset:0;pointer-events:none;display:flex;flex-direction:column;justify-content:space-between}
+  .bh-top{display:flex;gap:10px;padding:10px 14px;align-items:flex-start}
+  .bh-bar{flex:1;max-width:340px}
+  .bh-bar span{display:block;font-size:7px;letter-spacing:1.6px;color:#7fb6d6;margin-bottom:3px}
+  .bh-bar i{display:block;height:7px;border-radius:4px;background:#12222f;overflow:hidden}
+  .bh-bar i u{display:block;height:100%;background:linear-gradient(90deg,#59c9ff,#2f8fbf);transition:width .15s}
+  .bh-bar.enemy i u{background:linear-gradient(90deg,#ff8a6b,#c23c3c)}
+  .bh-bottom{display:flex;align-items:flex-end;gap:10px;padding:10px 14px}
+  .bh-btn{pointer-events:auto;font:inherit;font-size:9px;letter-spacing:2px;font-weight:700;padding:11px 14px;
+    border-radius:9px;background:rgba(10,20,30,.9);border:1px solid var(--line);color:#cfeaff;cursor:pointer}
+  .bh-btn.ready{border-color:#6dffa8;color:#6dffa8;box-shadow:0 0 16px rgba(109,255,168,.25)}
+  .bh-btn:disabled{opacity:.45;border-color:rgba(255,255,255,.1);color:#5c7285}
+  .bh-jets{display:flex;gap:6px;flex:1;flex-wrap:wrap}
+  .jet-chip{font-size:8px;letter-spacing:1.2px;padding:6px 9px;border-radius:7px;background:rgba(10,20,30,.9);
+    border:1px solid rgba(255,255,255,.1);color:#9fb8cc}
+  .jet-chip.on{border-color:var(--accent);color:#cfeaff}
+  .bh-center{position:fixed;inset:0;display:grid;place-items:center;pointer-events:none}
+  .banner{font-size:16px;letter-spacing:6px;color:var(--accent);text-shadow:0 0 24px rgba(89,201,255,.6);
+    opacity:0;transition:opacity .2s}
+  .banner.show{opacity:1}
+
+  /* results */
+  .result{position:fixed;inset:0;display:grid;place-items:center;background:rgba(3,7,11,.86);pointer-events:auto}
+  .result-card{width:min(460px,92vw);background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;text-align:center}
+  .result-card h2{margin:0 0 4px;font-size:15px;letter-spacing:4px;color:var(--accent)}
+  .result-card p{margin:0 0 12px;font-size:9.5px;letter-spacing:1.2px;color:#8aa8bd;line-height:1.6}
+  .result-card .take{font-size:12px;letter-spacing:2px;color:#ffd578;margin-bottom:12px}
+
+  @media (max-width:760px){
+    .topbar h1{font-size:11px;letter-spacing:3px}
+    .body{flex-direction:column;gap:8px}
+    .col{flex:0 0 auto;max-height:44vh}
+    .opt em{display:none}
+    .big{padding:10px;font-size:10px;letter-spacing:2px}
+  }
+  @media (max-height:520px){
+    .topbar{padding:6px 10px}
+    .card{padding:7px 9px}
+    .col{max-height:100%}
+    .body{flex-direction:row}
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<!-- ===================== DOCK / FLEET ===================== -->
+<div id="dock" class="screen">
+  <div class="topbar">
+    <h1>IRON TIDE</h1>
+    <div class="tabs">
+      <button data-tab="dock" class="on" type="button">DOCK</button>
+      <button data-tab="build" type="button">BUILD</button>
+      <button data-tab="hangar" type="button">HANGAR</button>
+    </div>
+    <div class="spacer"></div>
+    <div class="wallet">CREDITS <b id="credits">600</b></div>
+  </div>
+  <div class="body">
+    <div class="col" id="dockCol">
+      <div class="card">
+        <h2 id="tabTitle">YOUR FLAGSHIP</h2>
+        <div id="tabBody"></div>
+      </div>
+    </div>
+    <div class="col" id="sideCol">
+      <div class="card">
+        <h2>LOADOUT</h2>
+        <div class="stats" id="loadoutStats"></div>
+        <p class="hint" id="loadoutHint"></p>
+      </div>
+      <div class="card">
+        <h2>SORTIE</h2>
+        <p class="hint" id="sortieHint">Clear the enemy fleet to earn credits and repairs.</p>
+        <button id="sortieBtn" class="big" type="button">SAIL INTO BATTLE ▸</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== BATTLE ===================== -->
+<div id="battleHud" class="screen hidden">
+  <div class="bh-top">
+    <div class="bh-bar"><span>HULL</span><i><u id="hullBar" style="width:100%"></u></i></div>
+    <div class="bh-bar enemy"><span>ENEMY FLEET</span><i><u id="enemyBar" style="width:100%"></u></i></div>
+  </div>
+  <div class="bh-center"><div class="banner" id="banner"></div></div>
+  <div class="bh-bottom">
+    <button id="fireBtn" class="bh-btn" type="button">FIRE</button>
+    <div class="bh-jets" id="jetChips"></div>
+    <button id="leaveBtn" class="bh-btn" type="button">RETREAT</button>
+  </div>
+</div>
+
+<div id="result" class="result hidden">
+  <div class="result-card">
+    <h2 id="resultTitle">SORTIE CLEARED</h2>
+    <p id="resultText"></p>
+    <div class="take" id="resultTake"></div>
+    <button id="resultBtn" class="big" type="button">BACK TO THE DOCK</button>
+  </div>
+</div>
+
+<script src="../_shared/sdk.js"></script>
+<script src="fleet.js"></script>
+<script src="game.js"></script>
+</body>
+</html>

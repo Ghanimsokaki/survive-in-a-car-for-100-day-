@@ -25,6 +25,24 @@ The first screen after sign-in is the **arcade**: a hub with the built-in game p
 in the repo. Cards show the creator, tags, star rating and play count; **Records** has your best run per
 game and a star rating you can change any time.
 
+Six games ship in the box — `iron-tide`, `last-convoy`, `radio-tower`, `pit-stop-panic`, `scrapyard-run`,
+`signal-lost` — and the hub lists them from the generated `games/index.json`, so a game added by pull
+request shows up on the shelf with no code change to the hub.
+
+### ⚓ Iron Tide (ship builder + fleet battle)
+
+Build the ship, then take it to war.
+
+* **Dock** — four hulls (skiff → corvette → destroyer → carrier), each with its own slot count, hull
+  points and speed. Your first skiff is free; every upgrade has to be earned.
+* **Build** — drop cannon, heavy cannon, torpedo, flak, armour and engine modules into the slots. The
+  loadout panel live-recomputes hull, dps, range, speed and the price before you commit.
+* **Hangar** — buy jets with credits from the dock: scout, interceptor, bomber, gunship. Jets fly
+  themselves and strafe whatever you are shooting at; the carrier launches three at once.
+* **Sortie** — sail against a fleet of other captains (AI). Steering with the stick, fire broadsides,
+  launch jets, and retreat when the hull bar turns red. Sinking ships and surviving the sortie pays
+  credits and salvage, and every run is scored into the arcade leaderboard.
+
 ### Add your own game (pull request)
 
 ```
@@ -150,7 +168,7 @@ The whole game is phone-first:
   drag; **pinch** to zoom the camera.
 * Big 48 px action cluster: anchor, workbench, scavenge, enter/exit rig, attack.
 * No pinch-to-zoom-page, no scroll, no iOS zoom-on-focus, safe-area insets on notched screens.
-* **Rotate hint** in portrait, and a ☰ in-game menu (tap twice) to leave the run.
+* **Landscape is automatic** — see below — and a ☰ in-game menu (tap twice) to leave the run.
 * Automatic quality tier: low-end phones drop shadows, pixel ratio and particle/prop budgets; the workbench
   becomes a full-screen sheet and the HUD scales to fit.
 
@@ -165,6 +183,29 @@ The whole game is phone-first:
 | `Tab` | Mobile workbench (craft / repair) | same |
 | `Enter` | Chat — everyone in the room sees it | same |
 | Drag / wheel / pinch | Orbit + zoom the camera | same |
+
+### Auto landscape (no tap required)
+
+`public/js/orientation.js` is the single owner of orientation, used by the 3D game, the arcade hub and the
+sandboxed community games:
+
+1. **`screen.orientation.lock('landscape')`** — requested together with fullscreen, because Android/Chrome
+   only grant the lock from a user gesture; the request is retried on the next few pointerdown/keydown
+   events until it sticks, and a successful lock also unlocks the lock again on unload.
+2. **Fullscreen first** on phones — `requestFullscreen()` hides the browser chrome so the lock is allowed
+   and the canvas gets the whole display.
+3. **CSS rotation fallback** — where the platform refuses (notably iOS Safari, which allows neither the
+   lock nor always-on fullscreen) the app rotates the run itself: `body.auto-land.run-live` becomes a
+   fixed `100vh × 100vw` stage turned 90° from its top-left corner, so the game is landscape before the
+   player touches anything. Because a transformed element becomes the containing block for fixed
+   children, the canvas, HUD, stick and toasts all lay themselves out in that stage. The renderer and
+   the camera read `stageSize()` (axes swapped while rotated) and every touch is mapped back with
+   `toStagePoint()`, so a swipe to the right on screen still steers to the right in the game. Turning
+   the phone for real removes the class again — nothing is sticky.
+
+The arcade's player does the same inside its own frame: in portrait it switches `.ap-stage` to a fixed,
+rotated stage and docks the toolbar to the bottom, so community games get a wide stage too. Nothing is
+blocking — if every step is refused the game still runs in portrait.
 
 ## 🧍 Your survivor, your rig
 
@@ -329,10 +370,17 @@ public/
   js/loot.js          physical loot drops: meshes, magnet drift, pickup, expiry
   js/inventory.js     backpack model + hotbar/backpack UI
   js/recipes.js       15 staples + 1000 generated recipes (seeded, effects)
+  js/orientation.js   auto landscape: fullscreen → orientation lock → CSS rotate
+  js/arcade.js        arcade hub, sandboxed game player, records + ratings
+  js/arcade-stats.js  Supabase ratings/runs/leaderboards (local fallback)
+  js/materials.js     procedural PBR material kit, quality tiers
   js/effects.js       pooled particle bursts (budgeted per device)
   js/audio.js         procedural WebAudio engine/wind/impacts
 api/                  Vercel functions: /api/room, /api/health, /api/config, /api/admin
 lib/admin-auth.mjs    server-side owner check (Supabase token → username → allow-list)
+games/                community games: <slug>/{game.json,icon.svg,index.html,…,js}
+games/_shared/sdk.js  the postMessage SDK every community game loads
+scripts/scan-games.mjs  validates every game.json and regenerates games/index.json
 supabase/schema.sql   tables, RLS policies, friend RPCs, owner gate, bans, signup trigger
 server.mjs            static + WebSocket + polling relay + config endpoint
 tests/                headless suites (npm test)
@@ -341,7 +389,8 @@ docs/DESIGN.md        game design document
 
 ## 🧪 Tests
 
-`npm test` copies the browser modules into a shim lane and runs four suites with no browser:
+`npm test` copies the browser modules into a shim lane and runs thirteen suites with no browser:
+(`tests/run-all.mjs` is the list; `node tests/build.mjs` must run first after any edit).
 
 * **simulation** — driving, fuel, anchors vs. tornado drift, bosses, scavenging, every recipe, melee,
   peers, days 1→100, death/respawn/win, 8k-frame input fuzz.
@@ -354,6 +403,11 @@ docs/DESIGN.md        game design document
 * **interiors + owner console** — all thirteen building archetypes enterable, doorways walkable, walls solid,
   roof hide/restore, interior looting + cooldown, and the admin gate: owner token verifies, a normal
   player's token is refused, the shipped anon key cannot unlock admin, forged ban calls return 403.
+* **arcade** — catalogue scan + merge (community manifests validated, featured-first ordering), the
+  sandboxed iframe contract, and the hub's ratings/records paths.
+* **fleet builder + auto landscape** — Iron Tide's hulls, modules, jets, slot limits, dock purchases, enemy
+  scaling and payouts, plus a full booted game: sail, fire, win, lose, return to dock; and the orientation
+  helper's idempotence, listeners and landscape state.
 * **loot + inventory + recipes** — 1000 generated recipes unique and browsable, drops only bank when you
   stand on them, magnet/expiry behaviour, stack caps, hotbar pinning, medkit/fuel/repair use, 24-per-page
   workbench paging + search, and every one of the 1,015 recipes crafting without an error.
