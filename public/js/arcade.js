@@ -10,17 +10,25 @@
  * are exported so the test suite can pin the behaviour without a browser.
  */
 import { ArcadeStats, ratingLabel, rankRuns } from './arcade-stats.js';
-import { installAutoLandscape, isTouchDevice, isPortrait } from './orientation.js';
+import {
+  installAutoLandscape, isTouchDevice, isPortrait, requestLandscape, requestPortrait,
+} from './orientation.js';
+import { applyPostClass } from './graphics.js';
+import { MODES } from './modes.js';
 
 export const CATALOGUE_URL = './games/index.json';
 export const BRIDGE = 'outrun-arcade';
 
-/** The game that ships with the repo. Rendered like any other card. */
+/**
+ * The game that ships with the repo. It is ONE game: everything else (siege,
+ * sprint, storm chaser…) is a mode inside it, chosen in the lobby — so the shelf
+ * stays honest instead of pretending each rule-set is a separate download.
+ */
 export const NATIVE_GAMES = [{
   id: 'outrun',
   title: '100 DAYS OUTRUN',
   author: 'ghanimz',
-  blurb: 'One rig, one highway, a hundred days of storms. Five modes, crafting, anchors, friends.',
+  blurb: 'One rig, one highway, a hundred days of storms. Crafting, anchors, tornadoes, friends — and a mode for every mood.',
   tags: ['survival', 'multiplayer', '3d'],
   accent: '#ffb347',
   icon: './icon.svg',
@@ -28,7 +36,11 @@ export const NATIVE_GAMES = [{
   featured: true,
   native: true,
   version: '2.1.0',
+  modes: MODES.map((m) => ({ id: m.id, name: m.name, icon: m.icon || '◆', accent: m.accent || '#ffb347', blurb: m.blurb })),
 }];
+
+/** How many modes the built-in game ships with (shown on its card). */
+export const NATIVE_MODE_COUNT = MODES.length;
 
 const ALLOWED_TYPES = new Set(['arcade:ready', 'arcade:state', 'arcade:score', 'arcade:close']);
 
@@ -126,6 +138,8 @@ export function cardHtml(game, stats = null) {
       </span>
       <span class="gc-body">
         <b class="gc-title">${escapeHtml(game.title)}</b>
+        ${game.modes?.length ? `<span class="gc-modes">${game.modes.slice(0, 4).map((m) =>
+    `<i style="--m:${escapeHtml(m.accent || '#ffb347')}">${escapeHtml(m.icon)} ${escapeHtml(m.name)}</i>`).join('')}${game.modes.length > 4 ? `<i class="more">+${game.modes.length - 4}</i>` : ''}</span>` : ''}
         <em class="gc-blurb">${escapeHtml(game.blurb)}</em>
         <span class="gc-meta">
           <span class="gc-stars" title="${escapeHtml(ratingLabel(rating))}">${starRow}</span>
@@ -137,6 +151,37 @@ export function cardHtml(game, stats = null) {
 }
 
 /** Reads the generated catalogue; a missing file is not an error (fresh checkout). */
+const CATALOGUE_CACHE_KEY = 'outrun-catalogue-v1';
+const CATALOGUE_TTL = 6 * 60 * 60 * 1000;
+
+/** The last catalogue a browser saw, so the hub paints before any network I/O. */
+export function readCachedCatalogue() {
+  try {
+    const raw = globalThis.localStorage?.getItem(CATALOGUE_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed?.games)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+export function writeCachedCatalogue(catalogue) {
+  try {
+    if (!Array.isArray(catalogue?.games)) return;
+    globalThis.localStorage?.setItem(CATALOGUE_CACHE_KEY, JSON.stringify({
+      ...catalogue,
+      cachedAt: Date.now(),
+    }));
+  } catch { /* private mode, quota, sandboxed iframe — all fine */ }
+}
+
+export function catalogueIsStale(catalogue, now = Date.now()) {
+  if (!catalogue?.cachedAt) return true;
+  return now - Number(catalogue.cachedAt) > CATALOGUE_TTL;
+}
+
 export async function loadCatalogue(fetchImpl = globalThis.fetch) {
   try {
     const res = await fetchImpl(`${CATALOGUE_URL}?v=${Date.now()}`, { cache: 'no-store' });
@@ -187,6 +232,7 @@ export class Arcade {
           <input id="arcSearch" placeholder="Search games, creators, tags…" autocomplete="off" spellcheck="false" />
         </label>
         <div class="arc-top-right">
+          <button class="arc-fs" data-fullscreen="label" type="button" title="Fullscreen (Alt+Enter)">⤢ FULLSCREEN</button>
           <span id="arcOnline" class="arc-online">SOLO</span>
           <button id="arcProfileBtn" class="arc-avatar" type="button" title="Account">?</button>
         </div>
@@ -347,8 +393,19 @@ export class Arcade {
 
   // ----------------------------------------------------------------- loading
   async refresh() {
-    await this.stats.load();
-    this.games = mergeCatalogues(NATIVE_GAMES, await loadCatalogue(this.fetchImpl));
+    // 1. paint immediately from the cached catalogue (no round trip)
+    const cached = readCachedCatalogue();
+    if (cached) {
+      this.games = mergeCatalogues(NATIVE_GAMES, cached);
+      this.render();
+    }
+    // 2. then pull the ratings and the live catalogue in parallel and repaint
+    const [, catalogue] = await Promise.all([
+      this.stats.load().catch(() => null),
+      loadCatalogue(this.fetchImpl),
+    ]);
+    if (!catalogue.offline) writeCachedCatalogue(catalogue);
+    this.games = mergeCatalogues(NATIVE_GAMES, catalogue);
     this.render();
     return this.games;
   }
@@ -444,6 +501,18 @@ export class Arcade {
 
   openGame(game) {
     this.playing = game;
+    // A game is the one part of the hub that wants landscape. The tap that
+    // opened it is a gesture, so this is where the lock is allowed to happen;
+    // the menu behind it stays portrait.
+    document.body.classList.add('run-live');
+    // community games get the same warm screen glow the 3D run has (HIGH is the
+    // sensible default: they are 2D canvases, so the cost is a CSS gradient)
+    applyPostClass(document.documentElement, 'high');
+    // the hub never rotates the page itself — it rotates the player stage — so
+    // clear any leftover CSS rotation from an earlier 3D run
+    document.body.classList.remove('auto-land');
+    document.documentElement.classList.remove('rot-stage');
+    if (isPortrait()) requestLandscape();
     const player = this.getPlayer();
     this.nodes.player.classList.remove('hidden');
     this.nodes.result.classList.add('hidden');
@@ -482,6 +551,11 @@ export class Arcade {
 
   closeGame() {
     this.playing = null;
+    document.body.classList.remove('run-live');
+    document.body.classList.remove('auto-land');
+    this.syncStage({ portrait: false, locked: false });
+    // back on the home: upright again, and out of fullscreen
+    requestPortrait();
     this.nodes?.player?.classList.add('hidden');
     if (this.nodes?.frame) {
       this.nodes.frame.src = 'about:blank';

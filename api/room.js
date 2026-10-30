@@ -1,22 +1,20 @@
 /**
  * Vercel serverless relay (HTTP polling lane).
- * WebSockets are not available on Vercel's serverless runtime, so the client
- * falls back to ~3 Hz polling through this endpoint. State is kept in the
- * warm lambda's module scope, which is enough for casual lobby-sized sessions.
- * For always-on low latency, host server.mjs on a Node box and point the game
- * at it with ?relay=wss://your-relay/ws.
+ *
+ * WebSockets are not available on the serverless runtime, so the client polls
+ * this endpoint ~3 Hz. With Supabase configured the room lives in Postgres
+ * (`room_messages`), which is what makes two phones see each other at all: a
+ * lambda's module scope is per-instance and dies on every cold start, so the
+ * old in-memory version only worked when both players landed on the same warm
+ * container. Without credentials it still falls back to that memory store, so a
+ * bare clone keeps working offline.
  */
-const rooms = globalThis.__outrunRooms || (globalThis.__outrunRooms = new Map());
-let seq = 0;
+import { createRoomStore } from '../lib/room-store.mjs';
 
-const sanitizeRoom = (r) => String(r || 'highway-01').toLowerCase().replace(/[^a-z0-9-_]/g, '').slice(0, 24) || 'highway-01';
+const store = globalThis.__outrunRoomStore
+  || (globalThis.__outrunRoomStore = createRoomStore());
 
-function channel(room) {
-  if (!rooms.has(room)) rooms.set(room, { msgs: [] });
-  return rooms.get(room);
-}
-
-export default function handler(req, res) {
+export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'content-type');
@@ -33,26 +31,17 @@ export default function handler(req, res) {
   try { if (typeof body === 'string') body = JSON.parse(body || '{}'); } catch { body = {}; }
   body = body || {};
 
-  const room = sanitizeRoom(body.room);
+  const room = String(body.room || 'highway-01');
   const id = String(body.id || 'anon').slice(0, 32);
-  const ch = channel(room);
+  const incoming = [];
+  if (body.msg && typeof body.msg === 'object') incoming.push(body.msg);
+  if (Array.isArray(body.msgs)) incoming.push(...body.msgs.slice(0, 30));
 
-  if (body.msg && typeof body.msg === 'object') {
-    ch.msgs.push({ seq: ++seq, ts: Date.now(), id, msg: { ...body.msg, id } });
-  }
-  if (Array.isArray(body.msgs)) {
-    for (const m of body.msgs.slice(0, 30)) {
-      if (m && typeof m === 'object') ch.msgs.push({ seq: ++seq, ts: Date.now(), id, msg: { ...m, id } });
-    }
-  }
-  if (ch.msgs.length > 140) ch.msgs.splice(0, ch.msgs.length - 140);
-
-  const cutoff = Date.now() - 9000;
-  ch.msgs = ch.msgs.filter((m) => m.ts > cutoff);
-  const msgs = ch.msgs.filter((m) => m.id !== id).slice(-70).map((m) => m.msg);
+  if (incoming.length) await store.push(room, id, incoming);
+  const out = await store.read(room, id);
 
   res.statusCode = 200;
   res.setHeader('content-type', 'application/json');
   res.setHeader('cache-control', 'no-store');
-  res.end(JSON.stringify({ msgs, room }));
+  res.end(JSON.stringify({ msgs: out.msgs, room: out.room, backend: out.backend }));
 }

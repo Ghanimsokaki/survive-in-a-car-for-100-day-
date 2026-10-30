@@ -1,11 +1,17 @@
 /**
  * AUTO LANDSCAPE
  *
- * Every screen in this game is designed for a wide viewport: the 3D HUD docks
- * its hotbar to the bottom edge, and the community games draw a horizon. Phones
- * held upright are the worst case for both, so this module tries to put the
- * device on its side automatically — with three fallbacks, because no single
- * browser lets you do it:
+ * Two different screens, two different shapes:
+ *
+ *   · THE HOME (sign-in, lobby, arcade) is portrait — it is a list of cards,
+ *     a friends strip and a big PLAY button, and rotating a menu sideways is
+ *     worse than leaving it upright. Nothing here ever turns the home.
+ *   · A RUN (the 3D game, a community game) is landscape: wide viewports are
+ *     what the HUD and the canvas were built for.
+ *
+ * `installAutoLandscape()` therefore only ever *asks* for landscape while a run
+ * is live (`body.run-live`), and hands the device back to portrait when the run
+ * ends. Where the browser allows it, the request uses three fallbacks:
  *
  *   1. `screen.orientation.lock('landscape')`  — Chrome/Android, needs fullscreen
  *   2. fullscreen + a second lock attempt      — same, after the gesture lands
@@ -48,9 +54,37 @@ const emit = () => state.listeners.forEach((fn) => {
   try { fn({ locked: state.locked, portrait: isPortrait() }); } catch { /* ignore */ }
 });
 
+/** Is a run on screen? Only then is landscape wanted. */
+export const isPlaying = () => {
+  try { return document.body?.classList.contains('run-live') === true; } catch { return false; }
+};
+
+/**
+ * Hands the device back to portrait and leaves fullscreen. Called when a run
+ * ends or the player backs out to the arcade, so the home is upright again.
+ */
+export async function requestPortrait() {
+  state.locked = false;
+  try {
+    const orientation = typeof screen !== 'undefined' ? screen.orientation : null;
+    if (orientation?.lock) {
+      await orientation.lock('portrait');
+      emit();
+      return true;
+    }
+  } catch { /* iOS and friends: nothing to lock */ }
+  try {
+    if (document.fullscreenElement && document.exitFullscreen) await document.exitFullscreen();
+  } catch { /* already out */ }
+  emit();
+  return false;
+}
+
 /** Asks the browser for fullscreen + a landscape lock. Safe to call repeatedly. */
-export async function requestLandscape({ fullscreen = true } = {}) {
+export async function requestLandscape({ fullscreen = true, force = false } = {}) {
   if (!isPhone()) return false;
+  // A menu has no business turning the phone. Only a live run may ask.
+  if (!force && !isPlaying()) return false;
   state.attempts += 1;
 
   if (fullscreen && state.canFullscreen) {
@@ -97,22 +131,24 @@ export function installAutoLandscape({ when = 'phone', onChange = null } = {}) {
   const gated = () => (when === 'any' ? isTouchDevice() : isPhone());
 
   const syncClass = () => {
-    if (!gated()) { document.body.classList.remove('auto-land'); return; }
-    const portrait = isPortrait();
-    document.body.classList.toggle('auto-land', portrait);
+    // `auto-land` means "rotate the run in CSS". Off the home it is meaningless,
+    // and on the home it must never be set — the menu is portrait by design.
+    const on = gated() && isPlaying() && isPortrait();
+    if (document.body) document.body.classList.toggle('auto-land', on);
+    if (!on && document.documentElement?.classList) document.documentElement.classList.remove('rot-stage');
     emit();
   };
 
   const retry = () => {
     if (!gated()) return;
-    if (isPortrait()) requestLandscape();
+    if (isPlaying() && isPortrait()) requestLandscape();
     syncClass();
   };
 
   // one-shot gesture listeners: browsers only honour fullscreen/lock inside them
   const onGesture = () => {
     if (!gated()) return;
-    if (isPortrait() && !state.locked && state.attempts < 6) requestLandscape();
+    if (isPlaying() && isPortrait() && !state.locked && state.attempts < 6) requestLandscape();
     syncClass();
   };
   window.addEventListener('pointerdown', onGesture, { passive: true, once: false });
@@ -120,7 +156,7 @@ export function installAutoLandscape({ when = 'phone', onChange = null } = {}) {
   window.addEventListener('orientationchange', () => setTimeout(retry, 200));
   window.addEventListener('resize', () => setTimeout(syncClass, 160));
   document.addEventListener('fullscreenchange', () => {
-    if (!document.fullscreenElement && isPortrait()) {
+    if (!document.fullscreenElement && isPortrait() && isPlaying()) {
       state.locked = false;
       setTimeout(retry, 120);
     }
@@ -133,7 +169,7 @@ export function installAutoLandscape({ when = 'phone', onChange = null } = {}) {
 
 /** Escape hatch for an explicit "rotate" button. */
 export async function forceLandscape() {
-  const ok = await requestLandscape();
+  const ok = await requestLandscape({ force: true });
   document.body.classList.toggle('auto-land', !ok && isPortrait());
   return ok;
 }

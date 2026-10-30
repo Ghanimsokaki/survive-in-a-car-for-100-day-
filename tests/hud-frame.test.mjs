@@ -88,12 +88,13 @@ console.log('\nlandscape frame');
 console.log('\ninstalled app');
 {
   const manifest = JSON.parse(readFileSync(`${ROOT}public/manifest.webmanifest`, 'utf8'));
-  check('the manifest forces landscape', manifest.orientation === 'landscape', manifest.orientation);
-  check('the manifest opens fullscreen', manifest.display === 'fullscreen', manifest.display);
+  // the home is a portrait menu; landscape is requested per run, not by the app
+  check('the manifest does not pin the app to landscape', manifest.orientation === 'any', manifest.orientation);
+  check('the manifest opens standalone (portrait home)', manifest.display === 'standalone', manifest.display);
   check('the manifest ships icons', Array.isArray(manifest.icons) && manifest.icons.length >= 2);
   check('the page links the manifest', /rel="manifest"/.test(html));
-  check('Samsung/Chromium orientation hints are present',
-    /name="screen-orientation" content="landscape"/.test(html));
+  check('Samsung/Chromium orientation hints say "any"',
+    /name="screen-orientation" content="any"/.test(html));
 }
 
 console.log('\norientation');
@@ -107,7 +108,12 @@ console.log('\norientation');
   check('auto landscape retries on gesture and rotation',
     /pointerdown/.test(orientJs) && /orientationchange/.test(orientJs));
   check('iOS gets a CSS rotation fallback', /auto-land/.test(orientJs));
-  check('the lock is best-effort, never blocking', /Promise\.race/.test(mainJs) && /catch \{\}/.test(mainJs));
+  // PLAY must never wait on the orientation lock: it is fired and forgotten,
+  // and the lock itself swallows its own failures.
+  const startRunSrc = mainJs.slice(mainJs.indexOf('async function startRun'), mainJs.indexOf('// presence:'));
+  check('the lock is best-effort, never blocking',
+    /goLandscape\(\);/.test(startRunSrc) && !/await goLandscape/.test(startRunSrc)
+    && /catch \{[^}]*\}/.test(orientJs), 'PLAY fires the lock and moves on');
   check('the rotate overlay can trigger the lock', /id="rotateLock"/.test(html));
   check('the overlay can still be dismissed', /id="rotateDismiss"/.test(html));
 }

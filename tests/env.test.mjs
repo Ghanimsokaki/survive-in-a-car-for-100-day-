@@ -128,7 +128,8 @@ console.log('\nbuild bakes config for static hosts');
 
   const html = await readFile(path.join(dist, 'index.html'), 'utf8');
   check('index.html loads the inline fallback before main.js',
-    html.indexOf('supabase-config.js') > 0 && html.indexOf('supabase-config.js') < html.indexOf('js/main.js'));
+    html.indexOf('supabase-config.js') > 0
+    && html.indexOf('supabase-config.js') < html.indexOf('src="./js/main.js"'));
 
   // and the guest-only build when nothing is set
   await rm(dist, { recursive: true, force: true });

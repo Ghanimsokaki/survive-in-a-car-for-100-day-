@@ -7,20 +7,41 @@
 <meta name="mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-<!-- installed-app / phone orientation: landscape, fullscreen -->
-<meta name="screen-orientation" content="landscape" />
-<meta name="x5-orientation" content="landscape" />
+<!-- The home (sign-in, lobby, arcade) is portrait; only a run asks for
+     landscape, at the moment the player presses PLAY. Telling the browser the
+     whole app is landscape made phones turn the menu sideways and locked it
+     there, which is the opposite of what a menu wants. -->
+<meta name="screen-orientation" content="any" />
+<meta name="x5-orientation" content="auto" />
+<meta name="full-screen" content="yes" />
+<meta name="x5-fullscreen" content="true" />
 <meta name="format-detection" content="telephone=no" />
 <link rel="manifest" href="./manifest.webmanifest" />
 <link rel="apple-touch-icon" href="./icon.svg" />
 <title>100 Days Outrun — Highway Survival</title>
 <meta name="description" content="A 3D multiplayer post-apocalyptic highway survival run. 100 days, one car, endless storms." />
 <link rel="stylesheet" href="./styles.css" />
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌪️</text></svg>" />
+<!-- The home only needs these; the 3D engine is imported on PLAY (see main.js).
+     Naming them here saves the browser a discovery round trip on a phone. -->
+<link rel="modulepreload" href="./js/main.js" />
+<link rel="modulepreload" href="./js/preview.js" />
+<link rel="modulepreload" href="./js/account.js" />
+<link rel="modulepreload" href="./js/authui.js" />
+<link rel="modulepreload" href="./js/arcade.js" />
+<link rel="modulepreload" href="./js/orientation.js" />
+<link rel="dns-prefetch" href="https://fonts.gstatic.com" />
+  <link rel="icon" href="./icon.svg" type="image/svg+xml" />
 </head>
 <body>
 <div id="app"></div>
 <div id="vignette"></div>
+<!-- screen-space post layer: driven by the graphics tier (`html.q-high`, `q-ultra`) -->
+<div id="postfx" aria-hidden="true">
+  <div class="pf-glow"></div>
+  <div class="pf-flare"></div>
+  <div class="pf-grain"></div>
+  <div class="pf-edge"></div>
+</div>
 <div id="flash"></div>
 
 <!-- ============ SIGN IN (ROBLOX-STYLE) ============ -->
@@ -128,6 +149,7 @@
   <div class="lobby-card">
     <div class="lobby-head">
       <button id="arcadeBtn" class="arcade-back" type="button" title="Back to the arcade">◀ ARCADE</button>
+      <button id="fsLobby" class="fs-btn" data-fullscreen="label" type="button" title="Fullscreen (Alt+Enter)">⤢ FULLSCREEN</button>
       <div class="logo-mark">100</div>
       <div class="lobby-title">
         <h1>DAYS OUTRUN</h1>
@@ -195,10 +217,16 @@
             <button type="button" data-quality="low">LOW</button>
             <button type="button" data-quality="medium">MED</button>
             <button type="button" data-quality="high">HIGH</button>
+            <button type="button" data-quality="ultra">ULTRA</button>
           </div>
+          <p id="qualityHint" class="quality-hint">AUTO — picked for this device</p>
         </div>
 
         <button id="playBtn" class="play-btn">START THE RUN <span>▸</span></button>
+        <div id="loading" class="gone" aria-live="polite">
+          <span class="ld-text">LOADING</span>
+          <span class="ld-bar"><i></i></span>
+        </div>
         <p id="netStatus" class="net-status">checking relay…</p>
       </div>
 
@@ -398,7 +426,17 @@
   <button id="rotateDismiss" type="button">PLAY ANYWAY</button>
 </div>
 
-<div id="loading"><div class="spin"></div><span>WARMING THE ENGINE…</span></div>
+<button id="fsExit" class="fs-exit" data-fullscreen="icon" type="button" title="Fullscreen (Alt+Enter)" aria-label="Toggle fullscreen">⤢</button>
+<script>
+  // There is no boot splash any more: the sign-in screen is static HTML and is
+  // usable before a single module parses. This only covers the pathological
+  // case where main.js never loads at all.
+  setTimeout(function () {
+    if (document.documentElement.classList.contains('booted')) return;
+    var status = document.getElementById('netStatus');
+    if (status) status.textContent = 'still connecting — check your connection';
+  }, 6000);
+</script>
 
 <script type="module" src="./js/main.js"></script>
 </body>

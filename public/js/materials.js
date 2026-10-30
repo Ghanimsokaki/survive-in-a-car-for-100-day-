@@ -164,11 +164,14 @@ export function buildEnvironment(renderer, scene) {
  * @param {THREE.Texture|null} [opts.env]
  */
 export function createMaterialKit({ detail = 'medium', env = null } = {}) {
-  const high = detail === 'high';
+  // ULTRA is HIGH with the dials further up: same materials, sharper maps,
+  // stronger reflections. Keeping it a superset means nothing can regress.
+  const ultra = detail === 'ultra';
+  const high = detail === 'high' || ultra;
   const medium = detail === 'medium' || high;
   const base = {
     envMap: high ? env : null,
-    envMapIntensity: high ? 0.85 : 0.35,
+    envMapIntensity: ultra ? 1.15 : high ? 0.85 : 0.35,
   };
 
   const skin = () => {
@@ -252,6 +255,7 @@ export function createMaterialKit({ detail = 'medium', env = null } = {}) {
 
 /** Geometry segment counts per detail tier — the cheapest FPS lever we have. */
 export function segmentsFor(detail) {
+  if (detail === 'ultra') return { capsule: 16, ball: 26, sphereW: 36, sphereH: 24 };
   if (detail === 'high') return { capsule: 12, ball: 20, sphereW: 28, sphereH: 18 };
   if (detail === 'medium') return { capsule: 6, ball: 14, sphereW: 20, sphereH: 12 };
   return { capsule: 4, ball: 10, sphereW: 12, sphereH: 8 };

@@ -19,15 +19,82 @@ npm test           # headless suites (simulation, accounts, both UI flows)
 
 No install step, no build step. `public/vendor/three.module.js` is vendored, so the game boots even offline.
 
+## 🧯 Errors: what is guarded, and where
+
+The game is built so that a failure is *local and visible* instead of a frozen screen:
+
+| Failure | What happens |
+| --- | --- |
+| A module 404s | the dev server answers a real **404** (it used to answer `200` + `index.html`, which the browser reports as a confusing MIME error). PLAY shows "could not load the 3D engine", restores the button and retries. |
+| The 3D kit fails to load | the lobby stays on screen, portrait is handed back, nothing is blocked. |
+| A frame throws | `Game.onFrameError` logs the first one, keeps the loop alive, warns the player after 30, and pauses after 120 instead of burning the battery on a still image. |
+| The GPU drops the context (backgrounding, OOM, driver reset) | `webglcontextlost` is caught, drawing pauses, and `webglcontextrestored` resumes the loop with a clean clock. Without this a phone shows a black canvas for the rest of the session. |
+| A browser refuses AudioContext / fullscreen / orientation lock | the feature is skipped (`console.warn` at most); the game keeps playing, silently. |
+| A community game loads without the hub SDK | both Iron Tide and the template fall back to a local `sdk` shim instead of throwing `ReferenceError` every frame. |
+| A directory has no `index.html` | 404 — it is never silently answered with the hub page. |
+
+`npm test` covers the observable half of that list (the frame guard, context loss, the SDK
+fallback, the 404 rules and the loader contract); the browser half is guarded with optional
+chaining so an absent API can never throw.
+
+## ⚡ No loading screen
+
+There is **no splash and no blocking loading card** anywhere:
+
+* **Boot** — the sign-in screen is static HTML, so it is interactive before a single module parses. The old
+  "WARMING THE ENGINE…" overlay is gone.
+* **PLAY** — pressing it leaves the lobby on screen and turns the button into a live percentage
+  (`LOADING 42%`) with a thin progress bar underneath. The percentage is measured from the bytes actually on
+  the wire, not a fake timer.
+* **Warm start** — the 3D kit starts downloading 600 ms after the menu is interactive (and again on the first
+  tap). It used to wait for `requestIdleCallback`, which on this page can never fire because the avatar
+  preview draws every frame — that is exactly why PLAY sometimes looked frozen.
+* **It cannot get stuck** — if the kit fails, the chip disappears, the PLAY label is restored, the menu stays
+  up with "could not load the 3D engine — check your connection and press PLAY again", and pressing PLAY
+  retries. The lobby is only hidden once the world is actually built.
+
+## ⚡ Fast loading
+
+The menu used to cost a megabyte before it worked: `main.js` statically imported three.js (690 KB) and
+`game.js` (90 KB) plus the world, vehicle, avatar, tornado and HUD modules, so the sign-in box was on screen
+but dead for seconds on a phone. Now:
+
+* **The home is a menu, not a game.** `main.js` statically imports ~126 KB (12 small modules) and nothing
+  from the 3D engine. `import('./game.js')` happens on PLAY — or in the background via
+  `requestIdleCallback` once the menu is interactive, so PLAY is usually instant.
+* **The avatar portrait is 2D.** `public/js/preview.js` draws the sign-in/lobby survivor with the plain
+  canvas API (no WebGL context, no imports). The 3D rig is only built when a run starts.
+* **The catalogue is cached.** `games/index.json` paints from `localStorage` first, then refreshes behind
+  it; ratings load in parallel instead of in front of the shelf.
+* **Config is asked once, in parallel.** `/api/config` and `config.json` are fetched together instead of
+  one after the other, and the boot never waits on them to show the menu.
+* **The wire is small.** The Node server gzips/brotli-compresses text (`three.module.js`: 690 KB → 166 KB),
+  sends `ETag`/`304` on repeat visits, and marks `/vendor/*` immutable for a year. Vercel gets the same
+  cache policy from `vercel.json`.
+* **Nothing can trap you.** If the module graph fails, the boot card turns into "still loading — check your
+  connection" and then fails open to the sign-in screen.
+
+`tests/boot.test.mjs` walks the real import graph and fails the build if three.js or `game.js` ever creeps
+back into the home path, and checks the compression, the 304 and the cache headers against a live server.
+
 ## 🕹 The arcade
 
 The first screen after sign-in is the **arcade**: a hub with the built-in game plus every community game
 in the repo. Cards show the creator, tags, star rating and play count; **Records** has your best run per
 game and a star rating you can change any time.
 
-Six games ship in the box — `iron-tide`, `last-convoy`, `radio-tower`, `pit-stop-panic`, `scrapyard-run`,
-`signal-lost` — and the hub lists them from the generated `games/index.json`, so a game added by pull
-request shows up on the shelf with no code change to the hub.
+**Two games, on purpose:**
+
+| Card | What it is |
+| --- | --- |
+| **100 DAYS OUTRUN** | the built-in 3D game — *one* game with **five modes** (100 Days · Endless Road · Siege · Fuel Run · Storm Chaser), chosen in the lobby. Its modes are printed on the card, so it reads as one game with a lot inside it, not five downloads. |
+| **IRON TIDE** | the ship builder / fleet battle: build a hull, buy jets, sink other captains. |
+
+The shelf is generated from `games/index.json` (see `scripts/scan-games.mjs`), so it is still a platform:
+add `games/<slug>/` in a pull request and it appears once merged. The five older sample games
+(`last-convoy`, `radio-tower`, `pit-stop-panic`, `scrapyard-run`, `signal-lost`) are **parked** in
+`games/_parked/` — kept in the repo as examples and contributors' reference, skipped by the scanner, the
+generated catalogue, the hub and the build.
 
 ### ⚓ Iron Tide (ship builder + fleet battle)
 
@@ -168,7 +235,8 @@ The whole game is phone-first:
   drag; **pinch** to zoom the camera.
 * Big 48 px action cluster: anchor, workbench, scavenge, enter/exit rig, attack.
 * No pinch-to-zoom-page, no scroll, no iOS zoom-on-focus, safe-area insets on notched screens.
-* **Landscape is automatic** — see below — and a ☰ in-game menu (tap twice) to leave the run.
+* **The menu is portrait, the run is landscape** — automatic, no tap required (see below) — plus a ☰
+  in-game menu (tap twice) to leave the run.
 * Automatic quality tier: low-end phones drop shadows, pixel ratio and particle/prop budgets; the workbench
   becomes a full-screen sheet and the HUD scales to fit.
 
@@ -184,7 +252,19 @@ The whole game is phone-first:
 | `Enter` | Chat — everyone in the room sees it | same |
 | Drag / wheel / pinch | Orbit + zoom the camera | same |
 
-### Auto landscape (no tap required)
+### The home is portrait, the run is landscape
+
+The sign-in, lobby and arcade are a **portrait** menu: cards stacked down the screen, the tab bar under the
+thumb, no sideways scrolling, 44 px tap targets and safe-area padding for notched phones. The app no longer
+declares `screen-orientation: landscape` in its `<meta>` tags or its web manifest (`orientation: "any"`),
+because a phone that opens the game on a menu should not be yanked sideways before the player has pressed
+anything.
+
+Landscape is requested **only while a run is live** (`body.run-live`): pressing PLAY on the 3D game, or
+opening a game in the arcade. Leaving the run calls `requestPortrait()` — which unlocks the orientation and
+leaves fullscreen — so the home comes back upright.
+
+### Auto landscape during a run
 
 `public/js/orientation.js` is the single owner of orientation, used by the 3D game, the arcade hub and the
 sandboxed community games:
@@ -225,10 +305,51 @@ running around by everyone else in the room.
 * **Weather:** dust storms, EMP thunderstorms, acid rain (eats hull and blades), heatwaves, gale winds,
   and drifting **tornadoes (Cat 1–5)** that pull and lift anything not anchored.
 
-## ⚙️ Graphics setting
-The lobby has a **GRAPHICS** switch — `AUTO / LOW / MED / HIGH` — remembered across sessions. LOW drops the
-resolution cap, shadows and half the scenery detail; HIGH forces full density and shadows. AUTO keeps the
-old device heuristics (coarse pointer + core count + screen size).
+## ⚙️ Graphics: AUTO · LOW · MED · HIGH · **ULTRA**
+
+The lobby has a **GRAPHICS** switch, remembered across sessions. Every renderer decision now comes from one
+table (`public/js/graphics.js`) instead of scattered `quality === 'high'` ternaries, so a tier is a complete
+description of the scene:
+
+| | LOW | MED | HIGH | **ULTRA** |
+| --- | --- | --- | --- | --- |
+| render scale cap | 1× | 1.4× | 1.85× | **2.5×** |
+| shadows | off | 1K | 2K soft | **4K soft, 78 m frustum** |
+| draw distance | 300 m | 430 m | 560 m | **760 m** |
+| scenery props | 56 | 72 | 96 | **124** |
+| cloud layers | — | 1 | 2 | **3** |
+| PBR environment | — | — | ✓ | **✓ stronger** |
+| avatar detail | low | medium | high | **ultra (26-segment parts)** |
+| particles | 0.45× | 0.7× | 1× | **1.5×** |
+| post layer | — | vignette | + glow | **+ grain + lens flare** |
+
+* **ULTRA is opt-in** — never auto-selected, because a weak integrated GPU would stutter before the frame
+  governor noticed. It still degrades gracefully: the governor trades resolution (down to 0.7×) to hold the
+  frame rate.
+* The **post layer** (bloom-ish sun glow, anamorphic flare, film grain, chromatic edge falloff) is pure CSS
+  over the canvas — `html.q-high` / `q-ultra`, and only while `body.run-live` — so none of it costs a render
+  pass. `prefers-reduced-motion` turns the grain animation off.
+* The **clouds** are new: 1–3 layers of soft sprites on a procedural canvas texture, drifting and recycling
+  around the camera (`World.buildClouds`). They fade out at night with the rest of the sky.
+* AUTO now only drops to LOW on genuinely weak hardware (`≤ 3 cores` or a sub-360 px viewport); a modern
+  phone gets MEDIUM, which keeps its shadows.
+* Weather used to hard-code a 430 m horizon and silently threw away the tier's draw distance — it now scales
+  the tier's value instead (storm = 70 %, dust = 35 %, clear = 100 %).
+
+## ⛶ Fullscreen
+
+One button in three places — the arcade top bar, the lobby header and the in-game HUD — plus **Alt+Enter**
+and **Shift+F** (never inside a text field, so chatting is safe). `public/js/fullscreen.js`:
+
+* Calls `requestFullscreen({ navigationUI: 'hide' })` inside the click/keydown gesture (the only time
+  browsers allow it), with `webkitRequestFullscreen` / `msRequestFullscreen` fallbacks.
+* **Degrades instead of breaking**: iOS Safari refuses fullscreen for anything that is not a video, so the
+  module reports `unsupported`, the button dims, and the rest of the game carries on (the CSS-rotated
+  landscape stage still works).
+* Remembers the preference, and re-applies it on the next **PLAY** tap — a real gesture, so it is allowed —
+  never automatically on load.
+* Syncs on `fullscreenchange`, so Esc / F11 / a system swipe keeps the icon honest, and adds safe-area
+  padding for the notch once the browser chrome is gone.
 
 ## 🏚 Enterable buildings
 
@@ -331,6 +452,27 @@ weapon and chat are relayed ~11×/s. Three transport lanes, one JSON envelope:
 
 Point the client at a remote relay with `?relay=wss://your-relay.example/ws`.
 
+### Where the rooms live
+
+The WebSocket lane (`npm start`) keeps rooms in the process. The polling lane — the one that runs on Vercel,
+where there are no sockets — used to keep them in the lambda's module scope, which means two players only saw
+each other if the platform happened to put them on the same warm instance.
+
+When Supabase is configured, **the server keeps rooms in Postgres instead**: `lib/room-store.mjs` inserts
+each message into `public.room_messages` (room, author, jsonb payload, timestamp) and reads the last 9
+seconds back, so every instance and every lambda shares one room. Stale rows are swept by the relay itself,
+guarded by an RLS delete policy that only allows rows older than two minutes. If the database stops
+answering, the store degrades to the in-memory lane and records the failure, which `/api/health` reports:
+
+```json
+{ "ok": true, "supabase": { "configured": true, "url": "https://….supabase.co", "reachable": true },
+  "relay": { "backend": "supabase", "writes": 118, "reads": 611, "fallbacks": 0 } }
+```
+
+`/api/health?deep=1` also asks the Supabase project itself (`auth/v1/health`), so a deployment can tell
+"the variables are set" apart from "the variables actually work". The Node server prints the same probe at
+boot.
+
 ## ▲ Deploy to Vercel
 
 ```bash
@@ -370,7 +512,10 @@ public/
   js/loot.js          physical loot drops: meshes, magnet drift, pickup, expiry
   js/inventory.js     backpack model + hotbar/backpack UI
   js/recipes.js       15 staples + 1000 generated recipes (seeded, effects)
-  js/orientation.js   auto landscape: fullscreen → orientation lock → CSS rotate
+  js/preview.js       dependency-free 2D avatar portrait for the home screens
+  js/graphics.js      the quality tier table every renderer setting reads from
+  js/fullscreen.js    fullscreen API wrapper: buttons, Alt+Enter, iOS fallback
+  js/orientation.js   auto landscape during a run; portrait home
   js/arcade.js        arcade hub, sandboxed game player, records + ratings
   js/arcade-stats.js  Supabase ratings/runs/leaderboards (local fallback)
   js/materials.js     procedural PBR material kit, quality tiers
@@ -378,6 +523,7 @@ public/
   js/audio.js         procedural WebAudio engine/wind/impacts
 api/                  Vercel functions: /api/room, /api/health, /api/config, /api/admin
 lib/admin-auth.mjs    server-side owner check (Supabase token → username → allow-list)
+lib/room-store.mjs    room relay storage: Supabase room_messages, memory fallback
 games/                community games: <slug>/{game.json,icon.svg,index.html,…,js}
 games/_shared/sdk.js  the postMessage SDK every community game loads
 scripts/scan-games.mjs  validates every game.json and regenerates games/index.json
@@ -389,7 +535,7 @@ docs/DESIGN.md        game design document
 
 ## 🧪 Tests
 
-`npm test` copies the browser modules into a shim lane and runs thirteen suites with no browser:
+`npm test` copies the browser modules into a shim lane and runs fifteen suites with no browser:
 (`tests/run-all.mjs` is the list; `node tests/build.mjs` must run first after any edit).
 
 * **simulation** — driving, fuel, anchors vs. tornado drift, bosses, scavenging, every recipe, melee,
@@ -408,6 +554,14 @@ docs/DESIGN.md        game design document
 * **fleet builder + auto landscape** — Iron Tide's hulls, modules, jets, slot limits, dock purchases, enemy
   scaling and payouts, plus a full booted game: sail, fire, win, lose, return to dock; and the orientation
   helper's idempotence, listeners and landscape state.
+* **fast boot + portrait home + supabase relay** — the real import graph of `main.js` (no three.js, no
+  game, < 200 KB), the 2D portrait preview, portrait-home/landscape-run orientation, the room store against
+  a fake PostgREST (insert shape, time window, author filter, degradation when the DB is down), and a live
+  server: compression, `ETag`/304, cache headers, `/api/health`, `/api/config` and the relay round trip.
+* **graphics tiers + fullscreen** — the tier table (monotonic pixel cap / shadow size / draw distance /
+  props / clouds), auto-detect, a real `Game` booted at all four tiers (4K shadows, PBR env, rim + fill
+  lights, fog, avatar detail, cloud sprites drifting and wrapping), material/segment scaling, and the
+  fullscreen module: enter/exit, the keyboard shortcuts, chat-field safety, and the iOS refusal path.
 * **loot + inventory + recipes** — 1000 generated recipes unique and browsable, drops only bank when you
   stand on them, magnet/expiry behaviour, stack caps, hotbar pinning, medkit/fuel/repair use, 24-per-page
   workbench paging + search, and every one of the 1,015 recipes crafting without an error.

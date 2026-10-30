@@ -17,6 +17,7 @@ import { rollLoot, isMaterial, ITEMS, itemName } from './items.js';
 import { MODES, DEFAULT_MODE, modeById as resolveMode, goalLabel } from './modes.js';
 import { loadBook, saveBook, commitRun, freshLabels, modeStats } from './records.js';
 import { stageSize, toStagePoint } from './orientation.js';
+import { tier as graphicsTier, resolveQuality, applyPostClass } from './graphics.js';
 
 export { RECIPES };
 
@@ -89,28 +90,41 @@ export class Game {
 
     this.qualityOption = quality || 'auto';
     this.setupGraphics();
+    const T = this.tier;
     this.world = new World(this.scene, 1337, this.quality);
-    if (this.quality !== 'high') {
-      this.world.sun.castShadow = this.quality === 'medium';
-      this.world.sun.shadow.mapSize.set(this.quality === 'medium' ? 1024 : 512, this.quality === 'medium' ? 1024 : 512);
-    } else {
-      this.world.sun.shadow.mapSize.set(2048, 2048);
+    this.world.sun.castShadow = T.shadows;
+    if (T.shadows) {
+      this.world.sun.shadow.mapSize.set(T.shadowSize, T.shadowSize);
+      // a wider, further shadow frustum keeps the whole horizon crisp on ULTRA
+      const cam = this.world.sun.shadow.camera;
+      cam.left = -T.shadowRadius; cam.right = T.shadowRadius;
+      cam.top = T.shadowRadius; cam.bottom = -T.shadowRadius;
+      cam.far = T.shadowFar;
+      cam.updateProjectionMatrix?.();
     }
-    this.world.setFogRange(this.quality === 'low' ? 70 : 90, this.quality === 'low' ? 300 : 430);
-    // PBR reflections: one cheap procedural panorama, prefiltered once. High
-    // quality only — it costs a render pass and a little VRAM.
-    this.envMap = this.quality === 'high' ? buildEnvironment(this.renderer, this.scene) : null;
-    this.avatarDetail = this.quality === 'high' ? 'high' : this.quality === 'medium' ? 'medium' : 'low';
+    this.world.setFogRange(T.fog[0], T.fog[1]);
+    this.world.applyTier?.(T);
+    // PBR reflections: one cheap procedural panorama, prefiltered once. HIGH and
+    // ULTRA only — it costs a render pass and a little VRAM.
+    this.envMap = T.env ? buildEnvironment(this.renderer, this.scene) : null;
+    this.avatarDetail = T.avatarDetail;
     // a cool rim light behind the camera-side shoulder: the cheapest way to make
     // a character read as a body instead of a flat cut-out on HIGH
-    if (this.quality === 'high') {
-      this.rimLight = new THREE.DirectionalLight(0x8fd0ff, 0.55);
+    if (T.rim > 0) {
+      this.rimLight = new THREE.DirectionalLight(0x8fd0ff, T.rim);
       this.rimLight.position.set(-7, 6, -9);
       this.scene.add(this.rimLight);
     }
-    this.effects = new Effects(this.scene, { scale: this.quality === 'low' ? 0.45 : this.quality === 'medium' ? 0.7 : 1 });
+    // ULTRA adds a soft warm fill from the sun side: it lifts the shadows that
+    // 4K shadow maps make deeper, so the scene reads instead of silhouetting
+    if (T.fill > 0) {
+      this.fillLight = new THREE.DirectionalLight(0xffd9a0, T.fill);
+      this.fillLight.position.set(9, 5, 6);
+      this.scene.add(this.fillLight);
+    }
+    this.effects = new Effects(this.scene, { scale: T.effects });
     // one reusable warm light for whichever interior you are standing in
-    this.interiorLight = new THREE.PointLight(0xffcf96, 0, this.quality === 'low' ? 14 : 22, 1.5);
+    this.interiorLight = new THREE.PointLight(0xffcf96, 0, T.interior, 1.5);
     this.interiorLight.position.set(0, 3, 0);
     this.scene.add(this.interiorLight);
     this.setupPlayer();
@@ -159,39 +173,48 @@ export class Game {
 
   // ------------------------------------------------------------------ setup
   setupGraphics() {
-    const coarse = window.matchMedia?.('(pointer: coarse)')?.matches;
+    const coarse = Boolean(window.matchMedia?.('(pointer: coarse)')?.matches);
     const smallest = Math.min(stageSize().w, stageSize().h);
     const cores = navigator.hardwareConcurrency || 4;
-    const lowEnd = Boolean(coarse && (smallest < 640 || cores <= 4));
-    // a manual setting always wins over the heuristics
-    this.qualityChoice = ['low', 'medium', 'high'].includes(this.qualityOption) ? this.qualityOption : 'auto';
-    this.quality = this.qualityChoice === 'auto'
-      ? (lowEnd ? 'low' : coarse ? 'medium' : 'high')
-      : this.qualityChoice;
-    this.pixelCap = this.quality === 'low' ? 1 : this.quality === 'medium' ? 1.4 : 1.85;
+    // a manual setting always wins over the heuristics (see graphics.js)
+    this.qualityChoice = resolveQuality({ choice: this.qualityOption, coarse, smallest, cores });
+    this.quality = this.qualityChoice;
+    this.tier = graphicsTier(this.quality);
+    this.pixelCap = this.tier.pixelCap;
 
-    this.renderer = new THREE.WebGLRenderer({ antialias: this.quality !== 'low', powerPreference: 'high-performance' });
-    // adaptive resolution: the frame governor trades pixels for frames
+    this.renderer = new THREE.WebGLRenderer({
+      antialias: this.tier.antialias,
+      powerPreference: 'high-performance',
+      alpha: false,
+      stencil: false,
+    });
+    this.renderer.debug = undefined;
+    // adaptive resolution: the frame governor trades pixels for frames, so even
+    // ULTRA degrades gracefully instead of stuttering
     this.renderScale = 1;
-    this.minScale = this.quality === 'high' ? 0.62 : 0.55;
+    this.minScale = this.tier.minScale;
     this.frames = 0;
     this.frameTime = 1 / 60;
     this.perfTimer = 0;
     this.fps = 60;
     this.renderer.setPixelRatio(this.targetPixelRatio());
     this.renderer.setSize(stageSize().w, stageSize().h);
-    this.renderer.shadowMap.enabled = this.quality !== 'low';
-    this.renderer.shadowMap.type = this.quality === 'high' ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+    this.renderer.shadowMap.enabled = this.tier.shadows;
+    this.renderer.shadowMap.type = this.tier.shadowSoft ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.06;
-    this.baseExposure = 1.06;
+    this.renderer.toneMappingExposure = this.tier.exposure;
+    this.baseExposure = this.tier.exposure;
     this.mount.appendChild(this.renderer.domElement);
+    this.installContextRecovery();
 
     this.scene = new THREE.Scene();
-    this.camera = new THREE.PerspectiveCamera(62, stageSize().w / stageSize().h, 0.1, 1200);
-    this.scene.fog = new THREE.Fog(0xb9a68a, this.quality === 'low' ? 70 : 90, this.quality === 'low' ? 300 : 430);
+    this.camera = new THREE.PerspectiveCamera(62, stageSize().w / stageSize().h, 0.1, 1400);
+    this.scene.fog = new THREE.Fog(0xb9a68a, this.tier.fog[0], this.tier.fog[1]);
     this.scene.background = new THREE.Color(0xb9a68a);
+    // screen-space post layer (vignette / glow / grain / flare) is pure CSS:
+    // `q-ultra` on <html> turns all of it on without a single extra render pass
+    applyPostClass(document.documentElement, this.quality);
   }
 
   setupPlayer() {
@@ -553,17 +576,68 @@ export class Game {
     el.focus();
   }
 
+  /**
+   * A phone can lose its WebGL context at any time — backgrounding the tab,
+   * a GPU memory squeeze, a driver reset. Without this the canvas stays black
+   * for the rest of the session and the game looks frozen. Three.js restores
+   * its own resources on `webglcontextrestored`; all we have to do is stop
+   * drawing, say so, and pick the loop back up.
+   */
+  installContextRecovery() {
+    const canvas = this.renderer.domElement;
+    if (!canvas?.addEventListener) return;
+    canvas.addEventListener('webglcontextlost', (e) => {
+      // the browser will restore it for us — do not let the default kill it
+      if (e?.preventDefault) e.preventDefault();
+      this.contextLost = true;
+      this.hud?.toast?.('GRAPHICS CONTEXT LOST — RESTORING…', 'warn');
+      console.warn('[render] WebGL context lost — waiting for the restore');
+    }, false);
+    canvas.addEventListener('webglcontextrestored', () => {
+      this.contextLost = false;
+      this.frameErrors = 0;
+      this.clock.getDelta();          // drop the seconds spent without a GPU
+      this.hud?.toast?.('GRAPHICS RESTORED', 'good');
+    }, false);
+  }
+
   // ------------------------------------------------------------------ loops
   loop() {
-    requestAnimationFrame(this.loop);
+    this._raf = requestAnimationFrame(this.loop);
+    if (this.disposed) return;       // the owner called dispose()
     const raw = this.clock.getDelta();
     const dt = Math.min(0.05, raw);
-    this.updatePerf(raw);
-    this.time += dt;
-    if (this.started && !this.paused) this.update(dt);
-    else this.updateIdle(dt);
-    this.updateCamera(dt);
-    this.renderer.render(this.scene, this.camera);
+    if (this.contextLost) return;    // nothing to draw until the GPU is back
+    try {
+      this.updatePerf(raw);
+      this.time += dt;
+      if (this.started && !this.paused) this.update(dt);
+      else this.updateIdle(dt);
+      this.updateCamera(dt);
+      this.renderer.render(this.scene, this.camera);
+      this.frameErrors = 0;
+    } catch (err) {
+      this.onFrameError(err);
+    }
+  }
+
+  /**
+   * One bad frame must not turn into a frozen game. The first failure is
+   * logged in full, the loop keeps trying, and if it is not transient the
+   * player is told what to do instead of staring at a still image.
+   */
+  onFrameError(err) {
+    this.frameErrors = (this.frameErrors || 0) + 1;
+    if (this.frameErrors === 1) console.error('[frame] update failed', err);
+    if (this.frameErrors === 30) {
+      this.hud?.toast?.('RENDER ERROR — TAP ☰ TWICE TO RESTART', 'bad');
+      this.hud?.prompt?.('RENDER ERROR — TAP ☰ TWICE TO RESTART');
+    }
+    if (this.frameErrors > 120 && !this.paused) {
+      // stop burning the battery on a broken scene, keep the UI alive
+      this.paused = true;
+      this.hud?.show?.();
+    }
   }
 
   updateIdle(dt) {
@@ -926,7 +1000,7 @@ export class Game {
 
   /** Warm fill light that fades in when you step indoors and out when you leave. */
   updateInteriorLight(dt) {
-    const want = this.insideBuilding ? (this.quality === 'low' ? 0.5 : 0.95) : 0;
+    const want = this.insideBuilding ? (this.tier.shadows ? 0.95 : 0.5) : 0;
     this.interiorLight.intensity = damp(this.interiorLight.intensity, want, 4, dt);
   }
 
@@ -2165,8 +2239,26 @@ export class Game {
   }
 
   dispose() {
-    this.net?.close();
-    this.renderer.dispose();
-    this.mount.innerHTML = '';
+    this.disposed = true;
+    // stop the loop first: a disposed renderer that is still being drawn is a
+    // guaranteed "context lost" on the next frame
+    if (this._raf !== undefined) {
+      try { cancelAnimationFrame(this._raf); } catch { /* noop */ }
+      this._raf = undefined;
+    }
+    this.net?.close?.();
+    // free GPU memory with the scene, not just the renderer
+    try {
+      this.scene?.traverse?.((o) => {
+        o.geometry?.dispose?.();
+        const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
+        for (const m of mats) {
+          for (const v of Object.values(m)) if (v?.isTexture) v.dispose?.();
+          m.dispose?.();
+        }
+      });
+    } catch { /* a stub scene in tests */ }
+    this.renderer.dispose?.();
+    if (this.mount) this.mount.innerHTML = '';
   }
 }

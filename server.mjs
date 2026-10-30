@@ -8,10 +8,12 @@
  * Run: npm start   (opens on http://localhost:8000)
  */
 import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
+import { gzipSync, brotliCompressSync } from 'node:zlib';
 import { createHash } from 'node:crypto';
 import { publicConfig, resolveSupabaseConfig } from './lib/supabase-env.mjs';
 import { bearerToken, handleAdminRequest } from './lib/admin-auth.mjs';
+import { createRoomStore, sanitizeRoom } from './lib/room-store.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -48,15 +50,21 @@ const MIME = {
 };
 
 // ---------------------------------------------------------------- rooms
+// One room map for both lanes: the WebSocket relay fans out through it directly,
+// the HTTP lane goes through the store (Supabase when configured, and this same
+// map as its fallback) — so a socket player and a polling player share a room.
 const rooms = new Map();
+const roomStore = createRoomStore({ memoryRooms: rooms });
 let seq = 0;
 
 function roomChannel(room) {
+  // the room may already exist because the HTTP lane (through the store) made
+  // it, in which case it has messages but no socket set yet
   if (!rooms.has(room)) rooms.set(room, { msgs: [], sockets: new Set() });
-  return rooms.get(room);
-}
-function sanitizeRoom(r) {
-  return String(r || 'highway-01').toLowerCase().replace(/[^a-z0-9-_]/g, '').slice(0, 24) || 'highway-01';
+  const ch = rooms.get(room);
+  if (!Array.isArray(ch.msgs)) ch.msgs = [];
+  if (!ch.sockets) ch.sockets = new Set();
+  return ch;
 }
 function pushMsg(room, id, msg) {
   const ch = roomChannel(room);
@@ -116,6 +124,81 @@ function wsHandleBuffer(socket, state, chunk, onText, onClose) {
   }
 }
 
+
+// ------------------------------------------------------- compression + cache
+/**
+ * Everything this game ships is text (JS, CSS, JSON, SVG), and three.js alone is
+ * ~690 KB uncompressed. Compressing it once and keeping the result keyed by
+ * mtime takes the first load from "wait a while" to "there it is", especially on
+ * mobile: the 690 KB module drops to roughly 160 KB.
+ */
+const COMPRESSIBLE = new Set(['.html', '.js', '.mjs', '.css', '.json', '.svg', '.webmanifest', '.map', '.txt']);
+const compressed = new Map();                 // filePath -> { mtimeMs, size, gzip, br }
+const COMPRESS_CACHE_LIMIT = 120;
+
+function cachePolicy(pathname) {
+  // vendored third-party code never changes inside a deploy
+  if (pathname.startsWith('/vendor/')) return 'public, max-age=31536000, immutable';
+  // the game modules and styles are cheap to revalidate but expensive to refetch
+  if (pathname.startsWith('/js/') || pathname === '/styles.css') {
+    // short: index.html is no-store, so a long window here lets a stale module
+    // meet a fresh page after a deploy. The ETag makes revalidation a 304.
+    return 'public, max-age=60, stale-while-revalidate=600';
+  }
+  if (pathname.startsWith('/games/')) return 'public, max-age=300, stale-while-revalidate=3600';
+  return 'public, max-age=60';
+}
+
+function compress(filePath, data, ext, info) {
+  if (!COMPRESSIBLE.has(ext) || data.length < 1024) return null;
+  const stamp = info.mtimeMs || 0;
+  const hit = compressed.get(filePath);
+  if (hit && hit.mtimeMs === stamp && hit.size === data.length) return hit;
+  let gzip = null;
+  let br = null;
+  try { gzip = gzipSync(data, { level: 6 }); } catch { gzip = null; }
+  try { br = brotliCompressSync(data, { params: { 1: 4 } }); } catch { br = null; }
+  const entry = { mtimeMs: stamp, size: data.length, gzip, br };
+  if (compressed.size > COMPRESS_CACHE_LIMIT) compressed.clear();
+  compressed.set(filePath, entry);
+  return entry;
+}
+
+/**
+ * Supabase, asked from the server rather than the browser: is the project the
+ * deployment was handed actually reachable? Cached so /api/health stays cheap.
+ */
+let supabaseProbe = { at: 0, value: null };
+async function supabaseStatus({ deep = false, ttl = 60_000 } = {}) {
+  const cfg = resolveSupabaseConfig(process.env);
+  const base = {
+    configured: Boolean(cfg.configured),
+    url: cfg.url || null,
+    urlVar: cfg.urlVar || null,
+    keyVar: cfg.keyVar || null,
+    problems: cfg.problems || [],
+  };
+  if (!base.configured) return { ...base, reachable: false, checkedAt: null };
+  if (!deep) return { ...base, reachable: null };
+  if (supabaseProbe.value && Date.now() - supabaseProbe.at < ttl) return supabaseProbe.value;
+  let reachable = false;
+  let status = 0;
+  try {
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), 1800) : null;
+    const res = await fetch(`${base.url}/auth/v1/health`, {
+      headers: { apikey: cfg.key, authorization: `Bearer ${cfg.key}` },
+      signal: controller?.signal,
+    });
+    status = res.status;
+    reachable = res.ok;
+    if (timer) clearTimeout(timer);
+  } catch { reachable = false; }
+  const value = { ...base, reachable, status, checkedAt: new Date().toISOString() };
+  supabaseProbe = { at: Date.now(), value };
+  return value;
+}
+
 const server = createServer(async (req, res) => {
   let pathname = '/';
   try {
@@ -163,8 +246,18 @@ const server = createServer(async (req, res) => {
   }
 
   if (pathname === '/api/health') {
+    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    const deep = url.searchParams.get('deep') === '1' || url.searchParams.get('deep') === 'true';
+    const supabase = await supabaseStatus({ deep });
     res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-    res.end(JSON.stringify({ ok: true, mode: 'node-websocket', rooms: rooms.size, uptime: Math.round(process.uptime()) }));
+    res.end(JSON.stringify({
+      ok: true,
+      mode: 'node-websocket',
+      rooms: rooms.size,
+      uptime: Math.round(process.uptime()),
+      supabase,
+      relay: { backend: roomStore.health.backend, ...roomStore.health },
+    }));
     return;
   }
 
@@ -177,23 +270,23 @@ const server = createServer(async (req, res) => {
     }
     let raw = '';
     req.on('data', (d) => { raw += d; if (raw.length > 64000) req.destroy(); });
-    req.on('end', () => {
+    req.on('end', async () => {
       try {
         const body = JSON.parse(raw || '{}');
         const room = sanitizeRoom(body.room);
         const id = String(body.id || 'anon').slice(0, 32);
-        if (body.msg && typeof body.msg === 'object') pushMsg(room, id, { ...body.msg, id });
+        const incoming = [];
+        if (body.msg && typeof body.msg === 'object') incoming.push({ ...body.msg, id });
         if (Array.isArray(body.msgs)) {
-          for (const m of body.msgs.slice(0, 30)) {
-            if (m && typeof m === 'object') pushMsg(room, id, { ...m, id });
-          }
+          for (const m of body.msgs.slice(0, 30)) if (m && typeof m === 'object') incoming.push({ ...m, id });
         }
-        const ch = roomChannel(room);
-        const cutoff = Date.now() - 9000;
-        ch.msgs = ch.msgs.filter((m) => m.ts > cutoff);
-        const msgs = ch.msgs.filter((m) => m.id !== id).slice(-70).map((m) => m.msg);
+        // With Supabase configured this is shared across every instance of the
+        // relay (and across serverless invocations on Vercel); without it, it is
+        // the local map the WebSocket lane uses too.
+        if (incoming.length) await roomStore.push(room, id, incoming);
+        const out = await roomStore.read(room, id);
         res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-        res.end(JSON.stringify({ msgs }));
+        res.end(JSON.stringify({ msgs: out.msgs, backend: out.backend }));
       } catch {
         res.writeHead(400, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ msgs: [] }));
@@ -211,34 +304,83 @@ const server = createServer(async (req, res) => {
     ? pathname.replace(/^\/games\/?/, '')
     : (pathname === '/' ? '/index.html' : pathname);
   if (isGamePath && (rel === '' || rel === '/')) rel = 'index.json';
-  const filePath = path.join(rootDir, path.normalize(rel).replace(/^([/\\])+/, ''));
+  // `_`-prefixed game folders are developer space (parked samples, templates).
+  // They are not in the catalogue; don't serve them either. `_shared` is the
+  // SDK every community game loads, so it stays reachable.
+  if (isGamePath) {
+    const first = rel.replace(/^([/\\])+/, '').split(/[/\\]/)[0];
+    if (first.startsWith('_') && first !== '_shared') {
+      res.writeHead(404, { 'content-type': 'text/plain' }).end('Game file not found');
+      return;
+    }
+  }
+  let filePath = path.join(rootDir, path.normalize(rel).replace(/^([/\\])+/, ''));
   if (!filePath.startsWith(rootDir)) {
     res.writeHead(403).end('Forbidden');
     return;
   }
+  // a directory is its index.html. If it has none, that is a 404 — a folder
+  // that exists must never be answered with the hub page.
+  let isDirectory = false;
   try {
+    isDirectory = (await stat(filePath)).isDirectory();
+    if (isDirectory) filePath = path.join(filePath, 'index.html');
+  } catch { /* the block below reports the miss */ }
+  try {
+    const info = await stat(filePath);
     const data = await readFile(filePath);
     const ext = path.extname(filePath).toLowerCase();
-    res.writeHead(200, {
+    const etag = `W/"${data.length.toString(16)}-${Math.round(info.mtimeMs || 0).toString(16)}"`;
+    const headers = {
       'content-type': MIME[ext] || 'application/octet-stream',
-      'cache-control': ext === '.html' ? 'no-store' : 'public, max-age=300',
+      'cache-control': ext === '.html' ? 'no-store' : cachePolicy(pathname),
       'x-content-type-options': 'nosniff',
-    });
-    res.end(data);
+      etag,
+      vary: 'accept-encoding',
+    };
+    // a repeat visit answers from the browser cache in one conditional request
+    if (req.headers['if-none-match'] === etag) {
+      res.writeHead(304, headers);
+      res.end();
+      return;
+    }
+    let body = data;
+    const accepted = String(req.headers['accept-encoding'] || '').toLowerCase();
+    const zipped = compress(filePath, data, ext, info);
+    if (zipped) {
+      if (accepted.includes('br') && zipped.br) {
+        body = zipped.br;
+        headers['content-encoding'] = 'br';
+      } else if (accepted.includes('gzip') && zipped.gzip) {
+        body = zipped.gzip;
+        headers['content-encoding'] = 'gzip';
+      }
+    }
+    headers['content-length'] = String(body.length);
+    res.writeHead(200, headers);
+    res.end(body);
   } catch {
     // game folders are literal: a missing file is a 404, not the hub page
     if (isGamePath) {
       res.writeHead(404, { 'content-type': 'text/plain' }).end('Game file not found');
       return;
     }
-    // SPA-ish fallback for unknown paths
-    try {
-      const data = await readFile(path.join(PUBLIC, 'index.html'));
-      res.writeHead(200, { 'content-type': MIME['.html'], 'cache-control': 'no-store' });
-      res.end(data);
-    } catch {
-      res.writeHead(404).end('Not found');
+    // Only a *navigation* may fall back to the hub. A missing module, icon or
+    // catalogue must be a real 404: answering 200 + HTML for `/js/typo.js`
+    // makes the browser fail with "responded with a MIME type of text/html",
+    // which hides the actual mistake.
+    const wantsHtml = String(req.headers.accept || '').includes('text/html');
+    const looksLikeFile = /\.[a-z0-9]{1,8}$/i.test(pathname.split('/').pop() || '');
+    if (!isDirectory && wantsHtml && !looksLikeFile) {
+      try {
+        const data = await readFile(path.join(PUBLIC, 'index.html'));
+        res.writeHead(200, { 'content-type': MIME['.html'], 'cache-control': 'no-store' });
+        res.end(data);
+        return;
+      } catch { /* fall through to 404 */ }
     }
+    res.writeHead(404, { 'content-type': 'text/plain', 'cache-control': 'no-store' })
+      .end(`Not found: ${pathname}`);
   }
 });
 
@@ -308,6 +450,13 @@ server.listen(PORT, HOST, () => {
     console.log(`  → supabase accounts: configured`);
     console.log(`      url: ${resolved.url}  (from ${resolved.urlVar})`);
     console.log(`      key: ${resolved.keyVar} (${resolved.keyKind})`);
+    // the server checks the project itself, so "configured" means "reachable"
+    supabaseStatus({ deep: true }).then((st) => {
+      const line = st.reachable
+        ? `      server probe: reachable (auth /health ${st.status})`
+        : `      server probe: UNREACHABLE — check the URL/key, players will fall back to guests`;
+      console.log(line);
+    }).catch(() => {});
   } else {
     console.log('  → supabase accounts: not configured — players run as guests');
     for (const problem of resolved.problems) console.log(`      · ${problem}`);

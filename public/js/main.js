@@ -1,12 +1,14 @@
-import * as THREE from '../vendor/three.module.js';
-import { buildAvatar } from './avatar.js';
-import { buildEnvironment } from './materials.js';
-import { Game } from './game.js';
 import { Account } from './account.js';
 import { AuthUI } from './authui.js';
-import { mountAdmin } from './admin.js';
 import { Arcade } from './arcade.js';
-import { installAutoLandscape, forceLandscape, isPortrait, landscapeState } from './orientation.js';
+import { mountPreview } from './preview.js';
+import {
+  installFullscreen, toggleFullscreen, isFullscreen, readPreference,
+} from './fullscreen.js';
+import { TIERS, describeTier, isKnownQuality } from './graphics.js';
+import {
+  installAutoLandscape, forceLandscape, requestPortrait, isPortrait, landscapeState,
+} from './orientation.js';
 import { MODES, DEFAULT_MODE, modeById } from './modes.js';
 import { loadBook, bestLine, careerLine, resetBook } from './records.js';
 import {
@@ -42,7 +44,7 @@ const saveLocal = () => {
 try {
   const saved = JSON.parse(localStorage.getItem('outrun-profile') || '{}');
   if (saved.room) state.room = saved.room;
-  if (['auto', 'low', 'medium', 'high'].includes(saved.quality)) state.quality = saved.quality;
+  if (['auto', 'low', 'medium', 'high', 'ultra'].includes(saved.quality)) state.quality = saved.quality;
   if (MODES.some((m) => m.id === saved.mode)) state.mode = saved.mode;
   if (saved.custom) state.custom = normalizeCustom(saved.custom);
 } catch {}
@@ -56,78 +58,138 @@ let authUI = null;
 let starting = false;
 
 // ---------------------------------------------------------------- avatars
-function makePreview(canvas) {
-  if (!canvas) return null;
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, isPhone ? 1.5 : 2));
-  const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(34, 1, 0.1, 60);
-  camera.position.set(0, 1.55, 5.1);
-  camera.lookAt(0, 1.2, 0);
+/**
+ * THE 3D KIT IS LAZY ON PURPOSE.
+ *
+ * `game.js` pulls in three.js plus the world, vehicle, avatar, tornado, HUD and
+ * crafting modules — about a megabyte. The home screens need none of it, so it
+ * is fetched on demand. Two rules keep that from ever looking "stuck":
+ *
+ *   1. It is warmed the moment the menu is interactive — not on
+ *      requestIdleCallback, which on this page may never fire because the
+ *      avatar preview keeps drawing frames.
+ *   2. A press of PLAY shows real progress (bytes on the wire, not a spinner),
+ *      keeps the menu usable, and recovers with a retry if anything fails.
+ */
+const KIT_FILES = [
+  // [path relative to this module, weight in KB] — weights only drive the bar
+  ['../vendor/three.module.js', 671],
+  ['./game.js', 89],
+  ['./world.js', 38],
+  ['./buildings.js', 34],
+  ['./admin.js', 25],
+  ['./hud.js', 20],
+  ['./avatar.js', 17],
+  ['./vehicle.js', 15],
+  ['./recipes.js', 9],
+  ['./inventory.js', 9],
+  ['./materials.js', 9],
+  ['./enemies.js', 8],
+  ['./tornado.js', 7],
+  ['./net.js', 7],
+  ['./items.js', 7],
+  ['./records.js', 7],
+  ['./loot.js', 5],
+  ['./audio.js', 5],
+  ['./customize.js', 4],
+  ['./effects.js', 3],
+  ['./modes.js', 3],
+  ['./utils.js', 2],
+  ['./palette.js', 1],
+];
 
-  scene.add(new THREE.HemisphereLight(0xbfd4ff, 0x3b2c1b, 1.5));
-  const key = new THREE.DirectionalLight(0xffd9a0, 3.2);
-  key.position.set(3, 5, 4);
-  scene.add(key);
-  const rim = new THREE.DirectionalLight(0x5ff0ff, 1.4);
-  rim.position.set(-4, 2, -3);
-  scene.add(rim);
+let kitPromise = null;
+const kitProgress = { loaded: 0, total: KIT_FILES.reduce((n, [, kb]) => n + kb, 0), ratio: 0 };
+const progressHandlers = new Set();
 
-  const disc = new THREE.Mesh(new THREE.CircleGeometry(2.4, 40),
-    new THREE.MeshStandardMaterial({ color: 0x1a2029, roughness: 0.9, metalness: 0.2 }));
-  disc.rotation.x = -Math.PI / 2;
-  scene.add(disc);
-  const ring = new THREE.Mesh(new THREE.RingGeometry(2.35, 2.5, 44),
-    new THREE.MeshBasicMaterial({ color: 0xffb347, transparent: true, opacity: 0.55, side: THREE.DoubleSide }));
-  ring.rotation.x = -Math.PI / 2;
-  ring.position.y = 0.01;
-  scene.add(ring);
-
-  // one prefiltered panorama shared by every preview avatar on the page
-  let previewEnv = null;
-  try { previewEnv = buildEnvironment(renderer, scene); } catch { previewEnv = null; }
-
-  const stage = {
-    canvas, renderer, scene, camera, avatar: null, env: previewEnv,
-    yaw: -0.35, targetYaw: -0.35, dragging: false, lastX: 0,
-    setAvatar(hex, name, custom) {
-      if (stage.avatar) scene.remove(stage.avatar.root);
-      // lobby/auth previews get the full PBR treatment on desktop hardware
-      const detail = isPhone ? 'medium' : 'high';
-      stage.avatar = buildAvatar({ color: hex, name, custom, detail, env: stage.env || null });
-      stage.avatar.root.rotation.y = stage.yaw;
-      scene.add(stage.avatar.root);
-    },
-    resize() {
-      const w = canvas.clientWidth || 380, h = canvas.clientHeight || 220;
-      renderer.setSize(w, h, false);
-      camera.aspect = w / h;
-      camera.updateProjectionMatrix();
-    },
-    render(dt) {
-      if (!stage.avatar) return;
-      stage.yaw += (stage.targetYaw - stage.yaw) * 0.14;
-      if (!stage.dragging) stage.targetYaw += dt * 0.22;
-      stage.avatar.root.rotation.y = stage.yaw;
-      stage.avatar.animate(dt, 0.16, false);
-      renderer.render(scene, camera);
-    },
-  };
-
-  canvas.addEventListener('pointerdown', (e) => {
-    stage.dragging = true; stage.lastX = e.clientX;
-    canvas.setPointerCapture?.(e.pointerId);
-  });
-  canvas.addEventListener('pointermove', (e) => {
-    if (!stage.dragging) return;
-    stage.targetYaw += (e.clientX - stage.lastX) * 0.012;
-    stage.lastX = e.clientX;
-  });
-  const stop = (e) => { stage.dragging = false; canvas.releasePointerCapture?.(e.pointerId); };
-  canvas.addEventListener('pointerup', stop);
-  canvas.addEventListener('pointercancel', stop);
-  return stage;
+/** Subscribe to loader progress. Returns an unsubscribe function. */
+export function onKitProgress(fn) {
+  progressHandlers.add(fn);
+  try { fn(kitProgress); } catch { /* a broken listener must not break loading */ }
+  return () => progressHandlers.delete(fn);
 }
+
+export const kitProgressState = () => ({ ...kitProgress });
+
+function reportKit(bytes) {
+  kitProgress.loaded = Math.min(kitProgress.total, kitProgress.loaded + bytes);
+  kitProgress.ratio = kitProgress.total ? kitProgress.loaded / kitProgress.total : 1;
+  for (const fn of progressHandlers) {
+    try { fn(kitProgress); } catch { /* ignore */ }
+  }
+}
+
+/**
+ * Pulls the module graph into the HTTP cache ahead of the import, counting the
+ * bytes as they arrive so the button can show a real percentage. If streaming
+ * is unavailable the file weight is credited when the response lands — either
+ * way the bar only ever moves forward.
+ */
+async function prefetchKit() {
+  await Promise.all(KIT_FILES.map(async ([url, weight]) => {
+    let credited = 0;
+    const credit = (kb) => {
+      const add = Math.max(0, Math.min(kb, weight - credited));
+      if (add <= 0) return;
+      credited += add;
+      reportKit(add);
+    };
+    try {
+      // no cache override: the server's ETag turns a repeat visit into a 304,
+      // and a deploy is never masked by a stale force-cache hit
+      const res = await fetch(new URL(url, import.meta.url).href);
+      if (!res.ok) throw new Error(`http ${res.status}`);
+      if (res.body?.getReader) {
+        const reader = res.body.getReader();
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          credit((value?.byteLength || 0) / 1024);
+        }
+      } else {
+        await res.arrayBuffer();
+      }
+    } catch { /* a missing file must not stall the bar */ }
+    credit(weight);            // whatever did not stream is counted at the end
+  }));
+}
+
+export function loadGameKit() {
+  if (!kitPromise) {
+    const started = prefetchKit().catch(() => {});
+    kitPromise = Promise.all([started, import('./game.js'), import('./admin.js')])
+      .then(([, gameMod, adminMod]) => ({ Game: gameMod.Game, mountAdmin: adminMod.mountAdmin }))
+      .catch((err) => { kitPromise = null; throw err; });
+  }
+  return kitPromise;
+}
+
+/**
+ * Warm the kit as soon as the menu is interactive. `requestIdleCallback` alone
+ * is not enough: this page draws the avatar preview every frame, so a browser
+ * can stay "busy" for minutes and never fire it — which is exactly how PLAY
+ * ended up doing a cold megabyte download on a phone.
+ */
+let warmTimer = null;
+export function warmGameKit({ delay = 600 } = {}) {
+  if (kitPromise) return kitPromise;
+  if (warmTimer) return kitPromise;
+  const run = () => { loadGameKit().catch(() => {}); };
+  warmTimer = setTimeout(run, delay);
+  // and again on the first real interaction, in case the timer was throttled
+  const kick = () => {
+    clearTimeout(warmTimer);
+    warmTimer = null;
+    run();
+  };
+  try {
+    window.addEventListener('pointerdown', kick, { once: true, passive: true });
+    window.addEventListener('keydown', kick, { once: true });
+  } catch { /* detached window */ }
+  return kitPromise;
+}
+
+let fullscreenCtl = null;
 
 let authPreview = null;
 let lobbyPreview = null;
@@ -177,6 +239,9 @@ function showArcade() {
   }
   arcade.show();
   arcade.refresh();
+  // the hub's fullscreen button is created after the installer ran, so give it
+  // the real state instead of the label it was born with
+  fullscreenCtl?.sync();
 }
 
 // ------------------------------------------------------------------- lobby
@@ -184,7 +249,13 @@ function showLobby() {
   $('auth').classList.remove('show');
   document.body.classList.remove('run-live');
   document.documentElement.classList.remove('rot-stage');
+  // the home is portrait again: unlock landscape and leave fullscreen
+  requestPortrait();
   arcade?.hide();
+  // coming back from a run must not leave the button stuck on its loading copy
+  setLoading({ active: false });
+  const play = $('playBtn');
+  if (play) play.innerHTML = 'START THE RUN <span>▸</span>';
   $('lobby').classList.add('show');
   $('nameInput').value = state.name;
   $('roomInput').value = state.room;
@@ -419,6 +490,37 @@ function renderFriends() {
   }
 }
 
+/**
+ * The loading indicator is a slim chip, not a screen. It sits above the PLAY
+ * button, keeps the menu usable underneath, and disappears the moment the world
+ * is on screen. There is deliberately no way for it to cover the game.
+ */
+function setLoading({ active = false, pct = null, note = '' } = {}) {
+  const chip = $('loading');
+  if (chip) {
+    chip.classList.toggle('show', Boolean(active));
+    chip.classList.toggle('gone', !active);
+    const text = chip.querySelector?.('.ld-text') || null;
+    if (text) text.textContent = note || (active ? 'LOADING' : '');
+    if (pct !== null) {
+      const bar = chip.querySelector?.('.ld-bar i');
+      if (bar?.style) bar.style.width = `${Math.max(0, Math.min(100, pct))}%`;
+      chip.setAttribute?.('data-pct', String(Math.round(pct)));
+    }
+  }
+  const btn = $('playBtn');
+  if (btn) btn.classList.toggle('loading', Boolean(active));
+}
+
+/** Toast that works before the 3D HUD exists. */
+function hudToast(text, kind = '') {
+  try {
+    setFriendNote(text, kind === 'warn' ? 'err' : kind);
+  } catch { /* menu already gone */ }
+  const status = $('netStatus');
+  if (status) status.textContent = text;
+}
+
 function setFriendNote(text, kind = '') {
   const note = $('friendsNote');
   if (!note) return;
@@ -472,14 +574,49 @@ async function startRun() {
   saveLocal();
   account.saveProfile({ display_name: state.name, body_color: state.color, car_color: state.carColor });
 
-  // phones: go fullscreen + lock to landscape before the world is measured,
-  // so the HUD lays itself out for the orientation the player will actually use
-  if (isPhone && !landscapeTried) {
-    await Promise.race([
-      goLandscape(),
-      new Promise((resolve) => setTimeout(() => resolve(false), 700)),
-    ]);
+  // Turning the phone has to happen inside this click, but it must never delay
+  // the game: fire it and carry on. `run-live` is added once the kit is ready.
+  if (isPhone && !landscapeTried && isPortrait()) goLandscape();
+
+  const btn = $('playBtn');
+  const btnLabel = btn ? btn.innerHTML : '';
+  const fails = [];
+  setLoading({ active: true, pct: 0, note: 'LOADING THE 3D ENGINE' });
+  const stopCounter = onKitProgress((p) => {
+    const pct = Math.round((p.ratio || 0) * 100);
+    setLoading({ active: true, pct, note: pct >= 100 ? 'STARTING ENGINE' : `LOADING THE 3D ENGINE · ${pct}%` });
+    if (btn) btn.innerHTML = `LOADING ${pct}%`;
+  });
+
+  // Play is a gesture: the one reliable moment to honour a saved fullscreen
+  // preference. Fire and forget — it must not gate the run.
+  if (!isFullscreen() && readPreference()) {
+    toggleFullscreen({ on: true }).then(() => fullscreenCtl?.sync()).catch(() => {});
   }
+
+  // NO BLOCKING LOADING SCREEN: the menu stays on screen and usable while the
+  // engine streams in. If anything fails we simply stay here with a retry.
+  let kit = null;
+  try {
+    kit = await loadGameKit();
+  } catch (err) {
+    console.error('[load] game kit failed', err);
+    fails.push(String(err?.message || err));
+  }
+  stopCounter();
+  if (!kit) {
+    setLoading({ active: false });
+    document.body.classList.remove('run-live', 'auto-land');
+    document.documentElement.classList.remove('rot-stage');
+    requestPortrait();                  // the menu is portrait: hand it back
+    if (btn) btn.innerHTML = btnLabel;
+    setFriendNote('Could not load the 3D engine — check your connection and press PLAY again.', 'err');
+    hudToast('LOAD FAILED — TAP PLAY TO RETRY', 'warn');
+    starting = false;
+    return;
+  }
+
+  document.body.classList.add('run-live');
   // The arcade hands the iframe a landscape stage, so re-check after the lock.
   // If the device still refuses to turn, the run itself is rotated in CSS:
   // `auto-land` marks "portrait + no lock", `run-live` says the stage is up.
@@ -488,16 +625,17 @@ async function startRun() {
     document.documentElement.classList.add('rot-stage');
   }
 
-  const btn = $('playBtn');
-  if (btn) btn.innerHTML = 'WARMING THE ENGINE…';
-  $('lobby').classList.remove('show');
-  $('loading').classList.remove('gone');
-  document.body.classList.add('run-live');
+  if (btn) btn.innerHTML = 'DROPPING IN…';
+  setLoading({ active: true, pct: 100, note: 'DROPPING IN' });
 
-  await new Promise((r) => setTimeout(r, 140));
+  await new Promise((r) => setTimeout(r, 60));
+
+  // the menu stays up until this exact moment, so nothing ever looks stuck
+  $('lobby').classList.remove('show');
+  $('loading').classList.add('gone');
 
   try {
-    game = new Game({
+    game = new kit.Game({
       mount: $('app'),
       profile: {
         name: state.name,
@@ -522,7 +660,7 @@ async function startRun() {
     game.hud.toast('DAY 1 · OAKHAVEN OUTSKIRTS', 'warn');
     setTimeout(() => game?.hud.toast(isPhone ? 'LEFT STICK DRIVES · TAP ⚓ TO ANCHOR' : 'COLLECT FUEL · REACH THE HIGHWAY', ''), 1800);
     if (account.signedIn) account.setPresence({ status: 'playing', room: state.room, day: 1 });
-    admin = mountAdmin({
+    admin = kit.mountAdmin({
       game,
       account,
       survivorName: state.name,
@@ -536,15 +674,18 @@ async function startRun() {
     }
   } catch (err) {
     console.error(err);
-    $('loading').classList.add('gone');
-    showArcade();
-    if (btn) btn.innerHTML = 'START THE RUN <span>▸</span>';
+    setLoading({ active: false });
+    document.body.classList.remove('run-live', 'auto-land');
+    document.documentElement.classList.remove('rot-stage');
+    requestPortrait();
+    if (btn) btn.innerHTML = btnLabel;
     setFriendNote(`Could not start: ${err.message}`, 'err');
+    hudToast('COULD NOT START — TAP PLAY TO RETRY', 'warn');
     starting = false;
     return;
   }
 
-  setTimeout(() => $('loading').classList.add('gone'), 250);
+  setLoading({ active: false });
   starting = false;
 }
 
@@ -625,8 +766,8 @@ window.addEventListener('resize', () => {
 
 // ---------------------------------------------------------------------- boot
 async function boot() {
-  authPreview = makePreview($('previewCanvas'));
-  lobbyPreview = makePreview($('previewCanvasLobby'));
+  authPreview = mountPreview($('previewCanvas'));
+  lobbyPreview = mountPreview($('previewCanvasLobby'));
   authPreview?.setAvatar(hexToInt(state.color), 'SURVIVOR');
   lobbyPreview?.setAvatar(hexToInt(state.color), 'SURVIVOR');
   requestAnimationFrame(previewLoop);
@@ -710,6 +851,15 @@ async function boot() {
     qualityRow?.querySelectorAll('[data-quality]').forEach((b) => {
       b.classList.toggle('on', b.dataset.quality === state.quality);
     });
+    const hint = $('qualityHint');
+    if (hint) {
+      if (isKnownQuality(state.quality)) {
+        const t = TIERS[state.quality];
+        hint.innerHTML = `<b>${t.label}</b> — ${describeTier(state.quality)}. ${t.blurb}`;
+      } else {
+        hint.textContent = 'AUTO — picked for this device when the run starts';
+      }
+    }
   };
   qualityRow?.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-quality]');
@@ -780,6 +930,12 @@ async function boot() {
     },
   });
 
+  // FULLSCREEN: one installer wires every [data-fullscreen] button on the page
+  // (arcade bar, lobby header, in-game exit) plus Alt+Enter / Shift+F.
+  // (delegated: every [data-fullscreen] button — lobby, arcade bar, in-run toggle
+  // — is handled by the installer itself, so there is no double toggle)
+  fullscreenCtl = installFullscreen();
+
   phoneSetup();
   // AUTO LANDSCAPE: installs on load, then retries on the first gesture, on
   // rotation back to portrait, and on leaving fullscreen.
@@ -799,6 +955,10 @@ async function boot() {
   }
 
   setTimeout(() => $('loading').classList.add('gone'), 500);
+  // the menu is interactive now; pull the 3D kit in the background so the first
+  // PLAY press does not start a cold megabyte
+  warmGameKit();
+  document.documentElement.classList.add('booted');
 }
 
 boot();

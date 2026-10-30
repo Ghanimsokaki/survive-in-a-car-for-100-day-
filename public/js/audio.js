@@ -16,7 +16,14 @@ export class AudioKit {
     if (this.ready) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
-    this.ctx = new AC();
+    try {
+      this.ctx = new AC();
+    } catch (err) {
+      // a locked-down webview can refuse an AudioContext outright: the game
+      // keeps playing, it is just silent
+      console.warn('[audio] unavailable —', err?.message || err);
+      return;
+    }
     this.master = this.ctx.createGain();
     this.master.gain.value = 0.5;
     this.master.connect(this.ctx.destination);

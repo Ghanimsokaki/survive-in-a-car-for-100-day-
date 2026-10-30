@@ -297,11 +297,12 @@ if (globalThis.window.__ironTide) {
   const firstTarget = nearest();
   let killedAt = -1;
   let frames = 0;
-  for (let i = 0; i < 2400; i++) {      // up to 40 simulated seconds
+  for (let i = 0; i < 4800; i++) {      // up to 80 simulated seconds
     const target = nearest();
     if (!target) break;
     // the player turns the bow onto the nearest ship and holds the trigger down
-    s.yaw = Math.atan2(target.y - s.y, target.x - s.x);
+    // (steerTo is the helmsman: it moves the rudder, not the heading)
+    tide.steerTo(target.x, target.y);
     s.keys.fire = true;
     s.keys.up = true;
     tide.tick(1 / 60);

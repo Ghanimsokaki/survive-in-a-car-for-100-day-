@@ -3,6 +3,15 @@
 Every game in the arcade is a folder in this directory. Adding one is a **pull
 request** — no server, no database, no upload form.
 
+The shelf currently shows **two games**: the built-in *100 Days Outrun* (one
+game with five modes, shipped in `public/`) and **`iron-tide/`** (the ship
+builder). Folders whose name starts with `_` are developer spaces and are never
+listed, bundled or scanned: `_template/` (starter), `_shared/` (the SDK) and
+`_parked/` (the five older sample games, kept as reference).
+
+If a mode belongs to a game, put it *inside* that game — a new rule-set is not a
+new card unless it is a genuinely different game.
+
 ## Add a game in four steps
 
 1. Copy `_template/` to a new folder. The folder name **is** your game id:

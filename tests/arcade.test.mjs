@@ -61,12 +61,16 @@ console.log('\nrepo catalogue');
 {
   const gamesDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', 'games');
   const { catalogue, skipped } = await scanGames(gamesDir);
-  check('the repo ships community games', catalogue.count >= 5, `${catalogue.count} found`);
+  // The arcade is deliberately a two-game shelf: the built-in 100 Days Outrun
+  // (whose modes live inside it) plus Iron Tide. Everything else is parked in
+  // games/_parked and must not reach the catalogue.
+  check('the repo ships its community game', catalogue.count >= 1, `${catalogue.count} found`);
+  check('parked games never reach the shelf', !catalogue.games.some((g) => g.id === 'last-convoy')
+    && !catalogue.games.some((g) => g.id === 'radio-tower'), catalogue.games.map((g) => g.id).join(','));
   check('nothing in the repo fails validation', skipped.length === 0,
     skipped.map((s) => `${s.folder}: ${s.errors.join(',')}`).join(' | '));
   check('the templates are skipped', !catalogue.games.some((g) => g.id.startsWith('_') || g.id === 'template'));
-  check('featured games sort first',
-    catalogue.games[0].featured === true && catalogue.games[catalogue.games.length - 1].featured === false);
+  check('featured games sort first', catalogue.games[0].featured === true);
   check('every game has a playable entry file', catalogue.games.every((g) => g.entry === 'index.html'));
   check('every game has an icon', catalogue.games.every((g) => g.icon === 'icon.svg'));
   check('sizes are measured', catalogue.games.every((g) => g.files > 0 && g.bytes > 0),
