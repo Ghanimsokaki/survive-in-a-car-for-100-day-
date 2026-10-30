@@ -1,14 +1,14 @@
 {
   "version": 1,
-  "generatedAt": "2026-10-30T08:53:06.656Z",
+  "generatedAt": "2026-10-30T09:22:19.500Z",
   "count": 1,
   "games": [
     {
       "id": "iron-tide",
       "title": "IRON TIDE",
       "author": "ghanimz",
-      "blurb": "Build your own ship, buy jets for the hangar, and sink other fleets at sea. Earn credits, refit, sail again.",
-      "version": "1.0.0",
+      "blurb": "Build a ship, buy jets for the hangar and sink other fleets on a living sea: real swell, drift, wake and a storm that hurts.",
+      "version": "1.1.0",
       "entry": "index.html",
       "icon": "icon.svg",
       "tags": [
@@ -20,8 +20,8 @@
       "accent": "#59c9ff",
       "players": "1",
       "featured": true,
-      "files": 5,
-      "bytes": 50708,
+      "files": 6,
+      "bytes": 89826,
       "path": "games/iron-tide"
     }
   ]

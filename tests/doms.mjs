@@ -6,6 +6,7 @@ function makeCtx() {
     globalAlpha: 1, lineCap: 'butt',
     fillRect: noop, clearRect: noop, strokeRect: noop, beginPath: noop, closePath: noop,
     moveTo: noop, lineTo: noop, arc: noop, ellipse: noop, rect: noop, roundRect: noop,
+    transform: noop, setLineDash: noop, getLineDash: () => [], resetTransform: noop,
     fill: noop, stroke: noop, save: noop, restore: noop, translate: noop, rotate: noop, scale: noop,
     fillText: noop, strokeText: noop, createLinearGradient: () => ({ addColorStop: noop }),
     createRadialGradient: () => ({ addColorStop: noop }), createConicGradient: () => ({ addColorStop: noop }),

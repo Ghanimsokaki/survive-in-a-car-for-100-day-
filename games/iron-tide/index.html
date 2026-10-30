@@ -61,6 +61,12 @@
   .bh-bar i{display:block;height:7px;border-radius:4px;background:#12222f;overflow:hidden}
   .bh-bar i u{display:block;height:100%;background:linear-gradient(90deg,#59c9ff,#2f8fbf);transition:width .15s}
   .bh-bar.enemy i u{background:linear-gradient(90deg,#ff8a6b,#c23c3c)}
+  .bh-sea{position:fixed;top:56px;left:14px;pointer-events:none}
+  #seaChip{display:inline-block;font-size:8px;letter-spacing:2px;padding:5px 9px;border-radius:6px;
+    background:rgba(5,14,22,.72);border:1px solid rgba(89,201,255,.22);color:#8fc7e4}
+  #seaChip.heavy{border-color:rgba(255,138,107,.5);color:#ffb9a6;
+    animation:seaSlam .9s ease-in-out infinite alternate}
+  @keyframes seaSlam{from{opacity:.72}to{opacity:1}}
   .bh-bottom{display:flex;align-items:flex-end;gap:10px;padding:10px 14px}
   .bh-btn{pointer-events:auto;font:inherit;font-size:9px;letter-spacing:2px;font-weight:700;padding:11px 14px;
     border-radius:9px;background:rgba(10,20,30,.9);border:1px solid var(--line);color:#cfeaff;cursor:pointer}
@@ -140,6 +146,7 @@
     <div class="bh-bar"><span>HULL</span><i><u id="hullBar" style="width:100%"></u></i></div>
     <div class="bh-bar enemy"><span>ENEMY FLEET</span><i><u id="enemyBar" style="width:100%"></u></i></div>
   </div>
+  <div class="bh-sea"><span id="seaChip">CALM SEA · 0 KN · 0° HEEL</span></div>
   <div class="bh-center"><div class="banner" id="banner"></div></div>
   <div class="bh-bottom">
     <button id="fireBtn" class="bh-btn" type="button">FIRE</button>
@@ -159,6 +166,7 @@
 
 <script src="../_shared/sdk.js"></script>
 <script src="fleet.js"></script>
+<script src="water.js"></script>
 <script src="game.js"></script>
 </body>
 </html>

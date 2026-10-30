@@ -30,6 +30,34 @@
     ready() {},
     score() {},
   };
+  /**
+   * Water physics (`water.js`). If that script is missing the game must still
+   * sail: this fallback is the old arcade motion, no waves, no bobbing.
+   */
+  const W = (typeof window !== 'undefined' && window.WaterPhysics) || (() => {
+    const body = (o = {}) => ({
+      x: o.x || 0, y: o.y || 0, heading: o.heading || 0, u: 0, v: 0, r: 0,
+      heave: 0, heaveVel: 0, pitch: 0, roll: 0, wake: 0, slams: 0,
+      spec: { length: o.length || 46, vMax: (o.speed || 1) * 60, turnRate: 0.36, yawInertia: 1, beam: 7 },
+    });
+    return {
+      createSea: () => ({ t: 0, step() {}, at: () => ({ h: 0, gx: 0, gy: 0 }), height: () => 0, foam: () => 0, wind: () => ({ x: 0, y: 0 }), drift: () => ({ x: 0, y: 0 }), severity: 0, preset: { name: 'FLAT', wind: 0, slamming: 0 }, setState() {} }),
+      createBody: body,
+      stepBody: (b, sea, dt, c = {}) => {
+        b.heading += (c.rudder || 0) * b.spec.turnRate * dt;
+        b.u += (c.throttle || 0) * b.spec.vMax * dt * 0.6;
+        b.u *= Math.pow(0.12, dt);
+        b.x += Math.cos(b.heading) * b.u * dt;
+        b.y += Math.sin(b.heading) * b.u * dt;
+        b.wake = Math.abs(b.u) / b.spec.vMax;
+        return b;
+      },
+      velocityOf: (b) => ({ x: Math.cos(b.heading) * b.u, y: Math.sin(b.heading) * b.u }),
+      knots: (v) => Math.abs(v) * 1.94,
+      seaForSortie: () => 'calm',
+    };
+  })();
+
   const canvas = document.getElementById('c');
   const ctx = canvas.getContext('2d');
   const $ = (id) => document.getElementById(id);
@@ -38,6 +66,7 @@
   let tab = 'dock';
   let screen = 'dock';       // dock | battle | result
   let session = null;
+  let dockSea = null;      // the calm swell behind the dock screens
 
   /* ------------------------------------------------------------ persistence */
   // Sandboxed iframes have an opaque origin: touching localStorage is a
@@ -128,7 +157,6 @@
     body.innerHTML = '';
     $('tabTitle').textContent = 'FIT OUT THE SHIP';
     const hull = R.byId(R.HULLS, fleet.hull);
-    const lo = loadout();
     const used = fleet.modules.length;
 
     const head = document.createElement('p');
@@ -260,6 +288,13 @@
     if (!lo.dps) return flash($('loadoutHint'), 'FIT A WEAPON FIRST');
     const hull = R.byId(R.HULLS, fleet.hull);
     const cap = hull.id === 'carrier' ? 3 : 1;
+    // the sea gets heavier as the war goes on: calm, moderate, rough, then storm
+    const seaState = W.seaForSortie(fleet.sorties + 1);
+    const sea = W.createSea({ state: seaState, seed: 1000 + (fleet.sorties + 1) * 37 });
+    const body = W.createBody({
+      x: 0, y: 0, heading: -Math.PI / 2,
+      length: hull.length, speed: lo.speed,
+    });
     session = {
       lo,
       cap,
@@ -272,6 +307,13 @@
       yaw: -Math.PI / 2,
       x: 0, y: 0,
       vel: { x: 0, y: 0 },
+      sea,
+      body,
+      wake: [],
+      spray: [],
+      splash: [],
+      out: {},
+      slamT: 0,
       fireCd: 0,
       ships: [],
       bullets: [],
@@ -293,9 +335,16 @@
     enemies.forEach((e, i) => {
       const a = (i / enemies.length) * Math.PI * 2;
       const d = 620 + i * 60;
+      const x = Math.cos(a) * d;
+      const y = Math.sin(a) * d;
+      const yaw = a + Math.PI;
+      const enemyHull = R.byId(R.HULLS, e.hull) || R.HULLS[0];
       session.ships.push({
-        ...e, maxHp: e.hp, x: Math.cos(a) * d, y: Math.sin(a) * d,
-        yaw: a + Math.PI, fireCd: 1 + Math.random(), dead: false, aggro: 0,
+        ...e, maxHp: e.hp, x, y,
+        yaw, fireCd: 1 + Math.random(), dead: false, aggro: 0,
+        // enemies float on the same water: same model, their own hull
+        body: W.createBody({ x, y, heading: yaw, length: enemyHull.length, speed: e.speed }),
+        wake: 0,
       });
     });
     for (const jetId of fleet.jets.slice(0, cap)) session.jetCd[jetId] = 2;
@@ -305,7 +354,8 @@
     $('battleHud').classList.remove('hidden');
     $('result').classList.add('hidden');
     paintJetChips();
-    showBanner('SORTIE ' + (fleet.sorties + 1), 1.6);
+    session.seaChip = $('seaChip');
+    showBanner('SORTIE ' + (fleet.sorties + 1) + ' · ' + sea.preset.name + ' SEA', 1.9);
     beep(180, 0.3, 0.08);
   }
 
@@ -420,25 +470,65 @@
     if (s.lockT === 0) s.lock = null;
     if (s.banner <= 0) $('banner').classList.remove('show');
 
-    // steering
-    const turn = (s.keys.right ? 1 : 0) - (s.keys.left ? 1 : 0) + (s.joy.active ? s.joy.x : 0);
-    s.yaw += turn * s.turn * dt;
-    const throttle = (s.keys.up ? 1 : 0) - (s.keys.down ? 0.55 : 0) + (s.joy.active ? -s.joy.y : 0);
-    const forward = Math.max(-0.45, Math.min(1, throttle));
-    s.vel.x += Math.cos(s.yaw) * forward * s.speed * dt * 1.6;
-    s.vel.y += Math.sin(s.yaw) * forward * s.speed * dt * 1.6;
-    const drag = Math.pow(0.12, dt);
-    s.vel.x *= drag; s.vel.y *= drag;
-    s.x += s.vel.x * dt;
-    s.y += s.vel.y * dt;
+    /* ---------------------------------------------------------- the sea */
+    // One clock for the whole battle: the player, every enemy and the wake all
+    // ride the same wave field, so a crest that lifts you lifts them too.
+    s.sea.step(dt);
+
+    /* ------------------------------------------------------ the player */
+    // Rudder and throttle come straight from the keys or the virtual stick.
+    // `s.autopilot` is set by the debug handle's steerTo() — the host test suite
+    // uses it to put the bow on a target without faking the physics
+    const rudder = Math.max(-1, Math.min(1,
+      (s.keys.right ? 1 : 0) - (s.keys.left ? 1 : 0) + (s.joy.active ? s.joy.x : 0) + (s.autopilot || 0)));
+    const throttle = Math.max(-1, Math.min(1,
+      (s.keys.up ? 1 : 0) - (s.keys.down ? 0.6 : 0) - (s.joy.active ? s.joy.y : 0)));
+    const out = s.out || (s.out = {});
+    W.stepBody(s.body, s.sea, dt, { throttle, rudder }, out);
+
+    // the rest of the game still thinks in x/y/yaw — keep that one source
+    s.x = s.body.x;
+    s.y = s.body.y;
+    s.yaw = s.body.heading;
+    s.vel = W.velocityOf(s.body);
+    s.knots = W.knots(s.body.u);
+
+    // slamming through a crest in a heavy sea damages the hull (slowly) and
+    // throws spray; the toast is throttled so it never spams
+    if (out.damage) {
+      s.hull -= out.damage;
+      if (s.slamT <= 0) {
+        s.slamT = 2.6;
+        showBanner('SLAMMING — EASE OFF', 0.7);
+      }
+    }
+    s.slamT = Math.max(0, (s.slamT || 0) - dt);
+    if (out.spray > 0.25) {
+      emitSpray(s, s.body, out.spray);
+    }
+    if (out.wakeEmit > 0) emitWake(s, s.body, out.wakeEmit);
 
     const arena = 2400;
-    s.x = Math.max(-arena, Math.min(arena, s.x));
-    s.y = Math.max(-arena, Math.min(arena, s.y));
+    const clampedX = Math.max(-arena, Math.min(arena, s.body.x));
+    const clampedY = Math.max(-arena, Math.min(arena, s.body.y));
+    if (clampedX !== s.body.x || clampedY !== s.body.y) {
+      // the edge of the arena is a shoal: bounce off, losing way
+      s.body.x = clampedX;
+      s.body.y = clampedY;
+      s.body.u *= 0.5;
+      s.body.v *= 0.5;
+    }
+    s.x = s.body.x;
+    s.y = s.body.y;
+
+    // wake and spray live in the world, not on the ship: they stay where they
+    // were made and fade, which is what makes a turn readable
+    stepEffects(s, dt);
 
     if (s.keys.fire) fire();
 
-    // enemy movement + shooting
+    // enemy movement + shooting — every raider is a floating body too, so they
+    // heel into the swell, trail wakes and have to steer instead of strafing
     for (const e of s.ships) {
       if (e.dead) continue;
       const dx = s.x - e.x, dy = s.y - e.y;
@@ -446,21 +536,33 @@
       e.aggro += dt;
       const px = e.x, py = e.y;
       const standoff = Math.max(120, e.range * 0.55);
+
+      // what heading do they want? close, back off, or circle
+      let want = Math.atan2(dy, dx);
+      let push = 1;
       if (d > e.range * 0.9) {
-        e.x += (dx / d) * e.speed * 46 * dt;          // close the distance
-        e.y += (dy / d) * e.speed * 46 * dt;
+        want = Math.atan2(dy, dx);                       // close the distance
       } else if (d < standoff) {
-        e.x -= (dx / d) * e.speed * 34 * dt;          // back off, keep the range open
-        e.y -= (dy / d) * e.speed * 34 * dt;
+        want = Math.atan2(-dy, -dx);                     // back off, keep the range
       } else {
-        // circle the player instead of ramming
-        e.x += (-dy / d) * e.speed * 30 * dt;
-        e.y += (dx / d) * e.speed * 30 * dt;
+        want = Math.atan2(dy, dx) + Math.PI / 2;         // circle, don't ram
+        push = 0.7;
       }
-      // stored so the player's guns can lead a circling target
+      let diff = want - e.body.heading;
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      // a hull cannot turn on the spot, so sometimes it has to come round
+      const eRudder = Math.max(-1, Math.min(1, diff * 2.2));
+      const eThrottle = Math.max(0, Math.min(1, push * (0.55 + Math.abs(Math.cos(diff)) * 0.45)));
+      W.stepBody(e.body, s.sea, dt, { throttle: eThrottle, rudder: eRudder }, e.eout || (e.eout = {}));
+      e.x = e.body.x;
+      e.y = e.body.y;
+      e.yaw = e.body.heading;
       e.vx = (e.x - px) / dt;
       e.vy = (e.y - py) / dt;
-      e.yaw = Math.atan2(dy, dx);
+      e.wake = e.body.wake;
+      if (e.eout.wakeEmit > 0) emitWake(s, e.body, e.eout.wakeEmit * 0.8, '#7fb6d6');
+
       e.fireCd -= dt;
       if (e.fireCd <= 0 && d < e.range + 90) {
         e.fireCd = 2.2 + Math.random() * 1.2;
@@ -469,37 +571,45 @@
       }
     }
 
-    // bullets
+    // shells — a miss that reaches the water throws a splash, which is how you
+    // read your own fall of shot
     for (const b of s.bullets) {
       b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt;
+      let hit = false;
       for (const e of s.ships) {
         if (e.dead) continue;
         if (Math.hypot(e.x - b.x, e.y - b.y) < 26) {
           e.hp -= b.dmg;
           b.life = 0;
-          s.kills += 0; // counted on death
+          hit = true;
+          burst(e.x, e.y, '#ffb347', 18);
+          beep(300, 0.04, 0.03);
           if (e.hp <= 0) {
             e.dead = true;
             s.kills += 1;
-            burst(e.x, e.y, '#ffb347', 18);
+            burst(e.x, e.y, '#ffb347', 26);
+            emitSplash(s, e.x, e.y, 2.2);
             showBanner(`${e.name} SUNK`, 1.0);
             beep(140, 0.22, 0.09);
           }
           break;
         }
       }
+      if (!hit && b.life <= 0) emitSplash(s, b.x, b.y, 0.8);
     }
     s.bullets = s.bullets.filter((b) => b.life > 0);
 
     for (const b of s.enemyBullets) {
       b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt;
       // flak intercepts incoming fire near the ship
-      if (s.lo.flak && Math.hypot(b.x - s.x, b.y - s.y) < 78 && Math.random() < 0.5) { b.life = 0; continue; }
+      if (s.lo.flak && Math.hypot(b.x - s.x, b.y - s.y) < 78 && Math.random() < 0.5) { b.life = 0; emitSplash(s, b.x, b.y, 0.5); continue; }
       if (Math.hypot(b.x - s.x, b.y - s.y) < 22) {
         s.hull -= b.dmg;
         b.life = 0;
         burst(s.x, s.y, '#ff6d7b', 6);
         if (s.hull <= 0) endBattle(false);
+      } else if (b.life <= 0) {
+        emitSplash(s, b.x, b.y, 0.7);
       }
     }
     s.enemyBullets = s.enemyBullets.filter((b) => b.life > 0);
@@ -536,10 +646,111 @@
     else if (!alive.length) endBattle(true);
 
     $('hullBar').style.width = `${Math.max(0, (s.hull / s.maxHull) * 100)}%`;
+    if (s.seaChip) {
+      const kt = Math.round(W.knots(s.body.u));
+      const heel = Math.round(s.body.roll * 57);
+      s.seaChip.textContent = `${s.sea.preset.name} SEA · ${kt} KN · ${heel}° HEEL`;
+      s.seaChip.classList.toggle('heavy', s.sea.severity >= 0.5);
+    }
     const totalHp = s.ships.reduce((sum, e) => sum + Math.max(0, e.hp), 0);
     const startHp = s.ships.reduce((sum, e) => sum + e.maxHp, 0);
     $('enemyBar').style.width = `${Math.max(0, (totalHp / startHp) * 100)}%`;
     $('fireBtn').classList.toggle('ready', s.fireCd <= 0);
+  }
+
+  /* --------------------------------------------------------------- water FX */
+
+  /**
+   * A wake is emitted *behind* the hull, in the water's frame, with the ship's
+   * own sideways velocity baked in. That is why a hard turn leaves a curved
+   * scar instead of a straight line.
+   */
+  function emitWake(s, body, amount, colour) {
+    const c = Math.cos(body.heading);
+    const sn = Math.sin(body.heading);
+    const stern = -body.spec.length * 0.5;
+    const n = Math.min(4, Math.floor(amount) + (Math.random() < (amount % 1) ? 1 : 0));
+    for (let i = 0; i < n; i++) {
+      const side = (Math.random() - 0.5) * body.spec.beam * 1.2;
+      const x = body.x + c * stern - sn * side;
+      const y = body.y + sn * stern + c * side;
+      const v = Math.hypot(body.u, body.v);
+      const spread = 0.5 + Math.random() * 0.7;
+      s.wake.push({
+        x, y,
+        vx: (-c * v * 0.10) + (Math.random() - 0.5) * spread,
+        vy: (-sn * v * 0.10) + (Math.random() - 0.5) * spread,
+        life: 1,
+        decay: 0.22 + Math.random() * 0.18,
+        r: 1.4 + Math.random() * 2.6 * (1 + body.wake * 0.5),
+        colour: colour || '#cfeeff',
+      });
+    }
+    if (s.wake.length > 700) s.wake.splice(0, s.wake.length - 700);
+  }
+
+  /** Bow spray: thrown forward and up when the hull slams through a crest. */
+  function emitSpray(s, body, strength) {
+    const c = Math.cos(body.heading);
+    const sn = Math.sin(body.heading);
+    const bow = body.spec.length * 0.42;
+    const v = Math.hypot(body.u, body.v);
+    const n = Math.min(10, 2 + Math.round(strength * 8));
+    for (let i = 0; i < n; i++) {
+      const side = (Math.random() - 0.5) * body.spec.beam * 1.4;
+      const a = body.heading + (Math.random() - 0.5) * 1.2;
+      s.spray.push({
+        x: body.x + c * bow - sn * side,
+        y: body.y + sn * bow + c * side,
+        vx: Math.cos(a) * (20 + Math.random() * 55) + Math.cos(body.heading) * v * 0.25,
+        vy: Math.sin(a) * (20 + Math.random() * 55) + Math.sin(body.heading) * v * 0.25,
+        life: 1,
+        decay: 0.9 + Math.random() * 0.8,
+        r: 1.2 + Math.random() * 2,
+      });
+    }
+    if (s.spray.length > 320) s.spray.splice(0, s.spray.length - 320);
+  }
+
+  /** A shell that misses and hits the sea leaves a splash ring. */
+  function emitSplash(s, x, y, size = 1) {
+    s.splash.push({ x, y, r: 3 * size, max: 26 * size, life: 1, decay: 1.5 });
+    if (s.splash.length > 60) s.splash.splice(0, s.splash.length - 60);
+  }
+
+  /** Advance wake / spray / splash; they are pure decoration, so they simply fade. */
+  function stepEffects(s, dt) {
+    const drag = Math.pow(0.55, dt);
+    for (const w of s.wake) {
+      w.x += w.vx * dt;
+      w.y += w.vy * dt;
+      w.vx *= drag;
+      w.vy *= drag;
+      w.life -= w.decay * dt;
+      w.r += dt * 1.6;
+    }
+    if (s.wake.length) s.wake = s.wake.filter((w) => w.life > 0);
+    for (const p of s.spray) {
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vx *= drag;
+      p.vy *= drag;
+      p.life -= p.decay * dt;
+    }
+    if (s.spray.length) s.spray = s.spray.filter((p) => p.life > 0);
+    for (const sp of s.splash) {
+      sp.r += (sp.max - sp.r) * Math.min(1, dt * 6);
+      sp.life -= sp.decay * dt;
+    }
+    if (s.splash.length) s.splash = s.splash.filter((sp) => sp.life > 0);
+    for (const p of s.particles || []) {
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vx *= drag;
+      p.vy *= drag;
+      p.life -= dt;
+    }
+    if (s.particles) s.particles = s.particles.filter((p) => p.life > 0);
   }
 
   function burst(x, y, colour, n) {
@@ -681,25 +892,42 @@
     g.addColorStop(1, '#04121b');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, w, h);
-    // horizon + a slow swell so the dock is not a flat colour
+
+    // the dock sits on the same water the battle does: a slow swell sampled
+    // from the wave field, so the two screens agree about the sea
+    if (!dockSea) dockSea = W.createSea({ state: 'moderate', seed: 21 });
+    dockSea.step(1 / 60);
     const horizon = h * 0.52;
-    ctx.strokeStyle = 'rgba(89,201,255,.14)';
     ctx.lineWidth = 1;
     for (let i = 0; i < 7; i++) {
       const y = horizon + i * 18;
+      const depth = 1 - i / 8;                       // far rows are flatter
+      ctx.strokeStyle = `rgba(89,201,255,${(0.05 + depth * 0.09).toFixed(3)})`;
       ctx.beginPath();
-      for (let x = 0; x <= w; x += 24) {
-        const yy = y + Math.sin((x / 90) + i + performance.now() / 1400) * 3;
+      for (let x = 0; x <= w; x += 18) {
+        const sample = dockSea.at(x * 0.5, y * 0.9 + i * 40);
+        const yy = y + sample.h * 3.4 * depth + Math.sin(x / 90 + i) * 1.6;
         x === 0 ? ctx.moveTo(x, yy) : ctx.lineTo(x, yy);
       }
       ctx.stroke();
     }
-    // the flagship silhouette
+
+    // the flagship silhouette, bobbing on that same swell
     const hull = R.byId(R.HULLS, fleet.hull);
     const scale = 1 + hull.length / 160;
+    const bob = dockSea.height(performance.now() / 240, 40) * 2.2;
+    const heel = dockSea.at(performance.now() / 240, 40).gx * 0.12;
     ctx.save();
-    ctx.translate(w * 0.82, h * 0.7);
+    ctx.translate(w * 0.82, h * 0.7 + bob);
+    ctx.rotate(Math.sin(performance.now() / 2600) * 0.01 + heel * 0.5);
     ctx.scale(scale, scale);
+    // reflection
+    ctx.globalAlpha = 0.18;
+    ctx.fillStyle = '#0a2231';
+    ctx.beginPath();
+    ctx.moveTo(-60, 18); ctx.lineTo(46, 18); ctx.lineTo(62, 34); ctx.lineTo(-52, 34); ctx.closePath();
+    ctx.fill();
+    ctx.globalAlpha = 1;
     ctx.fillStyle = '#12303f';
     ctx.beginPath();
     ctx.moveTo(-60, 0); ctx.lineTo(46, 0); ctx.lineTo(62, 14); ctx.lineTo(-52, 14); ctx.closePath();
@@ -716,24 +944,11 @@
     const w = canvas.clientWidth, h = canvas.clientHeight;
     if (s.over || screen === 'result') return;
 
-    ctx.fillStyle = '#04101a';
-    ctx.fillRect(0, 0, w, h);
-
     const camX = w / 2 - s.x;
     const camY = h / 2 - s.y;
 
-    // sea grid
-    ctx.strokeStyle = 'rgba(89,201,255,.07)';
-    ctx.lineWidth = 1;
-    const step = 120;
-    const startX = Math.floor((s.x - w / 2) / step) * step;
-    const startY = Math.floor((s.y - h / 2) / step) * step;
-    for (let x = startX; x < s.x + w / 2 + step; x += step) {
-      ctx.beginPath(); ctx.moveTo(x + camX, 0); ctx.lineTo(x + camX, h); ctx.stroke();
-    }
-    for (let y = startY; y < s.y + h / 2 + step; y += step) {
-      ctx.beginPath(); ctx.moveTo(0, y + camY); ctx.lineTo(w, y + camY); ctx.stroke();
-    }
+    drawSea(s, camX, camY, w, h);
+    drawWakes(s, camX, camY);
 
     // range ring
     ctx.strokeStyle = 'rgba(89,201,255,.18)';
@@ -742,22 +957,8 @@
     // enemy ships
     for (const e of s.ships) {
       if (e.dead) continue;
-      drawShip(e.x + camX, e.y + camY, e.yaw, 22, '#8c2f3a', '#ff8a6b', `${e.name} ${Math.max(0, Math.round(e.hp))}`);
-    }
-
-    // lock bracket on the ship the guns are tracking
-    if (s.lock && !s.lock.dead && s.lockT > 0) {
-      const lx = s.lock.x + camX, ly = s.lock.y + camY;
-      ctx.strokeStyle = 'rgba(109,255,168,.9)';
-      ctx.lineWidth = 1.5;
-      const r = 30, c = 9;
-      for (const [sx, sy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
-        ctx.beginPath();
-        ctx.moveTo(lx + sx * r, ly + sy * (r - c));
-        ctx.lineTo(lx + sx * r, ly + sy * r);
-        ctx.lineTo(lx + sx * (r - c), ly + sy * r);
-        ctx.stroke();
-      }
+      drawShip(e.x + camX, e.y + camY, e.yaw, 22, '#8c2f3a', '#ff8a6b',
+        `${e.name} ${Math.max(0, Math.round(e.hp))}`, null, e.body);
     }
 
     // lock bracket on the ship the guns are tracking
@@ -806,7 +1007,7 @@
     ctx.globalAlpha = 1;
 
     // player ship
-    drawShip(s.x + camX, s.y + camY, s.yaw, 26, '#0f4a63', '#59c9ff', null, s.lo);
+    drawShip(s.x + camX, s.y + camY, s.yaw, 26, '#0f4a63', '#59c9ff', null, s.lo, s.body);
 
     // virtual stick
     if (s.joy.active) {
@@ -827,10 +1028,147 @@
     ctx.stroke();
   }
 
-  function drawShip(x, y, yaw, size, fill, edge, label, lo) {
+  /**
+   * The sea, drawn from the same field the physics uses.
+   *
+   * Top-down water reads through three things: a depth gradient, the swell
+   * (lines that follow the real height field, so they roll), and foam where
+   * the surface is steep. Sampling is deliberately coarse — a 44 px grid over
+   * a 1400 px screen is ~900 samples a frame, which a phone can afford.
+   */
+  function drawSea(s, camX, camY, w, h) {
+    const sea = s.sea;
+    const sev = sea.severity || 0;
+
+    // deep water, darker than the sky and slightly greener in shallow seas
+    const g = ctx.createLinearGradient(0, 0, 0, h);
+    g.addColorStop(0, '#071b2a');
+    g.addColorStop(0.55, '#04121e');
+    g.addColorStop(1, '#020a12');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
+
+    // the swell: rows of polylines. Each row samples the height field across
+    // the screen, so crests travel and bend with the wave directions.
+    // Sample density scales with the canvas so a big desktop window costs the
+    // same as a phone: at most ~45 columns and ~14 rows, whatever the size.
+    const rowStep = Math.max(46, Math.round(h / 14));
+    const colStep = Math.max(34, Math.round(w / 42));
+    const rows = Math.ceil(h / rowStep) + 2;
+    ctx.lineWidth = 1;
+    for (let r = 0; r < rows; r++) {
+      const wy = s.y - h / 2 + r * rowStep;
+      const screenY = wy + camY;
+      ctx.beginPath();
+      for (let x = -colStep; x <= w + colStep; x += colStep) {
+        const wx = s.x - w / 2 + x;
+        const sample = sea.at(wx, wy);
+        // a metre of swell is worth about a pixel of shading, up to a point
+        const lift = Math.max(-6, Math.min(6, sample.h * 0.9));
+        const yy = screenY + lift;
+        x === -colStep ? ctx.moveTo(x, yy) : ctx.lineTo(x, yy);
+      }
+      // crests are brighter, troughs nearly invisible
+      const alpha = 0.05 + sev * 0.05 + (r % 2) * 0.012;
+      ctx.strokeStyle = `rgba(89,201,255,${alpha.toFixed(3)})`;
+      ctx.stroke();
+    }
+
+    // foam: only where the surface is steep enough to break
+    const fStep = Math.max(52, Math.round(Math.min(w, h) / 9));
+    const fx0 = Math.floor((s.x - w / 2) / fStep) * fStep;
+    const fy0 = Math.floor((s.y - h / 2) / fStep) * fStep;
+    for (let wy = fy0; wy < s.y + h / 2 + fStep; wy += fStep) {
+      for (let wx = fx0; wx < s.x + w / 2 + fStep; wx += fStep) {
+        const foam = sea.foam(wx, wy);
+        if (foam <= 0.08) continue;
+        const jitter = ((wx * 7919 + wy * 104729) % 100) / 100;   // stable per cell
+        const px = wx + camX + (jitter - 0.5) * fStep * 0.8;
+        const py = wy + camY + (((wx * 31 + wy * 17) % 100) / 100 - 0.5) * fStep * 0.8;
+        const len = 5 + foam * 13;
+        ctx.strokeStyle = `rgba(214,240,255,${(foam * 0.5).toFixed(3)})`;
+        ctx.lineWidth = 1 + foam * 1.6;
+        ctx.beginPath();
+        ctx.moveTo(px - len, py);
+        ctx.lineTo(px + len, py);
+        ctx.stroke();
+      }
+    }
+
+    // wind streaks: long, faint and aligned with the wind — the sea's grain
+    const wind = sea.wind();
+    const windA = Math.atan2(wind.y, wind.x);
     ctx.save();
-    ctx.translate(x, y);
+    ctx.globalAlpha = 0.05 + sev * 0.06;
+    ctx.strokeStyle = '#9fd6ee';
+    ctx.lineWidth = 1;
+    const sStep = 150;
+    const sx0 = Math.floor((s.x - w / 2) / sStep) * sStep;
+    const sy0 = Math.floor((s.y - h / 2) / sStep) * sStep;
+    for (let wy = sy0; wy < s.y + h / 2 + sStep; wy += sStep) {
+      for (let wx = sx0; wx < s.x + w / 2 + sStep; wx += sStep) {
+        const px = wx + camX;
+        const py = wy + camY;
+        ctx.beginPath();
+        ctx.moveTo(px, py);
+        ctx.lineTo(px + Math.cos(windA) * 26, py + Math.sin(windA) * 26);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
+  /** Wake, spray and shell splashes, drawn under the hulls. */
+  function drawWakes(s, camX, camY) {
+    // foam trail
+    for (const w of s.wake) {
+      const a = Math.max(0, Math.min(1, w.life)) * 0.5;
+      if (a <= 0.01) continue;
+      ctx.fillStyle = w.colour === '#7fb6d6'
+        ? `rgba(127,182,214,${(a * 0.5).toFixed(3)})`
+        : `rgba(207,238,255,${a.toFixed(3)})`;
+      ctx.beginPath();
+      ctx.arc(w.x + camX, w.y + camY, w.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // spray thrown off the bow
+    for (const p of s.spray) {
+      const a = Math.max(0, Math.min(1, p.life));
+      ctx.fillStyle = `rgba(226,246,255,${(a * 0.75).toFixed(3)})`;
+      ctx.beginPath();
+      ctx.arc(p.x + camX, p.y + camY, p.r * (0.6 + a * 0.8), 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // expanding splash rings where a shell landed
+    for (const sp of s.splash) {
+      const a = Math.max(0, Math.min(1, sp.life));
+      ctx.strokeStyle = `rgba(210,240,255,${(a * 0.55).toFixed(3)})`;
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.arc(sp.x + camX, sp.y + camY, sp.r, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+
+  function drawShip(x, y, yaw, size, fill, edge, label, lo, body) {
+    // The hull rides the swell: `heave` moves it in screen space, `roll` leans
+    // it, and a fast ship sits higher in the water (planing lift).
+    const heave = body ? Math.max(-9, Math.min(9, body.heave * 1.6)) : 0;
+    const roll = body ? body.roll : 0;
+    const speed = body ? Math.abs(body.u) / Math.max(1, body.spec.vMax) : 0;
+    if (heave !== 0) {
+      // a soft shadow under the hull sells the height without a real 3D pass
+      ctx.globalAlpha = 0.28;
+      ctx.fillStyle = '#01060b';
+      ctx.beginPath();
+      ctx.ellipse(x, y + 5, size * 1.02, size * 0.5, yaw, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+    ctx.save();
+    ctx.translate(x, y - heave * 0.35);
     ctx.rotate(yaw);
+    ctx.transform(1, 0, Math.tan(roll * 0.6), 1 + Math.abs(roll) * 0.25, 0, 0);
     ctx.fillStyle = fill;
     ctx.beginPath();
     ctx.moveTo(size, 0);
@@ -857,6 +1195,24 @@
         ctx.lineWidth = 2;
         ctx.beginPath(); ctx.arc(0, 0, size * 0.5, 0, Math.PI * 2); ctx.stroke();
       }
+    }
+
+    // bow wave: two thin foam lines peeling off the shoulders, wider the faster
+    // the hull goes — this is the cheapest honest speed cue there is
+    if (speed > 0.15) {
+      ctx.strokeStyle = `rgba(220,244,255,${(0.10 + speed * 0.30).toFixed(3)})`;
+      ctx.lineWidth = 1 + speed * 1.4;
+      const spread = 0.55 + speed * 0.5;
+      ctx.beginPath();
+      ctx.moveTo(size * 0.95, 0);
+      ctx.lineTo(size * 0.1, size * spread);
+      ctx.lineTo(-size * 0.7, size * (spread + 0.35));
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(size * 0.95, 0);
+      ctx.lineTo(size * 0.1, -size * spread);
+      ctx.lineTo(-size * 0.7, -size * (spread + 0.35));
+      ctx.stroke();
     }
     ctx.restore();
 
@@ -915,6 +1271,18 @@
     // one deterministic simulation step — the host suite drives the battle with
     // this instead of waiting on requestAnimationFrame
     tick: (dt) => { if (screen === 'battle' && session) { updateBattle(dt); drawBattle(); } },
+    /**
+     * Point the bow at a world position using the rudder — the same control a
+     * player has, so a test steering this way is not cheating, just a helmsman.
+     */
+    steerTo: (x, y) => {
+      if (!session) return 0;
+      let diff = Math.atan2(y - session.y, x - session.x) - session.body.heading;
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      session.autopilot = Math.max(-1, Math.min(1, diff * 2.4));
+      return session.autopilot;
+    },
     get screen() { return screen; },
     setTab: (t) => { tab = t; renderAll(); },
   };

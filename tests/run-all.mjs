@@ -28,6 +28,7 @@ const suites = [
   ['fleet.test.mjs', 'FLEET BUILDER + AUTO LANDSCAPE'],
   ['boot.test.mjs', 'FAST BOOT + PORTRAIT HOME + SUPABASE RELAY'],
   ['graphics.test.mjs', 'GRAPHICS TIERS + FULLSCREEN'],
+  ['iron-tide-water.test.mjs', 'IRON TIDE — WATER PHYSICS'],
 ];
 
 await run(process.execPath, ['build.mjs']);
