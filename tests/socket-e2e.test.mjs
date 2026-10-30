@@ -11,6 +11,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { io } from 'socket.io-client';
+import { SocketIoLane, joinPayload, createPayload, clientId } from '../public/js/sio.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(here, '..');
@@ -288,6 +289,53 @@ console.log('\noutsiders');
   check('…as the third player', quick.room.count === 3, String(quick.room.count));
   await ask(carol, 'room:leave', {});
   carol.close();
+}
+
+console.log('\nthe browser lane (public/js/sio.js)');
+{
+  check('join payloads are upper-case and short', (() => {
+    const p = joinPayload('highway-01', 'Ann', 'cid-123');
+    return p.code === 'HIGHWAY-01' && p.name === 'Ann' && p.clientId === 'cid-123';
+  })(), JSON.stringify(joinPayload('highway-01', 'Ann', 'cid-123')));
+  check('create payloads carry a mode', createPayload('ab12', 'Ann', 'siege', 'x').mode === 'siege');
+  check('a browser id exists even without storage', /^[A-Za-z0-9_-]{8,}$/.test(clientId()));
+
+  const messages = [];
+  const statuses = [];
+  const peers = [];
+  const lane = new SocketIoLane({
+    base: URL,
+    code,
+    name: 'Lane',
+    mode: '100-days',
+    ioImpl: io,                                   // the real client, no browser needed
+    onMessage: (m) => messages.push(m),
+    onStatus: (state) => statuses.push(state),
+    onPeer: (p) => peers.push(p),
+  });
+  const connected = await lane.connect();
+  check('the lane connects and joins', connected === true && lane.joined, statuses.join('→'));
+  check('it reports the room it landed in', lane.roomCode === code, lane.roomCode);
+  check('it names the lane in its own status', statuses.includes('online'));
+
+  const seen = once(alice, 'msg');
+  check('the lane can send an envelope', lane.send({ t: 'chat', text: 'from the lane' }) === true);
+  const relayed = await seen;
+  check('…which arrives with the right author', relayed.t === 'chat' && relayed.name === 'LANE', relayed.name);
+
+  const back = once(lane.socket, 'msg');
+  await ask(alice, 'msg', { t: 'chat', text: 'reply' });
+  const received = await back;
+  check('…and messages come back the other way', received.text === 'reply');
+  check('the lane hands them to the game unchanged', messages.some((m) => m.text === 'reply'));
+
+  const count = (await ask(alice, 'room:sync', {})).room.count;
+  check('the lane holds a seat like any player', count >= 3, String(count));
+  await ask(lane.socket, 'room:leave', {});
+  lane.close();
+  await sleep(250);
+  check('leaving frees the seat immediately',
+    (await ask(alice, 'room:sync', {})).room.count === count - 1);
 }
 
 console.log('\na dropped player comes back');
