@@ -74,19 +74,22 @@ Render, Railway, Fly, a VPS, Docker — anything with a port. There are no build
 
 ```bash
 npm install
-npm start                 # node server.js — PORT || 3000, bound to 0.0.0.0
+npm start                 # node server.js — PORT || 8080, bound to 0.0.0.0
 ```
 
 | Variable | Default | What it does |
 | --- | --- | --- |
-| `PORT` | `3000` | the port the host assigns; the server binds `0.0.0.0` so the platform can route to it |
+| `PORT` | `8080` | the port the host assigns; the server binds `0.0.0.0` so Render can route to it |
+| `KEEPALIVE` | `1` | `0` disables the 10-minute self-ping |
+| `KEEPALIVE_MINUTES` | `10` | how often the server GETs its own public URL |
 | `ALLOWED_ORIGINS` | — | extra browser origins, comma separated: `https://*.vercel.app,https://play.example.com` |
 | `PREVIEW_ORIGINS` | `1` | set to `0` to drop the coding-preview wildcard (`*.e2b.app`) from the allowlist |
 
 `https://gemby-game.vercel.app` is allowed out of the box (plus `www`, `localhost` and `192.168.x.x` for
 phone testing on your own Wi-Fi), so the Vercel front-end can open the socket without any configuration.
 Check it from a phone: `https://your-server/health` lists the exact allowlist it is enforcing, and
-`Access-Control-Allow-Origin` is echoed back only for origins on that list.
+`Access-Control-Allow-Origin` is echoed back only for origins on that list. The same response carries
+`keepalive` — proof that the container is pinging itself and staying up (see `docs/DEPLOY-RENDER.md`).
 
 Point the deployed game at it in one of two ways:
 

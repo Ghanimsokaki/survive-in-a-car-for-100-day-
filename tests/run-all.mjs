@@ -35,6 +35,7 @@ const suites = [
   ['lobby.test.mjs', 'LOBBY + MATCHMAKING CODES'],
   ['cors.test.mjs', 'CORS POLICY'],
   ['socket-e2e.test.mjs', 'SOCKET.IO SERVER — LIVE ROOMS'],
+  ['keepalive.test.mjs', 'RENDER KEEP-ALIVE'],
 ];
 
 await run(process.execPath, ['build.mjs']);

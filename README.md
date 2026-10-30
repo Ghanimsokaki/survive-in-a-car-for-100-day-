@@ -14,7 +14,7 @@ and a game that runs on a plain Node server or on **Vercel** — with zero runti
 
 ```bash
 npm install        # express + socket.io (the game itself needs nothing)
-npm start          # http://localhost:3000 — the Socket.IO room server (PORT || 3000)
+npm start          # http://localhost:8080 — the Socket.IO room server (PORT || 8080)
 npm run relay      # http://localhost:8000 — zero-dependency static + WebSocket relay
 npm test           # 22 headless suites (simulation, accounts, UI flows, the live server)
 ```
@@ -520,7 +520,7 @@ without a relay anywhere.
 
 ```bash
 npm install
-npm start                     # node server.js → http://0.0.0.0:3000  (PORT || 3000, bound to all interfaces)
+npm start                     # node server.js → http://0.0.0.0:8080  (PORT || 8080, bound to all interfaces)
 PORT=8000 npm start           # …or wherever the host points you
 ```
 
@@ -568,14 +568,40 @@ Express or Socket.IO, so they are tested directly; `lib/cors-policy.mjs` holds t
 `public/js/sio.js` is the browser half — it loads the client from the server, joins or creates the room,
 re-joins after a reconnect and hands envelopes to the game exactly like every other lane.
 
+### Staying awake on Render
+
+Free containers sleep after ~15 idle minutes. `server.js` keeps itself awake: on boot it starts a single
+interval that, **every 10 minutes, sends a plain GET to its own public URL** (`/health`) using node's native
+`https`/`http` — no dependencies, no cron, no third-party pinger.
+
+```text
+[keepalive] self-ping every 600s → https://gemby-game.onrender.com/health
+[keepalive] ping 1 · HTTP 200 · 118 ms
+```
+
+* The URL comes from `RENDER_EXTERNAL_URL`, which **Render sets automatically**, so there is nothing to
+  configure there. Elsewhere: `PUBLIC_URL`, `SELF_URL`, `KEEPALIVE_URL`, or `RENDER_SERVICE_NAME`
+  (→ `https://<name>.onrender.com`).
+* The interval is deliberately inside the 15-minute window; `KEEPALIVE_MINUTES` changes it, `KEEPALIVE_MS`
+  is the raw override, `KEEPALIVE=0` switches it off, and `KEEPALIVE_PATH` retargets the request.
+* It is honest about itself: `/health` reports `keepalive: {enabled, url, intervalMs, pings, failures,
+  lastStatus, lastAt, lastError}`, so you can confirm from a phone that the container is being woken.
+* It cannot do the impossible: a container that has **already** slept cannot wake itself (nothing is running
+  to send the request), and a free instance is still recycled — the interval simply keeps an awake instance
+  awake. If a deploy has been idle for hours, open the URL once, or add Render's own cron/uptime check as a
+  belt-and-braces backup.
+* Failures never touch the game: a timeout, a refused connection or a 500 is counted, warned about once, and
+  ignored — the timer is `unref()`-ed, so it never keeps a shutting-down process alive.
+
 ### Where the rooms live
 
 Play does not need any of this any more — it is here because the fallbacks still use it. The Supabase
 Realtime lane keeps nothing: messages exist for the length of a broadcast.
 
-The Socket.IO lane (`npm start`) and the plain WebSocket lane (`npm run relay`) keep rooms in the process. The polling lane — the one that runs on Vercel,
-where there are no sockets — used to keep them in the lambda's module scope, which means two players only saw
-each other if the platform happened to put them on the same warm instance.
+The Socket.IO lane (`npm start`) and the plain WebSocket lane (`npm run relay`) keep rooms in the process. The
+polling lane — the one that runs on Vercel, where there are no sockets — used to keep them in the lambda's
+module scope, which means two players only saw each other if the platform happened to put them on the same warm
+instance.
 
 When Supabase is configured, **the server keeps rooms in Postgres instead**: `lib/room-store.mjs` inserts
 each message into `public.room_messages` (room, author, jsonb payload, timestamp) and reads the last 9
@@ -607,6 +633,9 @@ vercel            # framework preset: Other
 polling relay if Supabase is not configured); for 15 Hz Socket.IO rooms run `npm start` on a host that keeps a
 socket open — Render, Railway, Fly, a VPS — and point the game at it with `?relay=https://your-server`, or set
 `window.__OUTRUN_RELAY__` from the deployment's own config.
+
+The room server has its own walkthrough — ports, CORS, the self-ping, how to confirm it from a phone —
+in [`docs/DEPLOY-RENDER.md`](docs/DEPLOY-RENDER.md), and `render.yaml` is a one-click Render blueprint.
 
 ## 🗂 Project layout
 
@@ -648,19 +677,22 @@ lib/admin-auth.mjs    server-side owner check (Supabase token → username → a
 lib/room-store.mjs    room relay storage: Supabase room_messages, memory fallback
 lib/lobby.mjs         rooms, codes, telemetry/chat limits, seat recovery — no dependencies
 lib/cors-policy.mjs   the origin allowlist shared by express and the socket handshake
+lib/keepalive.mjs     the 10-minute self-ping that keeps a free container awake
 games/                community games: <slug>/{game.json,icon.svg,index.html,…,js}
 games/_shared/sdk.js  the postMessage SDK every community game loads
 scripts/scan-games.mjs  validates every game.json and regenerates games/index.json
 supabase/schema.sql   tables, RLS policies, friend RPCs, owner gate, bans, signup trigger
-server.js             Express + Socket.IO realtime host (npm start, PORT || 3000, 0.0.0.0)
+server.js             Express + Socket.IO realtime host (npm start, PORT || 8080, 0.0.0.0)
+render.yaml           Render blueprint: build, start, health check, keep-alive env
 server.mjs            static + WebSocket + polling relay + config endpoint (npm run relay)
 tests/                headless suites (npm test)
 docs/DESIGN.md        game design document
+docs/DEPLOY-RENDER.md the room server on Render: ports, CORS, staying awake
 ```
 
 ## 🧪 Tests
 
-`npm test` copies the browser modules into a shim lane and runs twenty-two suites with no browser:
+`npm test` copies the browser modules into a shim lane and runs twenty-three suites with no browser:
 (`tests/run-all.mjs` is the list; `node tests/build.mjs` must run first after any edit).
 
 * **simulation** — driving, fuel, anchors vs. tornado drift, bosses, scavenging, every recipe, melee,
@@ -692,6 +724,9 @@ docs/DESIGN.md        game design document
   clamping in telemetry, the 15 Hz budget, chat trimming/flooding, held seats and reconnected ghosts.
 * **CORS policy** — the shipped origin allowed, eight lookalikes refused, localhost and LAN phones,
   `ALLOWED_ORIGINS` extras and wildcards, and the Socket.IO handshake callback.
+* **render keep-alive** — URL resolution (`RENDER_EXTERNAL_URL` and the manual overrides), the interval and
+  its clamps, the request itself against a real local server (200, 503, refused, timeout, bad URL), the loop
+  firing and stopping, `KEEPALIVE=0`, and a dead target counting failures without ever throwing.
 * **socket.io server, live** — a real `node server.js` on a real port: `/health`, `/api/rooms`, the served
   client, CORS echo/refusal/preflight, then real clients over a WebSocket — create, join, telemetry,
   throttling, chat, refusal of impostors, the eight-player cap, session recovery after the transport is

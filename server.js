@@ -7,7 +7,11 @@
  * + Vercel-compatible relay); this one is what you deploy to Railway, Render,
  * Fly, a VPS or any container host that keeps a socket open.
  *
- *   npm install && npm start        →  http://0.0.0.0:${PORT:-3000}
+ *   npm install && npm start        →  http://0.0.0.0:${PORT:-8080}
+ *
+ * On Render the service keeps itself awake: every ten minutes the process GETs
+ * its own public URL (`RENDER_EXTERNAL_URL`, which Render sets for you) with
+ * node's native https client — see `lib/keepalive.mjs` and `/health`.`keepalive`.
  *
  * Endpoints
  *   GET  /health                    liveness + room/player counts + CORS policy
@@ -43,12 +47,13 @@ import {
 } from './lib/lobby.mjs';
 import { createCorsPolicy, socketIoCors } from './lib/cors-policy.mjs';
 import { publicConfig } from './lib/supabase-env.mjs';
+import { startKeepAlive } from './lib/keepalive.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-/** Port: honour the host's PORT, and default to the 3000 the platform expects. */
-const PORT = process.env.PORT || 3000;
-/** Bind every interface so the hosting network can route players in. */
+/** Port: honour the host's PORT (Render injects one), default to 8080. */
+const PORT = process.env.PORT || 8080;
+/** Bind every interface so Render's proxy can route player traffic in. */
 const HOST = '0.0.0.0';
 
 // tiny .env loader so `npm start` picks up ALLOWED_ORIGINS / SUPABASE_URL
@@ -69,6 +74,8 @@ const VERSION = (() => {
 })();
 
 const corsPolicy = createCorsPolicy();
+/** Declared before the routes, started after `listen` — see the bottom of the file. */
+let keepAlive = { state: () => ({ enabled: false }), stop() {} };
 const lobby = new Lobby({ maxPlayers: MAX_PLAYERS });
 
 const app = express();
@@ -112,6 +119,7 @@ app.get('/health', (_req, res) => {
     maxPlayersPerRoom: MAX_PLAYERS,
     realtime: { engine: 'socket.io', path: '/socket.io' },
     supabase: { configured: publicConfig(process.env).configured },
+    keepalive: keepAlive.state(),
     cors: { origins: corsPolicy.origins },
   });
 });
@@ -392,6 +400,14 @@ server.listen(PORT, HOST, () => {
   console.log(`  → rooms: 1–${MAX_PLAYERS} players · telemetry up to 15 Hz`);
   console.log(`  → CORS: ${corsPolicy.origins.join(', ')}`);
   console.log(`  → static: ${path.relative(__dirname, SITE) || '.'}`);
+
+  /* ---------------------------------------------------------- keep-alive ---
+   * Free hosts sleep after ~15 idle minutes; a 10-minute GET to our own public
+   * URL counts as traffic and keeps this container awake. Render sets
+   * RENDER_EXTERNAL_URL, so on Render this needs no configuration at all; with
+   * no URL it logs one line and does nothing. KEEPALIVE=0 turns it off.
+   */
+  keepAlive = startKeepAlive();
 });
 
 server.on('error', (err) => {
@@ -406,6 +422,7 @@ server.on('error', (err) => {
 function shutdown(signal) {
   console.log(`\n[${signal}] closing the realtime server…`);
   clearInterval(pruneTimer);
+  keepAlive.stop();
   io.emit('server:closing', { reason: signal });
   io.close(() => {
     server.close(() => {

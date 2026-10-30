@@ -72,7 +72,16 @@ const logs = [];
 console.log(`\nbooting server.js on ${PORT}`);
 const child = spawn(process.execPath, ['server.js'], {
   cwd: root,
-  env: { ...process.env, PORT: String(PORT), HOST: '0.0.0.0', NODE_ENV: 'test' },
+  env: {
+    ...process.env,
+    PORT: String(PORT),
+    HOST: '0.0.0.0',
+    NODE_ENV: 'test',
+    // the Render keep-alive, pointed at this very process and sped up
+    RENDER_EXTERNAL_URL: `http://127.0.0.1:${PORT}`,
+    KEEPALIVE_MS: '600',
+    KEEPALIVE_PATH: '/health',
+  },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 child.stdout.on('data', (d) => logs.push(String(d)));
@@ -134,6 +143,23 @@ console.log('\nhttp surface');
 
   const missing = await fetch(`${URL}/api/nope`);
   check('an unknown api route is a JSON 404', missing.status === 404);
+}
+
+// --------------------------------------------------------------- keep-alive ---
+console.log('\nthe container keeps itself awake');
+{
+  const first = (await (await fetch(`${URL}/health`)).json()).keepalive;
+  check('the keep-alive is on', first.enabled === true, JSON.stringify(first));
+  check('…aimed at its own public URL', first.url === `${URL}/health`, first.url);
+  check('…and reported in /health', typeof first.pings === 'number' && first.intervalMs === 600);
+
+  await sleep(1500);
+  const second = (await (await fetch(`${URL}/health`)).json()).keepalive;
+  check('…pinging on a timer', second.pings > first.pings, `${first.pings} → ${second.pings}`);
+  check('…successfully', second.lastStatus === 200 && second.failures === 0,
+    `${second.lastStatus}/${second.failures}`);
+  check('…without a single warning in the log', !logs.join('').includes('[keepalive] ping') ||
+    !logs.join('').includes('failed'));
 }
 
 // ------------------------------------------------------- handshake origins ---
