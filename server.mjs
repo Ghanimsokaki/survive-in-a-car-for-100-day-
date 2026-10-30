@@ -140,8 +140,10 @@ function cachePolicy(pathname) {
   // vendored third-party code never changes inside a deploy
   if (pathname.startsWith('/vendor/')) return 'public, max-age=31536000, immutable';
   // the game modules and styles are cheap to revalidate but expensive to refetch
-  if (pathname.startsWith('/js/') || pathname.startsWith('/styles.css')) {
-    return 'public, max-age=600, stale-while-revalidate=86400';
+  if (pathname.startsWith('/js/') || pathname === '/styles.css') {
+    // short: index.html is no-store, so a long window here lets a stale module
+    // meet a fresh page after a deploy. The ETag makes revalidation a 304.
+    return 'public, max-age=60, stale-while-revalidate=600';
   }
   if (pathname.startsWith('/games/')) return 'public, max-age=300, stale-while-revalidate=3600';
   return 'public, max-age=60';
@@ -312,11 +314,18 @@ const server = createServer(async (req, res) => {
       return;
     }
   }
-  const filePath = path.join(rootDir, path.normalize(rel).replace(/^([/\\])+/, ''));
+  let filePath = path.join(rootDir, path.normalize(rel).replace(/^([/\\])+/, ''));
   if (!filePath.startsWith(rootDir)) {
     res.writeHead(403).end('Forbidden');
     return;
   }
+  // a directory is its index.html. If it has none, that is a 404 — a folder
+  // that exists must never be answered with the hub page.
+  let isDirectory = false;
+  try {
+    isDirectory = (await stat(filePath)).isDirectory();
+    if (isDirectory) filePath = path.join(filePath, 'index.html');
+  } catch { /* the block below reports the miss */ }
   try {
     const info = await stat(filePath);
     const data = await readFile(filePath);
@@ -356,14 +365,22 @@ const server = createServer(async (req, res) => {
       res.writeHead(404, { 'content-type': 'text/plain' }).end('Game file not found');
       return;
     }
-    // SPA-ish fallback for unknown paths
-    try {
-      const data = await readFile(path.join(PUBLIC, 'index.html'));
-      res.writeHead(200, { 'content-type': MIME['.html'], 'cache-control': 'no-store' });
-      res.end(data);
-    } catch {
-      res.writeHead(404).end('Not found');
+    // Only a *navigation* may fall back to the hub. A missing module, icon or
+    // catalogue must be a real 404: answering 200 + HTML for `/js/typo.js`
+    // makes the browser fail with "responded with a MIME type of text/html",
+    // which hides the actual mistake.
+    const wantsHtml = String(req.headers.accept || '').includes('text/html');
+    const looksLikeFile = /\.[a-z0-9]{1,8}$/i.test(pathname.split('/').pop() || '');
+    if (!isDirectory && wantsHtml && !looksLikeFile) {
+      try {
+        const data = await readFile(path.join(PUBLIC, 'index.html'));
+        res.writeHead(200, { 'content-type': MIME['.html'], 'cache-control': 'no-store' });
+        res.end(data);
+        return;
+      } catch { /* fall through to 404 */ }
     }
+    res.writeHead(404, { 'content-type': 'text/plain', 'cache-control': 'no-store' })
+      .end(`Not found: ${pathname}`);
   }
 });
 

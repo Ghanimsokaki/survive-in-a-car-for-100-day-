@@ -245,4 +245,81 @@ console.log('\nshipped ui');
   check('reduced motion turns the grain off', /prefers-reduced-motion/.test(css));
 }
 
+
+// ---------------------------------------------------------- the render loop
+console.log('\nframe loop resilience');
+{
+  const { Game } = await import('./app/js/game.js');
+  const { El } = await import('./doms.mjs');
+  const make = (quality = 'high') => new Game({
+    mount: new El('div', 'app'),
+    profile: { name: 'LOOP', color: 0xffb347, carColor: 0xd24a2b },
+    room: 'loop-room',
+    quality,
+    onQuit: () => {},
+  });
+
+  const g = make();
+  g.started = true;
+
+  // a lost GPU context must not draw, and must not throw
+  let frames = 0;
+  g.update = () => { frames += 1; };
+  g.contextLost = true;
+  g.loop();
+  check('a lost WebGL context pauses the frame', frames === 0);
+  g.contextLost = false;
+  g.loop();
+  check('the loop resumes when the context is back', frames === 1);
+
+  // one broken frame must stay inside loop()
+  const canvas = g.renderer.domElement;
+  check('context-loss listeners are installed',
+    typeof canvas._l?.['webglcontextlost'] === 'function'
+    && typeof canvas._l?.['webglcontextrestored'] === 'function');
+
+  let threw = false;
+  g.update = () => { throw new Error('boom'); };
+  try { g.loop(); } catch { threw = true; }
+  check('a throwing frame never escapes loop()', !threw);
+  check('the failure is counted', g.frameErrors === 1, String(g.frameErrors));
+
+  // a transient failure recovers
+  g.update = () => { frames += 1; };
+  g.loop();
+  check('a good frame clears the counter', g.frameErrors === 0);
+
+  // a permanent failure tells the player instead of freezing silently
+  let toast = '';
+  g.hud.toast = (m) => { toast = m; };
+  g.update = () => { throw new Error('boom'); };
+  for (let i = 0; i < 30; i++) g.loop();
+  check('a stuck loop warns the player', /RENDER ERROR/.test(toast), toast);
+  check('the warning names the way out', /RESTART/.test(toast));
+
+  g.loop();
+  g.update = () => { throw new Error('boom'); };
+  for (let i = 0; i < 100; i++) g.loop();
+  check('a hopeless loop stops burning the GPU', g.paused === true);
+}
+
+// ------------------------------------------------- the community game SDK path
+console.log('\ncommunity game resilience');
+{
+  const tideRaw = await readFile(path.join(root, 'games', 'iron-tide', 'game.js'), 'utf8');
+  // comments are allowed to talk about the SDK; code is not
+  const tide = tideRaw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  check('iron tide does not assume the hub SDK exists',
+    /const sdk = \(typeof window !== 'undefined' && window\.Arcade\)/.test(tide));
+  check('iron tide never calls a bare Arcade.* (ReferenceError every frame)',
+    !/(^|[^.\w])Arcade\.(score|fit|ready|state|close)/.test(tide), tide.match(/Arcade\.\w+/g)?.join(',') || 'none');
+  check('iron tide still reports its score through the SDK', /sdk\.score\(/.test(tide));
+
+  const sdkSrc = await readFile(path.join(root, 'games', '_shared', 'sdk.js'), 'utf8');
+  check('the SDK publishes window.Arcade', /global\.Arcade = sdk/.test(sdkSrc));
+  const page = await readFile(path.join(root, 'games', 'iron-tide', 'index.html'), 'utf8');
+  check('the game page loads the SDK before itself',
+    page.indexOf('_shared/sdk.js') > 0 && page.indexOf('_shared/sdk.js') < page.indexOf('game.js'));
+}
+
 process.exit(problems.length ? 1 : 0);

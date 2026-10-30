@@ -239,6 +239,9 @@ function showArcade() {
   }
   arcade.show();
   arcade.refresh();
+  // the hub's fullscreen button is created after the installer ran, so give it
+  // the real state instead of the label it was born with
+  fullscreenCtl?.sync();
 }
 
 // ------------------------------------------------------------------- lobby
@@ -249,6 +252,10 @@ function showLobby() {
   // the home is portrait again: unlock landscape and leave fullscreen
   requestPortrait();
   arcade?.hide();
+  // coming back from a run must not leave the button stuck on its loading copy
+  setLoading({ active: false });
+  const play = $('playBtn');
+  if (play) play.innerHTML = 'START THE RUN <span>▸</span>';
   $('lobby').classList.add('show');
   $('nameInput').value = state.name;
   $('roomInput').value = state.room;

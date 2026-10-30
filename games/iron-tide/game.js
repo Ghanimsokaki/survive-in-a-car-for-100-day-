@@ -11,6 +11,25 @@
 (() => {
   'use strict';
   const R = window.FleetRules;
+  /**
+   * The hub SDK (`games/_shared/sdk.js`) is loaded by index.html before this
+   * file. If it is missing — opened from a file:// copy, blocked by an
+   * extension, or the frame was sandboxed harder than expected — the game must
+   * still play instead of throwing a ReferenceError every frame.
+   */
+  const sdk = (typeof window !== 'undefined' && window.Arcade) || {
+    fit(canvas, dpr = 1) {
+      const w = canvas.clientWidth || 960;
+      const h = canvas.clientHeight || 540;
+      if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+        canvas.width = Math.round(w * dpr);
+        canvas.height = Math.round(h * dpr);
+      }
+      return { w, h, dpr };
+    },
+    ready() {},
+    score() {},
+  };
   const canvas = document.getElementById('c');
   const ctx = canvas.getContext('2d');
   const $ = (id) => document.getElementById(id);
@@ -555,7 +574,7 @@
       `${s.kills} SHIP${s.kills === 1 ? '' : 'S'} SUNK · ${s.shots} BROADSIDES FIRED`;
     $('resultTake').textContent = `+${reward.credits} CREDITS · SCORE ${reward.score}`;
 
-    Arcade.score({
+    sdk.score({
       score: reward.score,
       day: fleet.sorties,
       seconds: Math.round(s.t),
@@ -855,7 +874,7 @@
   function frame(now) {
     const dt = Math.min(0.05, (now - last) / 1000);
     last = now;
-    Arcade.fit(canvas, 2);
+    sdk.fit(canvas, 2);
     if (screen === 'battle' && session) {
       updateBattle(dt);
       drawBattle();
@@ -885,7 +904,7 @@
   tryLoad();
   paintWallet();
   renderAll();
-  Arcade.ready();
+  sdk.ready();
   requestAnimationFrame(frame);
 
   // exposed for the host test suite (and for curious players in devtools)

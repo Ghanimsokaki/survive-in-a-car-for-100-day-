@@ -7,8 +7,14 @@
  * poll from a phone.
  */
 import { publicConfig, resolveSupabaseConfig } from '../lib/supabase-env.mjs';
+import { createRoomStore } from '../lib/room-store.mjs';
 
 let probe = { at: 0, value: null };
+
+// `api/room.js` parks its store on the global so warm invocations share it;
+// read the same one here (creating it is cheap and side-effect free).
+const store = globalThis.__outrunRoomStore
+  || (globalThis.__outrunRoomStore = createRoomStore());
 
 async function supabaseStatus(deep) {
   const cfg = resolveSupabaseConfig(process.env);
@@ -49,6 +55,13 @@ export default async function handler(req, res) {
     poll: true,
     ts: Date.now(),
     supabase,
+    // Same shape the Node server reports, so a monitor can point at either
+    // deployment and read the same fields. `api/room.js` keeps one store per
+    // lambda instance, hence the shared global.
+    relay: {
+      backend: store.health.backend,
+      ...store.health,
+    },
     // the same payload /api/config serves, minus the key: useful when a phone
     // can reach Supabase but the browser build never picked the key up
     configKeys: Object.keys(publicConfig(process.env, 'health')),

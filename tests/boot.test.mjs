@@ -236,6 +236,34 @@ console.log('\nnode server');
     check('/api/config is not cacheable',
       /no-store/.test((await fetch(`${base}/api/config`)).headers.get('cache-control') || ''));
 
+    // ---- static routing: a missing asset must be a real 404, never the hub.
+    // Answering 200 + HTML for /js/typo.js makes the browser report a MIME
+    // type error, which hides the actual mistake (and poisons the cache).
+    const missingJs = await fetch(`${base}/js/definitely-not-here.js`, { headers: { accept: '*/*' } });
+    check('a missing module is a 404', missingJs.status === 404, String(missingJs.status));
+    check('a missing module is not HTML', !/html/.test(missingJs.headers.get('content-type') || ''),
+      missingJs.headers.get('content-type'));
+
+    const missingIcon = await fetch(`${base}/icon-nope.svg`);
+    check('a missing asset is a 404', missingIcon.status === 404, String(missingIcon.status));
+
+    const nav = await fetch(`${base}/some/unknown/page`, { headers: { accept: 'text/html' } });
+    const navBody = await nav.text();
+    check('a navigation still lands on the hub', nav.status === 200 && /<div id="app">/.test(navBody),
+      String(nav.status));
+
+    const noIndex = await fetch(`${base}/legacy/`, { headers: { accept: 'text/html' } });
+    check('a directory without index.html is a 404, not the hub',
+      noIndex.status === 404, String(noIndex.status));
+    const legacyPage = await fetch(`${base}/legacy/index-2d.html`);
+    check('the legacy 2D page is still reachable by name',
+      legacyPage.status === 200 && /text\/html/.test(legacyPage.headers.get('content-type') || ''),
+      String(legacyPage.status));
+
+    const jsCache = await fetch(`${base}/js/main.js`);
+    check('app code revalidates quickly after a deploy',
+      /max-age=60\b/.test(jsCache.headers.get('cache-control') || ''), jsCache.headers.get('cache-control'));
+
     // compression + caching: the 690 KB engine must arrive small, then not at all
     // fetch() inflates the body for us, so the wire size is the content-length
     const three = await fetch(`${base}/vendor/three.module.js`, { headers: { 'accept-encoding': 'br' } });

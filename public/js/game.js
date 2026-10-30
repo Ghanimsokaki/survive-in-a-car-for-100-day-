@@ -206,6 +206,7 @@ export class Game {
     this.renderer.toneMappingExposure = this.tier.exposure;
     this.baseExposure = this.tier.exposure;
     this.mount.appendChild(this.renderer.domElement);
+    this.installContextRecovery();
 
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(62, stageSize().w / stageSize().h, 0.1, 1400);
@@ -575,17 +576,68 @@ export class Game {
     el.focus();
   }
 
+  /**
+   * A phone can lose its WebGL context at any time — backgrounding the tab,
+   * a GPU memory squeeze, a driver reset. Without this the canvas stays black
+   * for the rest of the session and the game looks frozen. Three.js restores
+   * its own resources on `webglcontextrestored`; all we have to do is stop
+   * drawing, say so, and pick the loop back up.
+   */
+  installContextRecovery() {
+    const canvas = this.renderer.domElement;
+    if (!canvas?.addEventListener) return;
+    canvas.addEventListener('webglcontextlost', (e) => {
+      // the browser will restore it for us — do not let the default kill it
+      if (e?.preventDefault) e.preventDefault();
+      this.contextLost = true;
+      this.hud?.toast?.('GRAPHICS CONTEXT LOST — RESTORING…', 'warn');
+      console.warn('[render] WebGL context lost — waiting for the restore');
+    }, false);
+    canvas.addEventListener('webglcontextrestored', () => {
+      this.contextLost = false;
+      this.frameErrors = 0;
+      this.clock.getDelta();          // drop the seconds spent without a GPU
+      this.hud?.toast?.('GRAPHICS RESTORED', 'good');
+    }, false);
+  }
+
   // ------------------------------------------------------------------ loops
   loop() {
-    requestAnimationFrame(this.loop);
+    this._raf = requestAnimationFrame(this.loop);
+    if (this.disposed) return;       // the owner called dispose()
     const raw = this.clock.getDelta();
     const dt = Math.min(0.05, raw);
-    this.updatePerf(raw);
-    this.time += dt;
-    if (this.started && !this.paused) this.update(dt);
-    else this.updateIdle(dt);
-    this.updateCamera(dt);
-    this.renderer.render(this.scene, this.camera);
+    if (this.contextLost) return;    // nothing to draw until the GPU is back
+    try {
+      this.updatePerf(raw);
+      this.time += dt;
+      if (this.started && !this.paused) this.update(dt);
+      else this.updateIdle(dt);
+      this.updateCamera(dt);
+      this.renderer.render(this.scene, this.camera);
+      this.frameErrors = 0;
+    } catch (err) {
+      this.onFrameError(err);
+    }
+  }
+
+  /**
+   * One bad frame must not turn into a frozen game. The first failure is
+   * logged in full, the loop keeps trying, and if it is not transient the
+   * player is told what to do instead of staring at a still image.
+   */
+  onFrameError(err) {
+    this.frameErrors = (this.frameErrors || 0) + 1;
+    if (this.frameErrors === 1) console.error('[frame] update failed', err);
+    if (this.frameErrors === 30) {
+      this.hud?.toast?.('RENDER ERROR — TAP ☰ TWICE TO RESTART', 'bad');
+      this.hud?.prompt?.('RENDER ERROR — TAP ☰ TWICE TO RESTART');
+    }
+    if (this.frameErrors > 120 && !this.paused) {
+      // stop burning the battery on a broken scene, keep the UI alive
+      this.paused = true;
+      this.hud?.show?.();
+    }
   }
 
   updateIdle(dt) {
@@ -2187,8 +2239,26 @@ export class Game {
   }
 
   dispose() {
-    this.net?.close();
-    this.renderer.dispose();
-    this.mount.innerHTML = '';
+    this.disposed = true;
+    // stop the loop first: a disposed renderer that is still being drawn is a
+    // guaranteed "context lost" on the next frame
+    if (this._raf !== undefined) {
+      try { cancelAnimationFrame(this._raf); } catch { /* noop */ }
+      this._raf = undefined;
+    }
+    this.net?.close?.();
+    // free GPU memory with the scene, not just the renderer
+    try {
+      this.scene?.traverse?.((o) => {
+        o.geometry?.dispose?.();
+        const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
+        for (const m of mats) {
+          for (const v of Object.values(m)) if (v?.isTexture) v.dispose?.();
+          m.dispose?.();
+        }
+      });
+    } catch { /* a stub scene in tests */ }
+    this.renderer.dispose?.();
+    if (this.mount) this.mount.innerHTML = '';
   }
 }

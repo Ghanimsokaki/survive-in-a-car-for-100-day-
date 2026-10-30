@@ -19,6 +19,24 @@ npm test           # headless suites (simulation, accounts, both UI flows)
 
 No install step, no build step. `public/vendor/three.module.js` is vendored, so the game boots even offline.
 
+## 🧯 Errors: what is guarded, and where
+
+The game is built so that a failure is *local and visible* instead of a frozen screen:
+
+| Failure | What happens |
+| --- | --- |
+| A module 404s | the dev server answers a real **404** (it used to answer `200` + `index.html`, which the browser reports as a confusing MIME error). PLAY shows "could not load the 3D engine", restores the button and retries. |
+| The 3D kit fails to load | the lobby stays on screen, portrait is handed back, nothing is blocked. |
+| A frame throws | `Game.onFrameError` logs the first one, keeps the loop alive, warns the player after 30, and pauses after 120 instead of burning the battery on a still image. |
+| The GPU drops the context (backgrounding, OOM, driver reset) | `webglcontextlost` is caught, drawing pauses, and `webglcontextrestored` resumes the loop with a clean clock. Without this a phone shows a black canvas for the rest of the session. |
+| A browser refuses AudioContext / fullscreen / orientation lock | the feature is skipped (`console.warn` at most); the game keeps playing, silently. |
+| A community game loads without the hub SDK | both Iron Tide and the template fall back to a local `sdk` shim instead of throwing `ReferenceError` every frame. |
+| A directory has no `index.html` | 404 — it is never silently answered with the hub page. |
+
+`npm test` covers the observable half of that list (the frame guard, context loss, the SDK
+fallback, the 404 rules and the loader contract); the browser half is guarded with optional
+chaining so an absent API can never throw.
+
 ## ⚡ No loading screen
 
 There is **no splash and no blocking loading card** anywhere:

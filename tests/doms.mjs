@@ -56,6 +56,30 @@ export class El {
       if (i >= 0) this._parent.children.splice(i, 1);
     }
   }
+  /** Enough of Element.closest/matches for delegated click handlers. */
+  matches(sel) {
+    const list = String(sel || '').split(',').map((x) => x.trim()).filter(Boolean);
+    return list.some((s) => {
+      if (s.startsWith('#')) return `#${this.id}` === s;
+      if (s.startsWith('.')) return this.classList.contains(s.slice(1));
+      if (s.startsWith('[')) {
+        const inner = s.slice(1, -1);
+        const [key, rawValue] = inner.split('=');
+        const name = key.replace(/^data-/, '').replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+        if (rawValue === undefined) return this.dataset?.[name] !== undefined;
+        return String(this.dataset?.[name] ?? '') === rawValue.replace(/^['"]|['"]$/g, '');
+      }
+      return this.tagName === s.toUpperCase();
+    });
+  }
+  closest(sel) {
+    let node = this;
+    while (node) {
+      if (typeof node.matches === 'function' && node.matches(sel)) return node;
+      node = node._parent;
+    }
+    return null;
+  }
   addEventListener(t, fn) { (this.listeners[t] ||= []).push(fn); }
   removeEventListener() {}
   dispatch(t, ev = {}) {

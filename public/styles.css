@@ -230,9 +230,6 @@ kbd{background:#161b25;border:1px solid rgba(255,255,255,.13);border-bottom-widt
 .ld-bar i{display:block;height:100%;width:0;border-radius:3px;
   background:linear-gradient(90deg,#ffb347,#ffd9a0);transition:width .18s linear}
 .play-btn.loading{opacity:.85;cursor:progress}
-.spin{width:34px;height:34px;border-radius:50%;border:2px solid rgba(255,179,71,.2);border-top-color:var(--amber);
-  animation:spin .8s linear infinite}
-@keyframes spin{to{transform:rotate(360deg)}}
 
 @media (max-width:820px){
   .lobby-body{grid-template-columns:1fr;padding:18px}
