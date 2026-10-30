@@ -112,58 +112,20 @@ const KIT_FILES = [
 ];
 
 let kitPromise = null;
-const kitProgress = { loaded: 0, total: KIT_FILES.reduce((n, [, kb]) => n + kb, 0), ratio: 0 };
-const progressHandlers = new Set();
-
-/** Subscribe to loader progress. Returns an unsubscribe function. */
-export function onKitProgress(fn) {
-  progressHandlers.add(fn);
-  try { fn(kitProgress); } catch { /* a broken listener must not break loading */ }
-  return () => progressHandlers.delete(fn);
-}
-
-export const kitProgressState = () => ({ ...kitProgress });
-
-function reportKit(bytes) {
-  kitProgress.loaded = Math.min(kitProgress.total, kitProgress.loaded + bytes);
-  kitProgress.ratio = kitProgress.total ? kitProgress.loaded / kitProgress.total : 1;
-  for (const fn of progressHandlers) {
-    try { fn(kitProgress); } catch { /* ignore */ }
-  }
-}
 
 /**
- * Pulls the module graph into the HTTP cache ahead of the import, counting the
- * bytes as they arrive so the button can show a real percentage. If streaming
- * is unavailable the file weight is credited when the response lands — either
- * way the bar only ever moves forward.
+ * Pulls the module graph into the HTTP cache ahead of the import. There is no
+ * progress to show any more — the point of prefetching is that the player never
+ * *sees* the download: by the time they press PLAY the modules are already on
+ * the device, and a repeat visit answers from the ETag cache.
  */
 async function prefetchKit() {
-  await Promise.all(KIT_FILES.map(async ([url, weight]) => {
-    let credited = 0;
-    const credit = (kb) => {
-      const add = Math.max(0, Math.min(kb, weight - credited));
-      if (add <= 0) return;
-      credited += add;
-      reportKit(add);
-    };
+  await Promise.all(KIT_FILES.map(async ([url]) => {
     try {
-      // no cache override: the server's ETag turns a repeat visit into a 304,
-      // and a deploy is never masked by a stale force-cache hit
       const res = await fetch(new URL(url, import.meta.url).href);
       if (!res.ok) throw new Error(`http ${res.status}`);
-      if (res.body?.getReader) {
-        const reader = res.body.getReader();
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          credit((value?.byteLength || 0) / 1024);
-        }
-      } else {
-        await res.arrayBuffer();
-      }
-    } catch { /* a missing file must not stall the bar */ }
-    credit(weight);            // whatever did not stream is counted at the end
+      await res.arrayBuffer();
+    } catch { /* a missing file must not stop the rest */ }
   }));
 }
 
@@ -281,10 +243,9 @@ function showLobby() {
   // the home is portrait again: unlock landscape and leave fullscreen
   requestPortrait();
   arcade?.hide();
-  // coming back from a run must not leave the button stuck on its loading copy
-  setLoading({ active: false });
+  // coming back from a run must leave PLAY pressable
   const play = $('playBtn');
-  if (play) play.innerHTML = 'START THE RUN <span>▸</span>';
+  if (play) play.disabled = false;
   $('lobby').classList.add('show');
   $('nameInput').value = state.name;
   $('roomInput').value = state.room;
@@ -530,28 +491,6 @@ function renderFriends() {
   }
 }
 
-/**
- * The loading indicator is a slim chip, not a screen. It sits above the PLAY
- * button, keeps the menu usable underneath, and disappears the moment the world
- * is on screen. There is deliberately no way for it to cover the game.
- */
-function setLoading({ active = false, pct = null, note = '' } = {}) {
-  const chip = $('loading');
-  if (chip) {
-    chip.classList.toggle('show', Boolean(active));
-    chip.classList.toggle('gone', !active);
-    const text = chip.querySelector?.('.ld-text') || null;
-    if (text) text.textContent = note || (active ? 'LOADING' : '');
-    if (pct !== null) {
-      const bar = chip.querySelector?.('.ld-bar i');
-      if (bar?.style) bar.style.width = `${Math.max(0, Math.min(100, pct))}%`;
-      chip.setAttribute?.('data-pct', String(Math.round(pct)));
-    }
-  }
-  const btn = $('playBtn');
-  if (btn) btn.classList.toggle('loading', Boolean(active));
-}
-
 /** Toast that works before the 3D HUD exists. */
 function hudToast(text, kind = '') {
   try {
@@ -589,19 +528,30 @@ async function addFriend() {
 }
 
 // ----------------------------------------------------------------- net probe
+/**
+ * Says which lane multiplayer will use, before the player has to find out the
+ * hard way. Supabase is the main server now, so it is checked first and named
+ * first; our own relay is only reported when it is the one that will carry play.
+ */
 async function probeRelay() {
   const el = $('netStatus');
   if (!el) return;
+  const supa = account.sb?.url && account.sb?.key ? account.sb.url : '';
+  if (supa) {
+    el.textContent = `● SUPABASE REALTIME (${String(supa).replace(/^https?:\/\//, '')}) — SHARE THE ROOM CODE TO PLAY TOGETHER`;
+    el.className = 'net-status ok';
+    return;
+  }
   try {
     const res = await fetch('/api/health', { cache: 'no-store' });
     if (res.ok) {
       const data = await res.json();
-      el.textContent = `● RELAY READY (${data.mode || 'node'}) — SHARE THE ROOM CODE TO PLAY TOGETHER`;
-      el.className = 'net-status ok';
+      el.textContent = `● FALLBACK RELAY (${data.mode || 'node'}) — SET SUPABASE_URL + SUPABASE_ANON_KEY FOR THE FAST LANE`;
+      el.className = 'net-status warn';
       return;
     }
   } catch {}
-  el.textContent = '● STATIC MODE — OPEN TWO TABS FOR LOCAL CO-OP';
+  el.textContent = '● LOCAL MODE — OPEN TWO TABS FOR LOCAL CO-OP';
   el.className = 'net-status warn';
 }
 
@@ -618,15 +568,13 @@ async function startRun() {
   // the game: fire it and carry on. `run-live` is added once the kit is ready.
   if (isPhone && !landscapeTried && isPortrait()) goLandscape();
 
+  // NO LOADING STATE OF ANY KIND. The engine is prefetched from first paint, so
+  // the wait here is normally zero; when it is not, the menu simply stays up and
+  // the run begins the moment the modules land. The button is disabled (never
+  // re-labelled) so a second press cannot start two runs.
   const btn = $('playBtn');
-  const btnLabel = btn ? btn.innerHTML : '';
-  const fails = [];
-  setLoading({ active: true, pct: 0, note: 'LOADING THE 3D ENGINE' });
-  const stopCounter = onKitProgress((p) => {
-    const pct = Math.round((p.ratio || 0) * 100);
-    setLoading({ active: true, pct, note: pct >= 100 ? 'STARTING ENGINE' : `LOADING THE 3D ENGINE · ${pct}%` });
-    if (btn) btn.innerHTML = `LOADING ${pct}%`;
-  });
+  const unlock = () => { if (btn) btn.disabled = false; };
+  if (btn) btn.disabled = true;
 
   // Play is a gesture: the one reliable moment to honour a saved fullscreen
   // preference. Fire and forget — it must not gate the run.
@@ -634,24 +582,20 @@ async function startRun() {
     toggleFullscreen({ on: true }).then(() => fullscreenCtl?.sync()).catch(() => {});
   }
 
-  // NO BLOCKING LOADING SCREEN: the menu stays on screen and usable while the
-  // engine streams in. If anything fails we simply stay here with a retry.
+  // The menu stays on screen and usable the whole time; a failure drops straight
+  // back to it with the reason, never into a spinner.
   let kit = null;
   try {
     kit = await loadGameKit();
   } catch (err) {
     console.error('[load] game kit failed', err);
-    fails.push(String(err?.message || err));
   }
-  stopCounter();
   if (!kit) {
-    setLoading({ active: false });
+    unlock();
     document.body.classList.remove('run-live', 'auto-land');
     document.documentElement.classList.remove('rot-stage');
     requestPortrait();                  // the menu is portrait: hand it back
-    if (btn) btn.innerHTML = btnLabel;
-    setFriendNote('Could not load the 3D engine — check your connection and press PLAY again.', 'err');
-    hudToast('LOAD FAILED — TAP PLAY TO RETRY', 'warn');
+    showProblem('COULD NOT OPEN THE ENGINE — CHECK YOUR CONNECTION AND PRESS START AGAIN');
     starting = false;
     return;
   }
@@ -665,14 +609,8 @@ async function startRun() {
     document.documentElement.classList.add('rot-stage');
   }
 
-  if (btn) btn.innerHTML = 'DROPPING IN…';
-  setLoading({ active: true, pct: 100, note: 'DROPPING IN' });
-
-  await new Promise((r) => setTimeout(r, 60));
-
-  // the menu stays up until this exact moment, so nothing ever looks stuck
+  // the menu stays up until the world is actually ready, then it is simply gone
   $('lobby').classList.remove('show');
-  $('loading').classList.add('gone');
 
   try {
     game = new kit.Game({
@@ -685,6 +623,10 @@ async function startRun() {
       },
       room: state.room,
       quality: settings.quality,
+      // the room runs on Supabase's realtime edge; the node relay is the fallback
+      supabase: account.sb?.url && account.sb?.key
+        ? { url: account.sb.url, key: account.sb.key }
+        : null,
       mode: state.mode,
       onQuit: () => location.reload(),
       onRunEnd: (stats) => {
@@ -718,19 +660,27 @@ async function startRun() {
     }
   } catch (err) {
     console.error(err);
-    setLoading({ active: false });
+    unlock();
     document.body.classList.remove('run-live', 'auto-land');
     document.documentElement.classList.remove('rot-stage');
     requestPortrait();
-    if (btn) btn.innerHTML = btnLabel;
-    setFriendNote(`Could not start: ${err.message}`, 'err');
-    hudToast('COULD NOT START — TAP PLAY TO RETRY', 'warn');
+    showProblem(`COULD NOT START: ${err.message}`);
     starting = false;
     return;
   }
 
-  setLoading({ active: false });
+  unlock();
   starting = false;
+}
+
+/** One way to say "this failed" — the error bar, plus the lobby note while it is up. */
+function showProblem(text) {
+  setFriendNote(text, 'err');
+  const bar = $('errBar');
+  const label = $('errText');
+  if (label) label.textContent = `PROBLEM: ${String(text).toUpperCase()}`;
+  if (bar) bar.classList.remove('hidden');
+  hudToast(text, 'warn');
 }
 
 // presence: keep the friend list honest while playing
@@ -1044,7 +994,6 @@ async function boot() {
     authPreview?.setAvatar(hexToInt(state.color), 'SURVIVOR');
   }
 
-  setTimeout(() => $('loading').classList.add('gone'), 500);
   // the menu is interactive now; pull the 3D kit in the background so the first
   // PLAY press does not start a cold megabyte
   warmGameKit();

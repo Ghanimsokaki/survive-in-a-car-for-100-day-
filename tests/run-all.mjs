@@ -30,6 +30,8 @@ const suites = [
   ['graphics.test.mjs', 'GRAPHICS TIERS + FULLSCREEN'],
   ['iron-tide-water.test.mjs', 'IRON TIDE — WATER PHYSICS'],
   ['player-profile.test.mjs', 'ACCOUNT PICTURE + SETTINGS'],
+  ['net-supabase.test.mjs', 'SUPABASE-FIRST MULTIPLAYER'],
+  ['net-e2e.test.mjs', 'SUPABASE ROOMS — LIVE SOCKET'],
 ];
 
 await run(process.execPath, ['build.mjs']);

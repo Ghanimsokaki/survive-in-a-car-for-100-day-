@@ -122,7 +122,12 @@ document.documentElement.requestFullscreen = async () => { fullscreenCalls.push(
 document.fullscreenElement = null;
 
 // start the run
+// pressing PLAY must not conjure a loading screen, and the button must come back
+document.getElementById('playBtn').dispatch('click');
+check('PLAY disables itself rather than showing progress', document.getElementById('playBtn').disabled === true);
 await api.startRun();
+check('and is pressable again once the world is up', document.getElementById('playBtn').disabled === false);
+check('no loading element exists anywhere', !document.getElementById('loading') || !document.getElementById('loading').classList.contains('show'));
 await wait(400);
 const game = api.game;
 check('game constructed', Boolean(game));

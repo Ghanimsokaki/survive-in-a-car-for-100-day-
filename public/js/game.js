@@ -65,7 +65,7 @@ export const WEATHERS = {
 };
 
 export class Game {
-  constructor({ mount, profile, room, onQuit, onRunEnd, quality, mode }) {
+  constructor({ mount, profile, room, onQuit, onRunEnd, quality, mode, supabase = null }) {
     this.mount = mount;
     this.profile = profile;
     this.onQuit = onQuit;
@@ -145,6 +145,8 @@ export class Game {
     this.net = new Net({
       room,
       profile,
+      // the room runs on Supabase's realtime edge when the project is configured
+      supabase,
       onPeer: (p) => this.onPeer(p),
       onLeave: (p) => this.onPeerLeave(p),
       onChat: (c, own) => this.onChat(c, own),
@@ -2367,11 +2369,19 @@ export class Game {
   }
 
   onNetStatus(mode, text) {
-    const el = document.getElementById('netStatus');
-    if (!el) return;
-    el.textContent = `${mode === 'online' ? '● RELAY ONLINE' : mode === 'poll' ? '● HTTP RELAY' : '● CONNECTING'} — ${text}`;
-    el.className = `net-status ${mode === 'online' ? 'ok' : 'warn'}`;
-    this.netStatus = { mode, text };
+    const lane = this.net?.lane || 'offline';
+    const label = lane === 'supabase' ? 'SUPABASE'
+      : lane === 'ws' ? 'RELAY'
+        : lane === 'poll' ? 'HTTP RELAY'
+          : 'CONNECTING';
+    const where = document.getElementById('netStatus');
+    if (where) {
+      where.textContent = `● ${label} — ${text}`;
+      where.className = `net-status ${lane === 'supabase' || lane === 'ws' ? 'ok' : 'warn'}`;
+    }
+    // and in a run, on the HUD chip that already exists
+    this.hud?.net?.(label, mode, text);
+    this.netStatus = { mode, text, lane };
   }
 
   onPeerCount(n) {

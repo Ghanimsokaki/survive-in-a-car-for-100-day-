@@ -29,6 +29,16 @@
 <link rel="modulepreload" href="./js/authui.js" />
 <link rel="modulepreload" href="./js/arcade.js" />
 <link rel="modulepreload" href="./js/orientation.js" />
+<!-- the 3D kit: fetched at parse time (low priority) so PLAY has nothing left
+     to wait for. modulepreload does not execute the modules, only caches them. -->
+<link rel="modulepreload" href="./js/game.js" />
+<link rel="modulepreload" href="./js/world.js" />
+<link rel="modulepreload" href="./js/buildings.js" />
+<link rel="modulepreload" href="./js/hud.js" />
+<link rel="modulepreload" href="./js/avatar.js" />
+<link rel="modulepreload" href="./js/vehicle.js" />
+<link rel="modulepreload" href="./js/net.js" />
+<link rel="modulepreload" href="./js/realtime.js" />
 <link rel="dns-prefetch" href="https://fonts.gstatic.com" />
   <link rel="icon" href="./icon.svg" type="image/svg+xml" />
 </head>
@@ -224,10 +234,6 @@
         </div>
 
         <button id="playBtn" class="play-btn">START THE RUN <span>▸</span></button>
-        <div id="loading" class="gone" aria-live="polite">
-          <span class="ld-text">LOADING</span>
-          <span class="ld-bar"><i></i></span>
-        </div>
         <p id="netStatus" class="net-status">checking relay…</p>
       </div>
 
@@ -327,6 +333,7 @@
       <span id="vitals">HP 100</span>
       <span id="weaponRow">FISTS</span>
       <span id="anchorRow">SPIKES LOCKED</span>
+      <span id="linkRow">LINKING</span>
       <span id="fpsRow">60 FPS</span>
     </div>
   </div>

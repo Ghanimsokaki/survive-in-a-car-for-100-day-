@@ -193,6 +193,18 @@ export class HUD {
     while (this.el.chatLog.children.length > 7) this.el.chatLog.firstChild.remove();
   }
 
+  /**
+   * The multiplayer lane, on the diagnostics strip: SUPABASE when the room is
+   * running on the realtime edge, RELAY when it fell back to our own server.
+   */
+  net(label, state = '', detail = '') {
+    const el = document.getElementById('linkRow');
+    if (!el) return;
+    el.textContent = label;
+    el.title = detail || state || '';
+    el.className = state === 'online' ? 'link-ok' : 'link-warn';
+  }
+
   setParty(rows) {
     this.el.party.innerHTML = rows.map((r) => `
       <div class="party-row">

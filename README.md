@@ -38,21 +38,22 @@ The game is built so that a failure is *local and visible* instead of a frozen s
 fallback, the 404 rules and the loader contract); the browser half is guarded with optional
 chaining so an absent API can never throw.
 
-## ⚡ No loading screen
+## ⚡ No loading — anywhere
 
-There is **no splash and no blocking loading card** anywhere:
+There is **no splash, no loading card, no progress bar and no percentage** left in the app. The words
+"loading" and "loading…" do not appear in the UI at all.
 
-* **Boot** — the sign-in screen is static HTML, so it is interactive before a single module parses. The old
-  "WARMING THE ENGINE…" overlay is gone.
-* **PLAY** — pressing it leaves the lobby on screen and turns the button into a live percentage
-  (`LOADING 42%`) with a thin progress bar underneath. The percentage is measured from the bytes actually on
-  the wire, not a fake timer.
-* **Warm start** — the 3D kit starts downloading 600 ms after the menu is interactive (and again on the first
-  tap). It used to wait for `requestIdleCallback`, which on this page can never fire because the avatar
-  preview draws every frame — that is exactly why PLAY sometimes looked frozen.
-* **It cannot get stuck** — if the kit fails, the chip disappears, the PLAY label is restored, the menu stays
-  up with "could not load the 3D engine — check your connection and press PLAY again", and pressing PLAY
-  retries. The lobby is only hidden once the world is actually built.
+* **Boot** — the sign-in screen is static HTML, so it is interactive before a single module parses.
+* **PLAY** — the lobby stays up and the run begins the instant the engine is ready. The button is only
+  *disabled* while that happens (never re-labelled), so a double tap cannot start two runs, and if
+  something fails you land back on the menu with the real reason in the error bar.
+* **The kit is preloaded from the markup** — `modulepreload` for `game.js`, `world.js`, `hud.js`,
+  `net.js` and friends is in `<head>`, so the browser fetches them at parse time; the loader only
+  *caches* them. By the time a player has typed a name, PLAY has nothing left to wait for.
+* **Warm start** — the kit also starts importing 600 ms after the menu is interactive (and again on the
+  first tap), because `requestIdleCallback` never fires on a page that draws an avatar preview every frame.
+* Removed with it: `#loading`, `.ld-bar`, `.ld-text`, `setLoading()`, `onKitProgress()`,
+  `kitProgressState()`, the byte-counting stream reader and the `LOADING 42%` button copy.
 
 ## ⚡ Fast loading
 
@@ -483,18 +484,33 @@ upgrades early with the right mats).
 
 Plus fuel refining, repair kits, tire patches, full overhauls, armor plating ×3 and hydraulic anchor tiers ×4.
 
-## 👥 Multiplayer
+## 👥 Multiplayer — Supabase is the main server
 
 Share a **room code**. Everyone in the room shares the highway: positions, driving/walking state, health,
-weapon and chat are relayed ~11×/s. Three transport lanes, one JSON envelope:
+weapon and chat go out ~11×/s. One JSON envelope, four lanes, tried in this order:
 
-1. **WebSocket** relay in `server.mjs` (zero dependencies, hand-rolled RFC 6455).
-2. **HTTP polling** via `POST /api/room` — automatic fallback, and what keeps online play working on Vercel.
-3. **BroadcastChannel** — always on, so two tabs on one machine see each other instantly.
+1. **Supabase Realtime** (default). The client joins the broadcast channel `realtime:room:<room>`
+   **directly** — phone → Supabase edge → phones. Our own server is not in the path at all, which is lower
+   latency *and* the only lane that scales without us running anything. Public broadcast channels work with
+   just the anon key; no policies to add.
+2. **WebSocket relay** in `server.mjs` — a bare clone without Supabase credentials, or a self-hosted relay
+   via `?relay=wss://your-relay.example/ws`.
+3. **HTTP polling** via `POST /api/room` — serverless hosts without sockets, best effort.
+4. **BroadcastChannel** — always on, so two tabs on one machine see each other instantly.
 
-Point the client at a remote relay with `?relay=wss://your-relay.example/ws`.
+The fallbacks are automatic and quiet: a project that refuses the join, never opens the socket or dies
+mid-session brings the relay up beside it, and the HUD names whichever lane is actually carrying play
+(`SUPABASE` / `RELAY` / `HTTP RELAY`).
+
+`public/js/realtime.js` is a ~200-line, dependency-free client for Supabase's realtime protocol (Phoenix
+channels): join, broadcast, 25 s heartbeat, reconnect with backoff, leave. `tests/net-e2e.test.mjs` runs
+two real clients through a real socket against a stand-in edge and asserts they meet, chat and leave —
+without a relay anywhere.
 
 ### Where the rooms live
+
+Play does not need any of this any more — it is here because the fallbacks still use it. The Supabase
+Realtime lane keeps nothing: messages exist for the length of a broadcast.
 
 The WebSocket lane (`npm start`) keeps rooms in the process. The polling lane — the one that runs on Vercel,
 where there are no sockets — used to keep them in the lambda's module scope, which means two players only saw

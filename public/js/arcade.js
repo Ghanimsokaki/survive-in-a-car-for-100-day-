@@ -693,7 +693,9 @@ export class Arcade {
     this.nodes.result.classList.add('hidden');
     this.syncStage();
     this.nodes.playerTitle.textContent = game.title;
-    this.nodes.playerStatus.textContent = 'LOADING…';
+    // no loading copy anywhere: the frame simply fades in when the game says it
+    // is ready (arcade:ready), and until then the bar shows the game's name
+    this.nodes.playerStatus.textContent = '';
     // relative URL: the iframe is same-path but sandboxed without same-origin,
     // so it can render our files yet cannot read our DOM, storage or session
     const url = `./${game.path}/${game.entry}?g=${encodeURIComponent(game.id)}`;
