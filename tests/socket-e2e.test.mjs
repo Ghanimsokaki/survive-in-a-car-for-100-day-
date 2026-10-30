@@ -114,6 +114,13 @@ console.log('\nhttp surface');
     JSON.stringify(health.cors));
   check('health counts rooms', typeof health.rooms === 'number' && typeof health.players === 'number');
 
+  // the browser finds this lane by asking /api/health (Vercel answers it from
+  // api/health.js) — a page served by this server must not fall back
+  const apiHealth = await fetch(`${URL}/api/health`);
+  const apiJson = apiHealth.ok ? await apiHealth.json() : {};
+  check('the lane is discoverable on /api/health too', apiHealth.ok && apiJson.engine === 'socket.io',
+    String(apiHealth.status));
+
   const rooms = await fetch(`${URL}/api/rooms`);
   check('/api/rooms answers', rooms.ok && Array.isArray((await rooms.json()).rooms));
 

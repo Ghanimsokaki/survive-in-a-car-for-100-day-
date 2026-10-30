@@ -15,7 +15,7 @@
  * node's native https client — see `lib/keepalive.mjs` and `/health`.`keepalive`.
  *
  * Endpoints
- *   GET  /health                    liveness + room/player counts + CORS mode
+ *   GET  /health, /api/health       liveness + room/player counts + CORS mode
  *   GET  /api/rooms                 a public summary of live rooms (no ids)
  *   GET  /api/config, /config.json  Supabase credentials + realtime hints for the page
  *   GET  /socket.io/socket.io.js    the client library for the browser
@@ -113,7 +113,14 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: '32kb' }));
 
 /* ---------------------------------------------------------------- routes --- */
-app.get('/health', (_req, res) => {
+/**
+ * Liveness, and the banner the browser reads to discover this lane: `main.js`
+ * probes `/api/health` and accepts the answer only when it says
+ * `engine: 'socket.io'`. Vercel serves that path from `api/health.js`, so this
+ * server answers it too — otherwise a page served *by* the socket.io server
+ * would never find the socket.io server and would quietly take a fallback lane.
+ */
+function healthHandler(_req, res) {
   res.setHeader('Cache-Control', 'no-store');
   res.json({
     ok: true,
@@ -129,7 +136,9 @@ app.get('/health', (_req, res) => {
     keepalive: keepAlive.state(),
     cors: { open: corsPolicy.open, mode: corsPolicy.mode, origins: corsPolicy.origins },
   });
-});
+}
+app.get('/health', healthHandler);
+app.get('/api/health', healthHandler);
 
 app.get('/api/rooms', (_req, res) => {
   res.setHeader('Cache-Control', 'no-store');
