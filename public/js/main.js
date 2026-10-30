@@ -63,6 +63,23 @@ const account = new Account();
 // the player's own preferences (volume, shake, graphics). Kept separate from
 // the run's state so they survive every restart.
 let settings = loadSettings();
+
+/**
+ * WHERE MULTIPLAYER LIVES.
+ *  · `?relay=https://host` on the URL — an explicit socket.io server
+ *  · `window.__OUTRUN_RELAY__` — baked in by a deploy
+ *  · the page's own origin, when it was served by `server.js` (detected through
+ *    /api/health, which only that server answers with engine: 'socket.io')
+ * Empty means "no socket.io host": the Supabase lane carries play instead.
+ */
+let relayUrl = (() => {
+  try {
+    const fromQuery = new URLSearchParams(location.search).get('relay') || '';
+    const clean = (v) => String(v || '').trim().replace(/\/+$/, '');
+    if (fromQuery) return clean(fromQuery).replace(/^ws(s?):\/\//i, 'http$1://');
+    return clean(globalThis.__OUTRUN_RELAY__);
+  } catch { return ''; }
+})();
 let playerPanel = null;
 let game = null;
 let admin = null;
@@ -536,6 +553,25 @@ async function addFriend() {
 async function probeRelay() {
   const el = $('netStatus');
   if (!el) return;
+  // the socket.io server, when the page is being served by it, takes priority:
+  // it is the dedicated realtime host and the health route proves it is there
+  if (!relayUrl) {
+    try {
+      const res = await fetch('/api/health', { cache: 'no-store' });
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.realtime?.engine === 'socket.io' || data?.engine === 'socket.io') {
+          relayUrl = location.origin;
+        }
+      }
+    } catch { /* no local server */ }
+  }
+  if (relayUrl) {
+    el.textContent = `● SOCKET.IO SERVER (${String(relayUrl).replace(/^https?:\/\//, '')}) — SHARE THE ROOM CODE TO PLAY TOGETHER`;
+    el.className = 'net-status ok';
+    return;
+  }
+
   const supa = account.sb?.url && account.sb?.key ? account.sb.url : '';
   if (supa) {
     el.textContent = `● SUPABASE REALTIME (${String(supa).replace(/^https?:\/\//, '')}) — SHARE THE ROOM CODE TO PLAY TOGETHER`;
@@ -623,7 +659,9 @@ async function startRun() {
       },
       room: state.room,
       quality: settings.quality,
-      // the room runs on Supabase's realtime edge; the node relay is the fallback
+      // the dedicated socket.io server when one is advertised…
+      relayUrl,
+      // …then Supabase's realtime edge, then the node relay underneath both
       supabase: account.sb?.url && account.sb?.key
         ? { url: account.sb.url, key: account.sb.key }
         : null,

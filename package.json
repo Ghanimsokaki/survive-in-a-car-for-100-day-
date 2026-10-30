@@ -1,16 +1,22 @@
 {
   "name": "100-days-outrun",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "private": true,
   "type": "module",
-  "description": "100 Days Outrun \u2014 a 3D multiplayer post-apocalyptic highway survival run with Supabase accounts, friends and phone controls.",
+  "description": "100 Days Outrun — a 3D multiplayer post-apocalyptic highway survival run with Supabase accounts, friends, phone controls and a Socket.IO realtime server.",
+  "main": "server.js",
   "scripts": {
-    "start": "node server.mjs",
-    "dev": "node server.mjs",
+    "start": "node server.js",
+    "dev": "node server.js",
+    "relay": "node server.mjs",
     "build": "node scripts/build.mjs",
     "test": "node tests/run-all.mjs",
     "test:build": "node tests/build.mjs",
     "games": "node scripts/scan-games.mjs"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5"
   },
   "engines": {
     "node": ">=18"
@@ -19,9 +25,13 @@
     "game",
     "threejs",
     "multiplayer",
+    "socket.io",
     "survival",
     "3d",
     "vercel"
   ],
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "socket.io-client": "^4.8.4"
+  }
 }

@@ -65,7 +65,7 @@ export const WEATHERS = {
 };
 
 export class Game {
-  constructor({ mount, profile, room, onQuit, onRunEnd, quality, mode, supabase = null }) {
+  constructor({ mount, profile, room, onQuit, onRunEnd, quality, mode, supabase = null, relayUrl = '' }) {
     this.mount = mount;
     this.profile = profile;
     this.onQuit = onQuit;
@@ -147,6 +147,8 @@ export class Game {
       profile,
       // the room runs on Supabase's realtime edge when the project is configured
       supabase,
+      // …or on the dedicated socket.io server when one is advertised
+      relayUrl,
       onPeer: (p) => this.onPeer(p),
       onLeave: (p) => this.onPeerLeave(p),
       onChat: (c, own) => this.onChat(c, own),
@@ -2370,14 +2372,15 @@ export class Game {
 
   onNetStatus(mode, text) {
     const lane = this.net?.lane || 'offline';
-    const label = lane === 'supabase' ? 'SUPABASE'
-      : lane === 'ws' ? 'RELAY'
-        : lane === 'poll' ? 'HTTP RELAY'
-          : 'CONNECTING';
+    const label = lane === 'socketio' ? 'SOCKET.IO'
+      : lane === 'supabase' ? 'SUPABASE'
+        : lane === 'ws' ? 'RELAY'
+          : lane === 'poll' ? 'HTTP RELAY'
+            : 'CONNECTING';
     const where = document.getElementById('netStatus');
     if (where) {
       where.textContent = `● ${label} — ${text}`;
-      where.className = `net-status ${lane === 'supabase' || lane === 'ws' ? 'ok' : 'warn'}`;
+      where.className = `net-status ${lane === 'socketio' || lane === 'supabase' || lane === 'ws' ? 'ok' : 'warn'}`;
     }
     // and in a run, on the HUD chip that already exists
     this.hud?.net?.(label, mode, text);

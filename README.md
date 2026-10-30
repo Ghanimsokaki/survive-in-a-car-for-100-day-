@@ -6,18 +6,21 @@ throws scavengers, raider cars, acid rain and Category 5 hypercanes at you the w
 Roblox-style **username + password sign-in**, a **friends list with live presence**, full **phone support**,
 and a game that runs on a plain Node server or on **Vercel** — with zero runtime dependencies.
 
-![engine](https://img.shields.io/badge/engine-Three.js%20r169-ff8a1e) ![accounts](https://img.shields.io/badge/accounts-Supabase-3ecf8e) ![multiplayer](https://img.shields.io/badge/multiplayer-WebSocket%20%2B%20HTTP%20fallback-5ff0ff) ![mobile](https://img.shields.io/badge/phones-touch%20ready-5ff0ff) ![deploy](https://img.shields.io/badge/deploy-Vercel-black)
+![engine](https://img.shields.io/badge/engine-Three.js%20r169-ff8a1e) ![accounts](https://img.shields.io/badge/accounts-Supabase-3ecf8e) ![multiplayer](https://img.shields.io/badge/multiplayer-Socket.IO%20%C2%B7%20Supabase%20%C2%B7%20fallbacks-5ff0ff) ![mobile](https://img.shields.io/badge/phones-touch%20ready-5ff0ff) ![deploy](https://img.shields.io/badge/deploy-Vercel-black)
 
 ---
 
 ## ▶ Play
 
 ```bash
-npm start          # http://localhost:8000
-npm test           # headless suites (simulation, accounts, both UI flows)
+npm install        # express + socket.io (the game itself needs nothing)
+npm start          # http://localhost:3000 — the Socket.IO room server (PORT || 3000)
+npm run relay      # http://localhost:8000 — zero-dependency static + WebSocket relay
+npm test           # 22 headless suites (simulation, accounts, UI flows, the live server)
 ```
 
-No install step, no build step. `public/vendor/three.module.js` is vendored, so the game boots even offline.
+No build step. `public/vendor/three.module.js` is vendored, so the game boots even offline; `npm run relay`
+serves it with no dependencies at all, and `npm start` adds Socket.IO rooms on top.
 
 ## 🧯 Errors: what is guarded, and where
 
@@ -484,35 +487,93 @@ upgrades early with the right mats).
 
 Plus fuel refining, repair kits, tire patches, full overhauls, armor plating ×3 and hydraulic anchor tiers ×4.
 
-## 👥 Multiplayer — Supabase is the main server
+## 👥 Multiplayer — Socket.IO rooms, Supabase beside it
 
-Share a **room code**. Everyone in the room shares the highway: positions, driving/walking state, health,
-weapon and chat go out ~11×/s. One JSON envelope, four lanes, tried in this order:
+Share a **room code** (or press *quick play*). Everyone in the room shares the highway: positions,
+driving/walking state, health, weapon and chat go out up to 15×/s. One JSON envelope, five lanes, tried in
+this order:
 
-1. **Supabase Realtime** (default). The client joins the broadcast channel `realtime:room:<room>`
-   **directly** — phone → Supabase edge → phones. Our own server is not in the path at all, which is lower
-   latency *and* the only lane that scales without us running anything. Public broadcast channels work with
-   just the anon key; no policies to add.
-2. **WebSocket relay** in `server.mjs` — a bare clone without Supabase credentials, or a self-hosted relay
-   via `?relay=wss://your-relay.example/ws`.
-3. **HTTP polling** via `POST /api/room` — serverless hosts without sockets, best effort.
-4. **BroadcastChannel** — always on, so two tabs on one machine see each other instantly.
+1. **Socket.IO** (`server.js`, `npm start`). A real realtime host: rooms of **1–8**, matchmaking codes,
+   15 Hz vehicle telemetry, chat with rate limits, connection-state recovery and ghost-seat reclaiming.
+   The server advertises itself on `/api/health` (`engine: "socket.io"`), so a page served by it — or a
+   page told about it with `?relay=https://your-server` — uses this lane automatically.
+2. **Supabase Realtime**. The client joins the broadcast channel `realtime:room:<room>` **directly** —
+   phone → Supabase edge → phones. No server of ours in the path at all, so it works on a static Vercel
+   deploy with just the anon key.
+3. **WebSocket relay** in `server.mjs` (`npm run relay`) — a bare clone without Supabase credentials, or a
+   self-hosted relay via `?relay=wss://your-relay.example/ws`.
+4. **HTTP polling** via `POST /api/room` — serverless hosts without sockets, best effort.
+5. **BroadcastChannel** — always on, so two tabs on one machine see each other instantly.
 
 The fallbacks are automatic and quiet: a project that refuses the join, never opens the socket or dies
-mid-session brings the relay up beside it, and the HUD names whichever lane is actually carrying play
-(`SUPABASE` / `RELAY` / `HTTP RELAY`).
+mid-session brings the next lane up beside it, and the HUD names whichever lane is actually carrying play
+(`SOCKET.IO` / `SUPABASE` / `RELAY` / `HTTP RELAY`).
 
 `public/js/realtime.js` is a ~200-line, dependency-free client for Supabase's realtime protocol (Phoenix
 channels): join, broadcast, 25 s heartbeat, reconnect with backoff, leave. `tests/net-e2e.test.mjs` runs
 two real clients through a real socket against a stand-in edge and asserts they meet, chat and leave —
 without a relay anywhere.
 
+### The Socket.IO server (`npm start`)
+
+`server.js` is the production realtime host: Express for HTTP, Socket.IO for the wire.
+
+```bash
+npm install
+npm start                     # node server.js → http://0.0.0.0:3000  (PORT || 3000, bound to all interfaces)
+PORT=8000 npm start           # …or wherever the host points you
+```
+
+| Endpoint | What it is |
+| --- | --- |
+| `GET /health` | liveness, room/player counts, engine + realtime path, and the CORS allowlist |
+| `GET /api/rooms` | public room list (`code`, `mode`, `players`, `max`) — no player ids |
+| `GET /api/config`, `/config.json` | Supabase credentials + realtime hints, exactly what Vercel's function serves |
+| `GET /socket.io/socket.io.js` | the browser client, served by the server itself (no CDN) |
+| `GET *` | the built game (`dist/` when present, `public/` otherwise) |
+
+The wire protocol — every request takes an ack callback that answers `{ok:true,…}` or
+`{ok:false,error:{code,message}}`, so a client never hangs:
+
+```text
+→ room:create {name, mode, code?, clientId?}   ← room:joined {ok, code, you, reconnected, room}
+→ room:join   {code, name, clientId?}          ← room:joined …
+→ room:quick  {name, mode, clientId?}          ← room:joined …      (fullest room with space)
+→ room:sync   {}                               ← room:state {code, mode, host, count, max, players[]}
+→ room:leave  {}                               ← room:left + player:left to the room
+→ msg         {t:'state'|'chat'|'event'|'hello'|'bye', …}
+
+server → room: player:joined · player:left · room:state · room:closed · room:evicted · error:msg
+```
+
+* **1 — 8 players per room.** The ninth is refused with `room_full`; a solo player is a legal room.
+* **Codes** are five characters from an alphabet without `O/0` and `I/1` (so `O`→`Q`, `1`→`L` on the way
+  in). Custom codes of 4–12 characters are honoured — `highway-01` becomes `HIGHWAY01`.
+* **Telemetry** is whitelisted field by field (`x,y,z,yaw,speed,kmh,hp,hpMax,weapon,inCar,car,day`), so a
+  client cannot smuggle `__proto__` or a 4 KB string into everybody else's session, and it is capped at
+  15 Hz per player: a burst is dropped (`{ok:true,throttled:true}`), never punished.
+* **Chat** is one line, 120 characters, 6 messages per 10 s, with the author stamped by the server.
+* **Drops are not departures.** A phone that locks its screen keeps its seat for 6 s, and Socket.IO's
+  connection-state recovery can hand the same session back inside 45 s. If recovery is impossible (a full
+  reload), the browser presents the same `clientId` and the server hands the old seat over instead of
+  leaving a ghost car in the road.
+* **CORS** is one allowlist shared by the HTTP routes and the handshake: `gemby-game.vercel.app` (plus
+  `www`), `localhost` and `192.168.x.x` for phone testing, `*.e2b.app` for the live coding preview
+  (`PREVIEW_ORIGINS=0` switches it off), and `ALLOWED_ORIGINS` for anything else —
+  `ALLOWED_ORIGINS="https://*.vercel.app,https://play.example.com"`. Wildcards are matched on the parsed
+  host, so `gemby-game.vercel.app.evil.com` is refused. Lookalikes have their own test suite.
+
+`lib/lobby.mjs` holds the rules (caps, codes, sanitising, rate limits, pruning) with no dependency on
+Express or Socket.IO, so they are tested directly; `lib/cors-policy.mjs` holds the allowlist;
+`public/js/sio.js` is the browser half — it loads the client from the server, joins or creates the room,
+re-joins after a reconnect and hands envelopes to the game exactly like every other lane.
+
 ### Where the rooms live
 
 Play does not need any of this any more — it is here because the fallbacks still use it. The Supabase
 Realtime lane keeps nothing: messages exist for the length of a broadcast.
 
-The WebSocket lane (`npm start`) keeps rooms in the process. The polling lane — the one that runs on Vercel,
+The Socket.IO lane (`npm start`) and the plain WebSocket lane (`npm run relay`) keep rooms in the process. The polling lane — the one that runs on Vercel,
 where there are no sockets — used to keep them in the lambda's module scope, which means two players only saw
 each other if the platform happened to put them on the same warm instance.
 
@@ -542,8 +603,10 @@ vercel            # framework preset: Other
 `SUPABASE_ANON_KEY` in *Project → Settings → Environment Variables* (all three environments), then
 **redeploy** — env changes only apply to new deployments. The build log prints
 `supabase accounts: configured (url from SUPABASE_URL)` when they were picked up, and
-`dist/config.json` is generated from them as a fallback. Online play on Vercel uses the polling lane; for
-low-latency WebSocket rooms host `server.mjs` and pass `?relay=`.
+`dist/config.json` is generated from them as a fallback. Online play on Vercel uses Supabase Realtime (or the
+polling relay if Supabase is not configured); for 15 Hz Socket.IO rooms run `npm start` on a host that keeps a
+socket open — Render, Railway, Fly, a VPS — and point the game at it with `?relay=https://your-server`, or set
+`window.__OUTRUN_RELAY__` from the deployment's own config.
 
 ## 🗂 Project layout
 
@@ -564,7 +627,8 @@ public/
   js/avatar.js        blocky survivor rig, face, name tag, weapons, walk cycle
   js/enemies.js       hollows, raider cars, boss rig
   js/tornado.js       funnel visuals, swirl debris, pull/lift force field
-  js/net.js           multi-transport multiplayer client
+  js/net.js           multi-transport multiplayer client (socketio → supabase → ws → poll)
+  js/sio.js           Socket.IO lane: client loader, room join/create, re-join on reconnect
   js/hud.js           HUD, radar scope, paginated workbench, chat, toasts
   js/items.js         item + drop-table catalogue (materials, medkits, fuel cans, gear)
   js/loot.js          physical loot drops: meshes, magnet drift, pickup, expiry
@@ -582,18 +646,21 @@ public/
 api/                  Vercel functions: /api/room, /api/health, /api/config, /api/admin
 lib/admin-auth.mjs    server-side owner check (Supabase token → username → allow-list)
 lib/room-store.mjs    room relay storage: Supabase room_messages, memory fallback
+lib/lobby.mjs         rooms, codes, telemetry/chat limits, seat recovery — no dependencies
+lib/cors-policy.mjs   the origin allowlist shared by express and the socket handshake
 games/                community games: <slug>/{game.json,icon.svg,index.html,…,js}
 games/_shared/sdk.js  the postMessage SDK every community game loads
 scripts/scan-games.mjs  validates every game.json and regenerates games/index.json
 supabase/schema.sql   tables, RLS policies, friend RPCs, owner gate, bans, signup trigger
-server.mjs            static + WebSocket + polling relay + config endpoint
+server.js             Express + Socket.IO realtime host (npm start, PORT || 3000, 0.0.0.0)
+server.mjs            static + WebSocket + polling relay + config endpoint (npm run relay)
 tests/                headless suites (npm test)
 docs/DESIGN.md        game design document
 ```
 
 ## 🧪 Tests
 
-`npm test` copies the browser modules into a shim lane and runs fifteen suites with no browser:
+`npm test` copies the browser modules into a shim lane and runs twenty-two suites with no browser:
 (`tests/run-all.mjs` is the list; `node tests/build.mjs` must run first after any edit).
 
 * **simulation** — driving, fuel, anchors vs. tornado drift, bosses, scavenging, every recipe, melee,
@@ -620,6 +687,15 @@ docs/DESIGN.md        game design document
   props / clouds), auto-detect, a real `Game` booted at all four tiers (4K shadows, PBR env, rim + fill
   lights, fog, avatar detail, cloud sprites drifting and wrapping), material/segment scaling, and the
   fullscreen module: enter/exit, the keyboard shortcuts, chat-field safety, and the iOS refusal path.
+* **lobby + matchmaking codes** — the rules on their own: codes generated/typed/misread, custom room
+  names, the 1–8 cap, quick play preferring the fullest room, host hand-over, prototype-poisoning and
+  clamping in telemetry, the 15 Hz budget, chat trimming/flooding, held seats and reconnected ghosts.
+* **CORS policy** — the shipped origin allowed, eight lookalikes refused, localhost and LAN phones,
+  `ALLOWED_ORIGINS` extras and wildcards, and the Socket.IO handshake callback.
+* **socket.io server, live** — a real `node server.js` on a real port: `/health`, `/api/rooms`, the served
+  client, CORS echo/refusal/preflight, then real clients over a WebSocket — create, join, telemetry,
+  throttling, chat, refusal of impostors, the eight-player cap, session recovery after the transport is
+  killed, ghost-seat reclaiming, SIGTERM shutdown.
 * **loot + inventory + recipes** — 1000 generated recipes unique and browsable, drops only bank when you
   stand on them, magnet/expiry behaviour, stack caps, hotbar pinning, medkit/fuel/repair use, 24-per-page
   workbench paging + search, and every one of the 1,015 recipes crafting without an error.

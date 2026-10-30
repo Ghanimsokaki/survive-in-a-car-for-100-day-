@@ -1,16 +1,19 @@
 import { uid } from './utils.js';
 import { SupabaseRealtime } from './realtime.js';
+import { SocketIoLane } from './sio.js';
 
 /**
  * MULTIPLAYER TRANSPORT — Supabase first, our relay only as a fallback.
  *
  * Four lanes, tried in this order:
+ *  0. **Socket.IO server** (`server.js` → `npm start`) — the dedicated realtime
+ *     host: rooms of 1–8, matchmaking codes, telemetry at up to 15 Hz. Used
+ *     whenever a relay origin is configured (`?relay=https://…`, the page's own
+ *     origin when it is served by that server, or `window.__OUTRUN_RELAY__`).
  *  1. Supabase Realtime broadcast — phone → Supabase edge → phones. No server of
- *     ours in the path at all, which is both lower latency and the only lane
- *     that scales without us running anything. The default when the project is
- *     configured (it always is on a normal deploy).
- *  2. WebSocket relay (`npm start`) — a bare clone with no Supabase credentials,
- *     or a self-hosted relay via `?relay=wss://…`.
+ *     ours in the path at all. The default when the project is configured and no
+ *     socket.io host was advertised.
+ *  2. WebSocket relay (`server.mjs`) — a bare clone with no credentials.
  *  3. HTTP polling (`/api/room`) — Vercel serverless, best effort.
  *  4. BroadcastChannel — extra tabs in the same browser, always on.
  *
@@ -23,6 +26,8 @@ export class Net {
     // { url, key } — the Supabase project. When present the room runs on the
     // realtime edge and our own relay is never dialled.
     supabase = null,
+    // the socket.io server origin, e.g. "https://outrun-relay.up.railway.app"
+    relayUrl = '',
     fetchImpl = null,
   }) {
     this.room = (room || 'highway-01').toLowerCase().replace(/[^a-z0-9-_]/g, '').slice(0, 12) || 'highway-01';
@@ -42,6 +47,8 @@ export class Net {
     this.alive = true;
     this.wsAttempts = 0;
     this.supabase = supabase && supabase.url && supabase.key ? supabase : null;
+    this.relayUrl = String(relayUrl || '').replace(/\/+$/, '');
+    this.sio = null;                // SocketIoLane instance
     this.rt = null;                 // SupabaseRealtime instance
     this.fetchImpl = fetchImpl || ((...a) => globalThis.fetch(...a));
     this.WebSocketImpl = null;      // injectable for tests
@@ -57,14 +64,75 @@ export class Net {
       this.bc = new BroadcastChannel(`outrun-${this.room}`);
       this.bc.onmessage = (e) => this.consume(e.data);
     } catch { /* unsupported */ }
-    // LANE 1: Supabase Realtime. If it cannot even try, fall through instantly.
-    if (this.supabase && this.connectSupabase()) {
-      // nothing else to dial; the socket lane would only duplicate traffic
+    // LANE 0: the dedicated socket.io server, when one was advertised. It is
+    // asynchronous (the client script has to load), so the slower lanes stay
+    // dark until it has had its chance — dialling two lanes at once would
+    // double every message.
+    if (this.connectSocketIo()) {
+      // its own failure path calls fallBackFromSocketIo()
+    } else if (this.supabase && this.connectSupabase()) {
+      // LANE 1 took it
     } else {
       this.connectWS();
     }
     this.hello();
     this.pruneTimer = setInterval(() => this.prune(), 1000);
+  }
+
+  /**
+   * LANE 0. Joins the socket.io server. Returns true when a connection attempt
+   * was made; the lane reports its own success or gives up to the next one.
+   */
+  connectSocketIo() {
+    if (!this.relayUrl) return false;
+    try {
+      this.lane = 'socketio';
+      this.onStatus?.('joining', `socket.io server · room ${this.room}`);
+      this.sio = new SocketIoLane({
+        base: this.relayUrl,
+        code: this.room,
+        name: this.profile.name,
+        mode: this.profile.mode || '100-days',
+        onMessage: (msg) => this.consume(msg),
+        onPeer: (p) => { if (p?.id) this.consume({ t: 'hello', id: p.id, name: p.name, ts: Date.now() }); },
+        onStatus: (state, detail) => {
+          if (!this.alive) return;
+          if (state === 'online') {
+            this.mode = 'online';
+            this.onStatus?.('online', detail || 'socket.io server');
+            this.hello();
+            if (this.lastState) this.send({ t: 'state', ...this.lastState });
+            this.flushPending();
+          } else if (state === 'joining') {
+            this.onStatus?.('joining', detail || 'socket.io server');
+          } else if (state === 'error' || state === 'reconnecting') {
+            this.onStatus?.('poll', detail || 'socket.io unavailable');
+          }
+        },
+      });
+      this.sio.connect().then((ok) => {
+        if (ok || !this.alive) return;
+        this.fallBackFromSocketIo();
+      }).catch(() => this.fallBackFromSocketIo());
+      return true;
+    } catch {
+      this.sio = null;
+      this.lane = 'offline';
+      return false;
+    }
+  }
+
+  /** The socket.io host refused or is unreachable: move to the next lane. */
+  fallBackFromSocketIo(why = 'socket.io unavailable') {
+    if (this.socketIoDead) return;
+    this.socketIoDead = true;
+    this.degraded = true;
+    try { this.sio?.close(); } catch { /* already gone */ }
+    this.sio = null;
+    this.lane = 'offline';
+    this.onStatus?.('poll', why);
+    if (this.supabase && this.connectSupabase()) return;
+    this.connectWS();
   }
 
   /**
@@ -234,8 +302,10 @@ export class Net {
     };
     if (this.bc) { try { this.bc.postMessage(payload); } catch {} }
     let delivered = false;
+    // LANE 0: the socket.io server
+    if (this.sio) delivered = this.sio.send(payload);
     // LANE 1: straight to the Supabase edge
-    if (this.rt) delivered = this.rt.send(payload);
+    if (!delivered && this.rt) delivered = this.rt.send(payload);
     if (!delivered && this.ws && this.ws.readyState === 1) {
       try { this.ws.send(JSON.stringify(payload)); delivered = true; } catch { /* ignore */ }
     }
@@ -330,6 +400,7 @@ export class Net {
     this.stopPolling();
     try { this.send({ t: 'bye' }); } catch {}
     try { this.bc?.close(); } catch {}
+    try { this.sio?.close(); } catch {}
     try { this.rt?.close(); } catch {}
     try { this.ws?.close(); } catch {}
   }
