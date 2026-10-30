@@ -27,7 +27,8 @@ The game is built so that a failure is *local and visible* instead of a frozen s
 | --- | --- |
 | A module 404s | the dev server answers a real **404** (it used to answer `200` + `index.html`, which the browser reports as a confusing MIME error). PLAY shows "could not load the 3D engine", restores the button and retries. |
 | The 3D kit fails to load | the lobby stays on screen, portrait is handed back, nothing is blocked. |
-| A frame throws | `Game.onFrameError` logs the first one, keeps the loop alive, warns the player after 30, and pauses after 120 instead of burning the battery on a still image. |
+| A frame throws | simulation and drawing are guarded separately. A failed **draw** steps the graphics down one notch and retries (shadows → post layer → resolution → particles → safe mode), so a fussy GPU ends up playable instead of black. A failed **update** keeps the loop alive, warns after 30 frames and pauses after 120 instead of burning the battery on a still image. |
+| Anything throws at all | the **error bar** names the actual message (`PROBLEM: …`) and carries a real **RESTART** button — in a run, and even before the game boots (`window.onerror` / `unhandledrejection`). The last failure is kept in `window.__outrunLastError` for a bug report. |
 | The GPU drops the context (backgrounding, OOM, driver reset) | `webglcontextlost` is caught, drawing pauses, and `webglcontextrestored` resumes the loop with a clean clock. Without this a phone shows a black canvas for the rest of the session. |
 | A browser refuses AudioContext / fullscreen / orientation lock | the feature is skipped (`console.warn` at most); the game keeps playing, silently. |
 | A community game loads without the hub SDK | both Iron Tide and the template fall back to a local `sdk` shim instead of throwing `ReferenceError` every frame. |
@@ -225,7 +226,48 @@ Once signed in, the lobby shows a friends panel:
 * Remove with ✕. Presence beats every 20 s and friends auto-refresh every 25 s, so the list stays honest.
 * Best run (`best_day`) is stored per account and kept across devices.
 
+**Where to add somebody:** the lobby card, or the **Add Friends** tile in the arcade (top of the hub). Both
+open the same sheet, and both accept:
+
+* an `@username` (`@ghanim`), with or without the `@`;
+* a plain username in any capitalisation (`Ghanim`, `GHANIM`);
+* a **display name**, as long as exactly one survivor has it — an ambiguous name (or a partial match hitting
+  several people) tells you to add by `@username` instead of silently picking somebody.
+
+Every failure is spelled out in the sheet: *no survivor called "…"*, *that is you*, *already on your list*,
+*your Supabase project blocked the write — re-run `supabase/schema.sql`*. Nothing fails silently any more.
+
 Guests still get the shared highway and chat — they just have no persistent friends list.
+
+## 🖼 Your own account picture
+
+Open it from the hub avatar, **⚙ SETTINGS** (lobby or hub) or the in-run gear, then **CHOOSE PICTURE**:
+
+* the photo is **centre-cropped square and resized to 196 px on the device** before it is saved — a 6 MB
+  camera photo becomes a few kilobytes, so the friends list and the Supabase free tier stay happy;
+* the stored value is a `data:` URL in `profiles.avatar_image`; the schema refuses anything that is not a
+  small inline image, or anything over 420 KB;
+* the picture shows in the hub header, the lobby account chip, the friends list, the player panel **and on
+  the 3D nameplate above your head** in a run;
+* **REMOVE** clears it and falls back to your two initials on your saved colour.
+
+Projects on an older schema are handled honestly: the write drops the `avatar_image` column, keeps your name
+and colours, and tells you the picture is saved on this device only. Run `supabase/schema.sql` once to sync.
+
+## 🎛 Settings
+
+One panel, three places to open it (hub ⚙, lobby ⚙, in-run gear, or the **P** key), stored in
+`outrun-settings-v1`:
+
+| Setting | What it does |
+| --- | --- |
+| **VOLUME** | master gain on every synthesised sound (0–100 %, or MUTED) |
+| **MUTE** | a true zero on the audio graph, not a flag each effect has to remember |
+| **SCREEN SHAKE** | 0–100 %; 0 is a still camera, applied at every shake site in one place |
+| **GRAPHICS** | AUTO / LOW / MED / HIGH / ULTRA — applied to the running game immediately |
+
+Changing the tier mid-run re-applies shadows, exposure, pixel ratio, particles and the CSS post layer without
+a restart. The lobby's GRAPHICS row and this panel share one store, so they can never disagree.
 
 ## 📱 Phones
 

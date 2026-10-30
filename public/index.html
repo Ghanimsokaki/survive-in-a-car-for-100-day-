@@ -150,6 +150,7 @@
     <div class="lobby-head">
       <button id="arcadeBtn" class="arcade-back" type="button" title="Back to the arcade">◀ ARCADE</button>
       <button id="fsLobby" class="fs-btn" data-fullscreen="label" type="button" title="Fullscreen (Alt+Enter)">⤢ FULLSCREEN</button>
+      <button id="lobbySettingsBtn" class="fs-btn" type="button" title="Account picture &amp; settings">⚙ SETTINGS</button>
       <div class="logo-mark">100</div>
       <div class="lobby-title">
         <h1>DAYS OUTRUN</h1>
@@ -344,6 +345,11 @@
   <div id="stormBanner" class="hidden"></div>
   <div id="stormMeter" class="storm-meter hidden"></div>
   <div id="crosshair">+</div>
+  <div id="errBar" class="err-bar hidden" role="status">
+    <span id="errText">SOMETHING BROKE</span>
+    <button id="errRestart" type="button">RESTART</button>
+    <button id="errDismiss" type="button" title="Hide">✕</button>
+  </div>
   <button id="mobileMenuBtn" class="mobile-menu" type="button" aria-label="Menu">☰</button>
   <button id="adminBtn" class="admin-fab hidden" type="button" title="Owner console (backquote)"><span>⌘</span> OWNER</button>
 </div>
@@ -427,6 +433,7 @@
 </div>
 
 <button id="fsExit" class="fs-exit" data-fullscreen="icon" type="button" title="Fullscreen (Alt+Enter)" aria-label="Toggle fullscreen">⤢</button>
+<button id="settingsFab" class="settings-fab" type="button" title="Account picture &amp; settings (P)">⚙ SETTINGS</button>
 <script>
   // There is no boot splash any more: the sign-in screen is static HTML and is
   // usable before a single module parses. This only covers the pathological
@@ -436,6 +443,37 @@
     var status = document.getElementById('netStatus');
     if (status) status.textContent = 'still connecting — check your connection';
   }, 6000);
+
+  // Anything that throws before (or instead of) a clean frame loop still has to
+  // reach the player: show the real message and a working RESTART, not a frozen
+  // picture. `window.__outrunLastError` keeps it for a bug report.
+  (function () {
+    var shown = 0;
+    function report(kind, message) {
+      if (shown++ > 4) return;
+      var text = String(message || 'unknown error').split('\n')[0].slice(0, 90);
+      window.__outrunLastError = { kind: kind, message: text, at: Date.now() };
+      var bar = document.getElementById('errBar');
+      var label = document.getElementById('errText');
+      if (label) label.textContent = 'PROBLEM: ' + text.toUpperCase();
+      if (bar) bar.classList.remove('hidden');
+    }
+    window.addEventListener('error', function (e) {
+      report('window', e && (e.message || (e.error && e.error.message)));
+    });
+    window.addEventListener('unhandledrejection', function (e) {
+      var r = e && e.reason;
+      report('promise', r && (r.message || r));
+    });
+    document.addEventListener('DOMContentLoaded', function () {
+      var restart = document.getElementById('errRestart');
+      if (restart) restart.addEventListener('click', function () { location.reload(); });
+      var dismiss = document.getElementById('errDismiss');
+      if (dismiss) dismiss.addEventListener('click', function () {
+        document.getElementById('errBar').classList.add('hidden');
+      });
+    });
+  })();
 </script>
 
 <script type="module" src="./js/main.js"></script>

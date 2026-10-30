@@ -16,6 +16,9 @@ import {
   DEFAULT_CUSTOM, normalizeCustom, resolveCustom, describeCustom,
 } from './customize.js';
 import { BODY_COLORS, CAR_COLORS, hexToInt } from './palette.js';
+import { PlayerPanel } from './player-panel.js';
+import { loadSettings, saveSettings, applySettings, normalizeSettings } from './settings.js';
+import { paintAvatar, initialsOf } from './account-image.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -48,9 +51,19 @@ try {
   if (MODES.some((m) => m.id === saved.mode)) state.mode = saved.mode;
   if (saved.custom) state.custom = normalizeCustom(saved.custom);
 } catch {}
+// one-time migration: the old lobby saved the tier inside the profile blob
+try {
+  const raw = JSON.parse(localStorage.getItem('outrun-profile') || '{}');
+  if (raw.quality && settings.quality === 'auto') settings = normalizeSettings({ ...settings, quality: raw.quality });
+  state.quality = settings.quality;
+} catch {}
 
 // ------------------------------------------------------------------ account
 const account = new Account();
+// the player's own preferences (volume, shake, graphics). Kept separate from
+// the run's state so they survive every restart.
+let settings = loadSettings();
+let playerPanel = null;
 let game = null;
 let admin = null;
 let arcade = null;
@@ -216,6 +229,21 @@ function refreshPreviews() {
   if (summary) summary.textContent = describeCustom(state.custom);
 }
 
+// -------------------------------------------------------------- player panel
+/**
+ * One sheet for the account picture and the player's own settings, opened from
+ * the hub, the lobby and the in-run gear button. Changes apply live: the audio
+ * graph, the running game and the graphics tier all take effect immediately.
+ */
+function openPlayerPanel(tab = 'account') {
+  playerPanel?.show(tab);
+}
+
+const settingsForGame = () => ({
+  audio: game?.audio || null,
+  game,
+});
+
 // ------------------------------------------------------------------ arcade
 /**
  * The hub. Everything starts here: the built-in 100 Days Outrun plus every
@@ -228,6 +256,7 @@ function showArcade() {
     arcade = new Arcade({
       account,
       onPlayNative: () => showLobby(),
+      onSettings: (tab) => openPlayerPanel(tab),
       getPlayer: () => ({
         name: state.name || 'WANDERER',
         color: state.color,
@@ -262,6 +291,7 @@ function showLobby() {
   refreshPreviews();
   renderAccountChip();
   renderFriends();
+  playerPanel?.paint();
   setTimeout(() => lobbyPreview?.resize(), 30);
 }
 
@@ -399,10 +429,18 @@ function renderAccountChip() {
   nameEl.textContent = account.displayName || state.name || 'GUEST';
   if (account.signedIn) {
     metaEl.textContent = `@${account.username}`;
-    dot.style.background = state.color;
-    dot.style.boxShadow = `0 0 10px ${state.color}`;
+    // the chip shows the account picture when there is one, else their colour
+    paintAvatar(dot, {
+      image: account.profile?.avatar_image || '',
+      name: account.displayName || account.username,
+      color: state.color,
+    });
+    dot.classList.toggle('avatar-i', Boolean(account.profile?.avatar_image));
+    dot.style.boxShadow = account.profile?.avatar_image ? 'none' : `0 0 10px ${state.color}`;
   } else {
+    dot.classList.remove('avatar-i');
     metaEl.textContent = account.canUseAccounts ? 'GUEST · LOCAL ONLY' : 'GUEST · ACCOUNTS OFFLINE';
+    dot.style.backgroundImage = 'none';
     dot.style.background = '#6b7385';
     dot.style.boxShadow = 'none';
   }
@@ -455,7 +493,9 @@ function renderFriends() {
   } else {
     list.innerHTML = account.friends.map((f) => `
       <div class="friend-row ${f.online ? 'online' : ''}" data-id="${f.id}">
-        <i class="friend-av" style="background:${f.color}"></i>
+        <i class="friend-av" data-av="${escapeHtml(f.avatar || '')}"
+          style="${f.avatar ? `background-image:url(${f.avatar})` : `background:${f.color}`}">${
+  f.avatar ? '' : escapeHtml(initialsOf(f.displayName || f.username || '?'))}</i>
         <div class="friend-meta">
           <b>${escapeHtml(f.displayName)}</b>
           <span>${f.online ? `IN GAME · DAY ${f.day ?? '?'} · ${escapeHtml(f.room || 'lobby')}` : 'OFFLINE'}</span>
@@ -644,7 +684,7 @@ async function startRun() {
         custom: state.custom,
       },
       room: state.room,
-      quality: state.quality,
+      quality: settings.quality,
       mode: state.mode,
       onQuit: () => location.reload(),
       onRunEnd: (stats) => {
@@ -653,6 +693,10 @@ async function startRun() {
       },
     });
     game.audio.init();
+    // the player's saved volume / mute / shake / tier apply to the new run
+    applySettings(settings, settingsForGame());
+    // …and so does the account picture, on the nameplate above their head
+    try { game.avatar?.setPicture?.(account.profile?.avatar_image || ''); } catch { /* plain plate */ }
     game.audio.blip(560, 0.18, 'square', 0.1);
     game.started = true;
     game.hud.show();
@@ -864,8 +908,12 @@ async function boot() {
   qualityRow?.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-quality]');
     if (!btn) return;
-    state.quality = btn.dataset.quality;
+    // both entry points (this row and the player panel) share one store
+    settings = saveSettings({ quality: btn.dataset.quality });
+    state.quality = settings.quality;
     paintQuality();
+    playerPanel?.paintSettings();
+    playerPanel?.apply();
     saveLocal();
   });
   paintQuality();
@@ -895,8 +943,50 @@ async function boot() {
   });
 
   account.on((kind) => {
-    if (kind === 'friends') { renderFriends(); arcade?.renderFriends(); }
-    if (kind === 'profile') renderAccountChip();
+    if (kind === 'friends') { renderFriends(); arcade?.renderFriends(); arcade?.renderFriendsModal(); }
+    if (kind === 'profile') {
+      renderAccountChip();
+      playerPanel?.paintAccount();
+      renderFriends();
+      try { game?.avatar?.setPicture?.(account.profile?.avatar_image || ''); } catch { /* plain plate */ }
+    }
+    if (kind === 'profile-error') {
+      const msg = account.lastError || 'Could not save that.';
+      playerPanel?.note(msg, 'err');
+      hudToast(msg, 'warn');
+    }
+  });
+
+  // ACCOUNT PICTURE + SETTINGS: one panel, opened from the hub, the lobby and
+  // the in-run gear button. `getGame` is a thunk so it always sees the live run.
+  playerPanel = new PlayerPanel({
+    account,
+    getGame: () => game,
+    onSettings: (next) => {
+      settings = next;
+      state.quality = next.quality;
+      paintQuality();
+      saveLocal();
+    },
+    onSignOut: () => {
+      applyProfileToState(account.profile);
+      $('auth').classList.add('show');
+      $('lobby').classList.remove('show');
+      authUI?.show();
+      renderFriends();
+      renderAccountChip();
+    },
+  });
+  playerPanel.apply();
+
+  $('lobbySettingsBtn')?.addEventListener('click', () => openPlayerPanel('settings'));
+  $('settingsFab')?.addEventListener('click', () => openPlayerPanel('settings'));
+  window.addEventListener('keydown', (e) => {
+    if (e.key !== 'p' && e.key !== 'P') return;
+    const typing = /^(input|textarea|select)$/i.test(e.target?.tagName || '');
+    if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+    e.preventDefault?.();
+    playerPanel?.toggle();
   });
 
   authUI = new AuthUI({

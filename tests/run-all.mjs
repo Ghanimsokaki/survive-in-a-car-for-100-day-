@@ -29,6 +29,7 @@ const suites = [
   ['boot.test.mjs', 'FAST BOOT + PORTRAIT HOME + SUPABASE RELAY'],
   ['graphics.test.mjs', 'GRAPHICS TIERS + FULLSCREEN'],
   ['iron-tide-water.test.mjs', 'IRON TIDE — WATER PHYSICS'],
+  ['player-profile.test.mjs', 'ACCOUNT PICTURE + SETTINGS'],
 ];
 
 await run(process.execPath, ['build.mjs']);

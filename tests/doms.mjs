@@ -87,6 +87,13 @@ export class El {
     (this.listeners[t] || []).forEach((f) => f({ preventDefault() {}, stopPropagation() {}, ...ev }));
   }
   querySelector(sel) {
+    // `#id` lookups go through the document, exactly like the real DOM: a node
+    // that a module created and appended is then the *same* node a test (or the
+    // module itself) gets back, instead of a fresh stub per call site.
+    if (typeof sel === 'string' && sel.startsWith('#') && sel.length > 1) {
+      const doc = globalThis.document;
+      if (doc?.getElementById) return doc.getElementById(sel.slice(1));
+    }
     this._qs ||= new Map();
     if (!this._qs.has(sel)) this._qs.set(sel, new El('span'));
     return this._qs.get(sel);
@@ -112,6 +119,15 @@ export class El {
 const els = new Map();
 
 export function installDOM({ width = 1280, height = 720 } = {}) {
+  // the body registers anything appended to it by id, so a module that builds
+  // its own overlay can be found again through document.getElementById
+  const body = new El('body');
+  const realAppend = body.appendChild.bind(body);
+  body.appendChild = (child) => {
+    if (child?.id) els.set(child.id, child);
+    return realAppend(child);
+  };
+
   const doc = {
     getElementById(id) {
       if (!els.has(id)) {
@@ -138,7 +154,7 @@ export function installDOM({ width = 1280, height = 720 } = {}) {
       return el;
     },
     createTextNode: (t) => ({ nodeType: 3, textContent: t }),
-    body: new El('body'),
+    body,
     documentElement: (() => {
       // real <html>: classList + inline style, both used by the auto-landscape path
       const set = new Set();

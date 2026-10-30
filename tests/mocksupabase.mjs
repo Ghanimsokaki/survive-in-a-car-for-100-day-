@@ -39,9 +39,18 @@ function parseCond(str) {
     const parts = splitTop(str.slice(3, -1)).map(parseCond);
     return (row) => parts.some((f) => f(row));
   }
-  const m = str.match(/^([a-z_]+)\.(eq|neq|in|gt|lt)\.(.*)$/i);
+  const m = str.match(/^([a-z_]+)\.(eq|neq|in|gt|lt|ilike|like)\.(.*)$/i);
   if (!m) return () => true;
   const [, field, op, raw] = m;
+  if (op === 'ilike' || op === 'like') {
+    // PostgREST wildcards: * is %, and the match is anchored unless a wildcard leads
+    const rx = new RegExp(`^${raw.split('').map((ch) => {
+      if (ch === '*') return '.*';
+      if (ch === '%') return '.*';
+      return ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }).join('')}$`, op === 'ilike' ? 'i' : '');
+    return (row) => rx.test(String(row[field] ?? ''));
+  }
   if (op === 'eq') return (row) => String(row[field]) === raw;
   if (op === 'neq') return (row) => String(row[field]) !== raw;
   if (op === 'gt') return (row) => Number(row[field]) > Number(raw);

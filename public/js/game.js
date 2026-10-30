@@ -80,6 +80,7 @@ export class Game {
     this.itemsLooted = 0;
     this.craftedCount = 0;
     this.shakeAmt = 0;
+    this.shakeScale = 1;      // 0…1 player preference, applied to every shake
     this.time = 0;
     this.hudTimer = 0;
     this.dragLook = 0;
@@ -182,12 +183,25 @@ export class Game {
     this.tier = graphicsTier(this.quality);
     this.pixelCap = this.tier.pixelCap;
 
-    this.renderer = new THREE.WebGLRenderer({
-      antialias: this.tier.antialias,
-      powerPreference: 'high-performance',
-      alpha: false,
-      stencil: false,
-    });
+    // A phone that refuses the first context is usually refusing antialiasing
+    // or the "high-performance" power hint, not WebGL itself — ask again more
+    // humbly before giving up on the run.
+    this.renderer = null;
+    const attempts = [
+      { antialias: this.tier.antialias, powerPreference: 'high-performance', alpha: false, stencil: false },
+      { antialias: false, powerPreference: 'default', alpha: false, stencil: false },
+      { antialias: false, alpha: false, stencil: false, failIfMajorPerformanceCaveat: false },
+    ];
+    let lastGfxError = null;
+    for (const opts of attempts) {
+      try {
+        this.renderer = new THREE.WebGLRenderer(opts);
+        if (this.renderer) break;
+      } catch (e) { lastGfxError = e; this.renderer = null; }
+    }
+    if (!this.renderer) {
+      throw new Error(`This device would not open a 3D view (${lastGfxError?.message || 'WebGL unavailable'}). Try another browser or turn on hardware acceleration.`);
+    }
     this.renderer.debug = undefined;
     // adaptive resolution: the frame governor trades pixels for frames, so even
     // ULTRA degrades gracefully instead of stuttering
@@ -465,6 +479,17 @@ export class Game {
     if (this.touchMode) this.buildTouchButtons();
   }
 
+  /**
+   * Player preference: 0 turns the camera shake off entirely, 1 is the tuned
+   * amount. Applied at every shake site through the single `shakeScale` field.
+   */
+  setShakeScale(v) {
+    const n = Number(v);
+    this.shakeScale = Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 1;
+    if (this.shakeScale === 0) this.shakeAmt = 0;
+    return this.shakeScale;
+  }
+
   buildTouchButtons() {
     const wrap = document.getElementById('actions');
     const use = document.createElement('button');
@@ -608,36 +633,202 @@ export class Game {
     const raw = this.clock.getDelta();
     const dt = Math.min(0.05, raw);
     if (this.contextLost) return;    // nothing to draw until the GPU is back
+    // Simulation and drawing are handled separately on purpose. A scene that
+    // throws while being *updated* can often still be drawn, and a draw call
+    // that fails does not mean the world stopped: collapsing both into one
+    // try/catch is how a single bad material turned into a frozen game.
+    let ok = true;
     try {
       this.updatePerf(raw);
       this.time += dt;
       if (this.started && !this.paused) this.update(dt);
       else this.updateIdle(dt);
       this.updateCamera(dt);
-      this.renderer.render(this.scene, this.camera);
-      this.frameErrors = 0;
     } catch (err) {
-      this.onFrameError(err);
+      ok = false;
+      this.onUpdateError(err);
+    }
+    try {
+      this.renderer.render(this.scene, this.camera);
+    } catch (err) {
+      ok = false;
+      this.onRenderError(err);
+    }
+    if (ok) {
+      this.frameErrors = 0;
+      this.updateErrors = 0;
+      this.renderErrors = 0;
+    }
+  }
+
+  /** Remembers the first failure verbatim, so the HUD can name it. */
+  noteError(kind, err) {
+    this.lastError = {
+      kind,
+      message: String(err?.message || err || 'unknown'),
+      stack: String(err?.stack || '').split('\n').slice(0, 4).join('\n'),
+      at: Date.now(),
+    };
+    try { globalThis.__outrunLastError = this.lastError; } catch { /* ignore */ }
+    if (this.errorLog) {
+      this.errorLog.push(this.lastError);
+      if (this.errorLog.length > 8) this.errorLog.shift();
+    } else {
+      this.errorLog = [this.lastError];
+    }
+    return this.lastError;
+  }
+
+  onUpdateError(err) {
+    this.frameErrors = (this.frameErrors || 0) + 1;
+    this.updateErrors = (this.updateErrors || 0) + 1;
+    this.noteError('update', err);
+    if (this.updateErrors === 1) console.error('[frame] update failed', err);
+    // A transient hiccup is normal (a tab regaining focus, a slow GC). Only a
+    // *persistent* failure is worth telling the player about.
+    if (this.frameErrors === 30) {
+      this.hud?.toast?.(`RENDER ERROR — ${this.errorLine()} · PRESS RESTART`, 'bad');
+      this.hud?.prompt?.(this.recoveryHint());
+      this.showErrorBar();
+    }
+    if (this.frameErrors > 120 && !this.paused) {
+      // stop burning the battery on a scene that cannot advance
+      this.paused = true;
+      this.hud?.show?.();
+      this.hud?.prompt?.(this.recoveryHint());
     }
   }
 
   /**
-   * One bad frame must not turn into a frozen game. The first failure is
-   * logged in full, the loop keeps trying, and if it is not transient the
-   * player is told what to do instead of staring at a still image.
+   * A failed draw is recoverable far more often than it looks: shadows, the
+   * device-pixel ratio and the post layer are the usual culprits on a phone.
+   * Each failure steps one of them down and tries again, so a slow or fussy
+   * GPU ends up at a playable picture instead of a black screen. Only after
+   * every lever is spent do we tell the player to restart.
    */
-  onFrameError(err) {
+  onRenderError(err) {
     this.frameErrors = (this.frameErrors || 0) + 1;
-    if (this.frameErrors === 1) console.error('[frame] update failed', err);
-    if (this.frameErrors === 30) {
-      this.hud?.toast?.('RENDER ERROR — TAP ☰ TWICE TO RESTART', 'bad');
-      this.hud?.prompt?.('RENDER ERROR — TAP ☰ TWICE TO RESTART');
+    this.renderErrors = (this.renderErrors || 0) + 1;
+    this.noteError('render', err);
+    if (this.renderErrors === 1) console.error('[frame] render failed', err);
+
+    if (this.frameErrors % 30 === 0) {
+      const step = this.downgradeGraphics();
+      if (step) {
+        this.hud?.toast?.(`RENDER ERROR — RECOVERING · ${step}`, 'warn');
+        return;
+      }
+      this.hud?.toast?.(`RENDER ERROR — ${this.errorLine()} · PRESS RESTART`, 'bad');
+      this.hud?.prompt?.(this.recoveryHint());
+      this.showErrorBar();
     }
-    if (this.frameErrors > 120 && !this.paused) {
-      // stop burning the battery on a broken scene, keep the UI alive
+    if (this.frameErrors > 120 && !this.paused && this.safeMode) {
       this.paused = true;
       this.hud?.show?.();
     }
+  }
+
+  /**
+   * The honest way out: name the failure and offer a real button. The old text
+   * told the player to double-tap a menu icon, which is a puzzle, not a fix.
+   */
+  showErrorBar() {
+    const bar = document.getElementById('errBar');
+    if (!bar) return;
+    const text = document.getElementById('errText');
+    if (text) text.textContent = `PROBLEM: ${this.errorLine().toUpperCase()}`;
+    bar.classList.remove('hidden');
+    if (!this.errorButtonsWired) {
+      this.errorButtonsWired = true;
+      document.getElementById('errRestart')?.addEventListener('click', () => {
+        this.net?.close?.();
+        this.onQuit?.();
+        try { location.reload(); } catch { /* ignore */ }
+      });
+      document.getElementById('errDismiss')?.addEventListener('click', () => {
+        bar.classList.add('hidden');
+      });
+    }
+  }
+
+  /** The failing message, trimmed to something that fits a toast. */
+  errorLine() {
+    return String(this.lastError?.message || 'unknown error').slice(0, 42);
+  }
+
+  /** What to say when something is genuinely broken. */
+  recoveryHint() {
+    return `GRAPHICS ERROR — ${this.errorLine()} · PRESS RESTART`;
+  }
+
+  /**
+   * One notch cheaper, in the order that costs the least visual quality per
+   * frame saved. Returns the name of the thing that changed, or '' when there
+   * is nothing left to give up.
+   */
+  downgradeGraphics() {
+    const r = this.renderer;
+    if (this.safeMode) return '';
+    if (r?.shadowMap?.enabled) {
+      r.shadowMap.enabled = false;
+      if (this.world) { try { this.world.sun.castShadow = false; } catch { /* ignore */ } }
+      return 'SHADOWS OFF';
+    }
+    if (this.tier?.post?.length) {
+      try { applyPostClass(document.documentElement, 'low'); } catch { /* ignore */ }
+      this.tier = { ...this.tier, post: [] };
+      return 'EFFECTS OFF';
+    }
+    if ((this.renderScale || 1) > 0.55) {
+      this.renderScale = 0.55;
+      this.minScale = 0.55;
+      try { r.setPixelRatio(1); r.setSize(stageSize().w, stageSize().h); } catch { /* ignore */ }
+      return 'RESOLUTION DOWN';
+    }
+    if (this.effects && this.effects.scale > 0.3) {
+      this.effects.scale = 0.3;
+      return 'PARTICLES DOWN';
+    }
+    this.safeMode = true;
+    return '';
+  }
+
+  /** Applies a freshly chosen tier to the live renderer (Settings → GRAPHICS). */
+  applyQuality(choice) {
+    const coarse = Boolean(window.matchMedia?.('(pointer: coarse)')?.matches);
+    const smallest = Math.min(stageSize().w, stageSize().h);
+    const cores = navigator.hardwareConcurrency || 4;
+    const id = resolveQuality({ choice, coarse, smallest, cores });
+    this.qualityOption = choice;
+    this.quality = id;
+    this.qualityChoice = id;
+    const t = graphicsTier(id);
+    this.tier = t;
+    this.pixelCap = t.pixelCap;
+    this.minScale = t.minScale;
+    this.renderScale = 1;
+    this.safeMode = false;
+    if (this.renderer) {
+      try {
+        this.renderer.shadowMap.enabled = t.shadows;
+        this.renderer.shadowMap.type = t.shadowSoft ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+        this.renderer.toneMappingExposure = t.exposure;
+        this.baseExposure = t.exposure;
+        this.renderer.setPixelRatio(this.targetPixelRatio());
+        this.renderer.setSize(stageSize().w, stageSize().h);
+      } catch { /* a renderer that cannot resize keeps its old size */ }
+    }
+    if (this.world) {
+      try {
+        this.world.sun.castShadow = t.shadows;
+        this.applySceneDetail?.(t);
+      } catch { /* scenery stays as it is */ }
+    }
+    if (this.effects) this.effects.scale = t.effects;
+    try { applyPostClass(document.documentElement, id); } catch { /* detached */ }
+    this.renderErrors = 0;
+    this.updateErrors = 0;
+    return id;
   }
 
   updateIdle(dt) {
@@ -1048,7 +1239,7 @@ export class Game {
     this.camPos.lerp(desired, k);
     this.camLook.lerp(wantFocus, 1 - Math.exp(-12 * dt));
 
-    const shake = this.shakeAmt;
+    const shake = this.shakeAmt * this.shakeScale;
     this.camera.position.copy(this.camPos);
     if (shake > 0) {
       this.camera.position.x += rand(-shake, shake) * 0.5;

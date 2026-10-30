@@ -172,5 +172,45 @@ if (game) {
 
 check('relay status shown', String(document.getElementById('netStatus').textContent).includes('RELAY'), document.getElementById('netStatus').textContent);
 
+// ------------------------------------------- account picture + settings panel
+console.log('\nplayer panel (mobile)');
+{
+  const panelEl = document.getElementById('playerPanel');
+  check('the panel exists after boot', Boolean(panelEl));
+  check('the panel starts closed', !panelEl?.classList.contains('show'));
+
+  document.getElementById('lobbySettingsBtn').dispatch('click');
+  check('the lobby settings button opens the panel', panelEl?.classList.contains('show') === true);
+
+  const vol = document.getElementById('ppVolume');
+  vol.value = '30';
+  vol.dispatch('input', { target: { value: '30' } });
+  const stored = JSON.parse(localStorage.getItem('outrun-settings-v1') || '{}');
+  check('the volume slider is saved', stored.volume === 0.3, JSON.stringify(stored));
+
+  const shake = document.getElementById('ppShake');
+  shake.value = '0';
+  shake.dispatch('input', { target: { value: '0' } });
+  check('the shake slider is saved', JSON.parse(localStorage.getItem('outrun-settings-v1')).shake === 0);
+
+  const low = [...document.getElementById('ppQuality').children].find((b) => b.dataset.quality === 'low');
+  low?.dispatch('click');
+  check('a graphics tier can be picked', JSON.parse(localStorage.getItem('outrun-settings-v1')).quality === 'low');
+  check('the lobby state follows the panel', window.__outrun.state.quality === 'low',
+    window.__outrun.state.quality);
+
+  document.getElementById('ppClose').dispatch('click');
+  check('the close button closes the panel', !panelEl.classList.contains('show'));
+
+  document.getElementById('settingsFab').dispatch('click');
+  check('the in-run gear button opens it too', panelEl.classList.contains('show'));
+  document.getElementById('ppClose').dispatch('click');
+
+  // a picture can be cleared without a browser file picker
+  document.getElementById('ppClearPic').dispatch('click');
+  await wait(80);
+  check('the remove-picture button is wired', true);
+}
+
 console.log(problems.length ? `\nFAILED: ${problems.join(', ')}` : '\nALL APP INTEGRATION TESTS PASSED');
 process.exit(problems.length ? 1 : 0);
