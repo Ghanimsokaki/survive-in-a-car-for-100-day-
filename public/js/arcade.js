@@ -14,16 +14,21 @@ import {
   installAutoLandscape, isTouchDevice, isPortrait, requestLandscape, requestPortrait,
 } from './orientation.js';
 import { applyPostClass } from './graphics.js';
+import { MODES } from './modes.js';
 
 export const CATALOGUE_URL = './games/index.json';
 export const BRIDGE = 'outrun-arcade';
 
-/** The game that ships with the repo. Rendered like any other card. */
+/**
+ * The game that ships with the repo. It is ONE game: everything else (siege,
+ * sprint, storm chaser…) is a mode inside it, chosen in the lobby — so the shelf
+ * stays honest instead of pretending each rule-set is a separate download.
+ */
 export const NATIVE_GAMES = [{
   id: 'outrun',
   title: '100 DAYS OUTRUN',
   author: 'ghanimz',
-  blurb: 'One rig, one highway, a hundred days of storms. Five modes, crafting, anchors, friends.',
+  blurb: 'One rig, one highway, a hundred days of storms. Crafting, anchors, tornadoes, friends — and a mode for every mood.',
   tags: ['survival', 'multiplayer', '3d'],
   accent: '#ffb347',
   icon: './icon.svg',
@@ -31,7 +36,11 @@ export const NATIVE_GAMES = [{
   featured: true,
   native: true,
   version: '2.1.0',
+  modes: MODES.map((m) => ({ id: m.id, name: m.name, icon: m.icon || '◆', accent: m.accent || '#ffb347', blurb: m.blurb })),
 }];
+
+/** How many modes the built-in game ships with (shown on its card). */
+export const NATIVE_MODE_COUNT = MODES.length;
 
 const ALLOWED_TYPES = new Set(['arcade:ready', 'arcade:state', 'arcade:score', 'arcade:close']);
 
@@ -129,6 +138,8 @@ export function cardHtml(game, stats = null) {
       </span>
       <span class="gc-body">
         <b class="gc-title">${escapeHtml(game.title)}</b>
+        ${game.modes?.length ? `<span class="gc-modes">${game.modes.slice(0, 4).map((m) =>
+    `<i style="--m:${escapeHtml(m.accent || '#ffb347')}">${escapeHtml(m.icon)} ${escapeHtml(m.name)}</i>`).join('')}${game.modes.length > 4 ? `<i class="more">+${game.modes.length - 4}</i>` : ''}</span>` : ''}
         <em class="gc-blurb">${escapeHtml(game.blurb)}</em>
         <span class="gc-meta">
           <span class="gc-stars" title="${escapeHtml(ratingLabel(rating))}">${starRow}</span>

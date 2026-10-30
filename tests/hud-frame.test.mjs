@@ -108,7 +108,12 @@ console.log('\norientation');
   check('auto landscape retries on gesture and rotation',
     /pointerdown/.test(orientJs) && /orientationchange/.test(orientJs));
   check('iOS gets a CSS rotation fallback', /auto-land/.test(orientJs));
-  check('the lock is best-effort, never blocking', /Promise\.race/.test(mainJs) && /catch \{\}/.test(mainJs));
+  // PLAY must never wait on the orientation lock: it is fired and forgotten,
+  // and the lock itself swallows its own failures.
+  const startRunSrc = mainJs.slice(mainJs.indexOf('async function startRun'), mainJs.indexOf('// presence:'));
+  check('the lock is best-effort, never blocking',
+    /goLandscape\(\);/.test(startRunSrc) && !/await goLandscape/.test(startRunSrc)
+    && /catch \{[^}]*\}/.test(orientJs), 'PLAY fires the lock and moves on');
   check('the rotate overlay can trigger the lock', /id="rotateLock"/.test(html));
   check('the overlay can still be dismissed', /id="rotateDismiss"/.test(html));
 }

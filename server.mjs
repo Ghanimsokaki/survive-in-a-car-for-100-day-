@@ -302,6 +302,16 @@ const server = createServer(async (req, res) => {
     ? pathname.replace(/^\/games\/?/, '')
     : (pathname === '/' ? '/index.html' : pathname);
   if (isGamePath && (rel === '' || rel === '/')) rel = 'index.json';
+  // `_`-prefixed game folders are developer space (parked samples, templates).
+  // They are not in the catalogue; don't serve them either. `_shared` is the
+  // SDK every community game loads, so it stays reachable.
+  if (isGamePath) {
+    const first = rel.replace(/^([/\\])+/, '').split(/[/\\]/)[0];
+    if (first.startsWith('_') && first !== '_shared') {
+      res.writeHead(404, { 'content-type': 'text/plain' }).end('Game file not found');
+      return;
+    }
+  }
   const filePath = path.join(rootDir, path.normalize(rel).replace(/^([/\\])+/, ''));
   if (!filePath.startsWith(rootDir)) {
     res.writeHead(403).end('Forbidden');

@@ -34,6 +34,9 @@ try {
   await mkdir(gamesDest, { recursive: true });
   for (const entry of await readdir(gamesSrc)) {
     if (entry === 'node_modules') continue;
+    // Developer folders the scanner ignores. `_shared/` is the exception: it is
+    // the SDK every community game loads at runtime, so it MUST ship.
+    if (entry === '_parked' || entry === '_template') continue;
     await cp(path.join(gamesSrc, entry), path.join(gamesDest, entry), { recursive: true });
   }
 } catch (e) {

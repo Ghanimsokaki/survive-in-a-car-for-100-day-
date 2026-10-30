@@ -19,6 +19,22 @@ npm test           # headless suites (simulation, accounts, both UI flows)
 
 No install step, no build step. `public/vendor/three.module.js` is vendored, so the game boots even offline.
 
+## ⚡ No loading screen
+
+There is **no splash and no blocking loading card** anywhere:
+
+* **Boot** — the sign-in screen is static HTML, so it is interactive before a single module parses. The old
+  "WARMING THE ENGINE…" overlay is gone.
+* **PLAY** — pressing it leaves the lobby on screen and turns the button into a live percentage
+  (`LOADING 42%`) with a thin progress bar underneath. The percentage is measured from the bytes actually on
+  the wire, not a fake timer.
+* **Warm start** — the 3D kit starts downloading 600 ms after the menu is interactive (and again on the first
+  tap). It used to wait for `requestIdleCallback`, which on this page can never fire because the avatar
+  preview draws every frame — that is exactly why PLAY sometimes looked frozen.
+* **It cannot get stuck** — if the kit fails, the chip disappears, the PLAY label is restored, the menu stays
+  up with "could not load the 3D engine — check your connection and press PLAY again", and pressing PLAY
+  retries. The lobby is only hidden once the world is actually built.
+
 ## ⚡ Fast loading
 
 The menu used to cost a megabyte before it worked: `main.js` statically imported three.js (690 KB) and
@@ -49,9 +65,18 @@ The first screen after sign-in is the **arcade**: a hub with the built-in game p
 in the repo. Cards show the creator, tags, star rating and play count; **Records** has your best run per
 game and a star rating you can change any time.
 
-Six games ship in the box — `iron-tide`, `last-convoy`, `radio-tower`, `pit-stop-panic`, `scrapyard-run`,
-`signal-lost` — and the hub lists them from the generated `games/index.json`, so a game added by pull
-request shows up on the shelf with no code change to the hub.
+**Two games, on purpose:**
+
+| Card | What it is |
+| --- | --- |
+| **100 DAYS OUTRUN** | the built-in 3D game — *one* game with **five modes** (100 Days · Endless Road · Siege · Fuel Run · Storm Chaser), chosen in the lobby. Its modes are printed on the card, so it reads as one game with a lot inside it, not five downloads. |
+| **IRON TIDE** | the ship builder / fleet battle: build a hull, buy jets, sink other captains. |
+
+The shelf is generated from `games/index.json` (see `scripts/scan-games.mjs`), so it is still a platform:
+add `games/<slug>/` in a pull request and it appears once merged. The five older sample games
+(`last-convoy`, `radio-tower`, `pit-stop-panic`, `scrapyard-run`, `signal-lost`) are **parked** in
+`games/_parked/` — kept in the repo as examples and contributors' reference, skipped by the scanner, the
+generated catalogue, the hub and the build.
 
 ### ⚓ Iron Tide (ship builder + fleet battle)
 

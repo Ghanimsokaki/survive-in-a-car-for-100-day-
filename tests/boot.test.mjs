@@ -63,7 +63,13 @@ console.log('\nhome payload');
 
   const html = await readFile(path.join(publicDir, 'index.html'), 'utf8');
   check('the critical modules are preloaded', /rel="modulepreload" href="\.\/js\/main\.js"/.test(html));
-  check('the boot card can never trap the player', /STILL LOADING/.test(html) && /booted/.test(html));
+  // no boot splash at all: the sign-in screen is static HTML, and the only
+  // fallback copy lives in the lobby status line
+  check('there is no blocking boot splash', !/id="loading"><div class="spin"/.test(html)
+    && !/WARMING THE ENGINE/.test(html));
+  check('the loader is a chip, not a screen', /id="loading" class="gone"/.test(html)
+    && /class="ld-bar"/.test(html));
+  check('a stuck boot still says something', /still connecting/.test(html) && /booted/.test(html));
 }
 
 // ------------------------------------------------------------------- preview
@@ -249,6 +255,12 @@ console.log('\nnode server');
     const htmlRes = await fetch(`${base}/`);
     check('the shell is never cached', /no-store/.test(htmlRes.headers.get('cache-control') || ''));
 
+    // parked developer folders are not part of the product
+    const parked = await fetch(`${base}/games/_parked/last-convoy/index.html`);
+    check('parked games are not served', parked.status === 404, String(parked.status));
+    const sdk = await fetch(`${base}/games/_shared/sdk.js`);
+    check('the shared SDK is still served', sdk.status === 200);
+
     // the relay contract the client already speaks
     const post = await fetch(`${base}/api/room`, {
       method: 'POST',
@@ -282,6 +294,80 @@ console.log('\nphone gui');
 
   const files = await readdir(path.join(publicDir, 'js'));
   check('the js folder still ships the shipped modules', files.includes('preview.js') && files.includes('orientation.js'));
+}
+
+
+// ------------------------------------------------------- no blocking loading
+console.log('\nloading never blocks');
+{
+  const main = await readFile(path.join(publicDir, 'js', 'main.js'), 'utf8');
+  const css = await readFile(path.join(publicDir, 'styles.css'), 'utf8');
+  const html = await readFile(path.join(publicDir, 'index.html'), 'utf8');
+
+  const startRun = main.slice(main.indexOf('async function startRun'), main.indexOf('// presence:'));
+  check('PLAY loads the kit before it touches the lobby',
+    startRun.indexOf('await loadGameKit') < startRun.indexOf("$('lobby').classList.remove('show')"));
+  check('a failed load returns to the menu, not a spinner',
+    /catch[\s\S]{0,400}setLoading\(\{ active: false \}\)/.test(startRun)
+    && /starting = false/.test(startRun), 'recoverable');
+  check('the button label is restored on failure', /btn.innerHTML = btnLabel/.test(startRun));
+  check('the loader is invisible until PLAY', /id="loading" class="gone"/.test(html));
+  check('the loader cannot cover the game', /#loading\{display:none;/.test(css)
+    && !/#loading\{position:fixed/.test(css));
+  check('progress is a real percentage', /class="ld-bar"/.test(html) && /\.ld-bar i\{[^}]*width:0/.test(css));
+
+  const { onKitProgress, kitProgressState, warmGameKit } = await import('./app/js/main.js');
+  const seen = [];
+  const off = onKitProgress((p) => seen.push(p.ratio));
+  const state = kitProgressState();
+  check('progress starts at zero', state.ratio === 0 && state.total > 500, `${state.total} KB weight`);
+  check('progress subscribers get the current value immediately', seen.length === 1);
+  check('progress can be unsubscribed', typeof off === 'function');
+  off();
+  warmGameKit({ delay: 60 });
+  check('the kit warms on a timer, not on an idle callback',
+    !/requestIdleCallback\(\s*run/.test(main) && /setTimeout\(run, delay\)/.test(main));
+  check('and again on the first tap', /addEventListener\('pointerdown', kick/.test(main));
+}
+
+// --------------------------------------------------------- the two-game shelf
+console.log('\ntwo games, many modes');
+{
+  const { scanGames } = await import('../scripts/scan-games.mjs');
+  const { catalogue } = await scanGames(path.join(root, 'games'));
+  check('exactly one community game is live', catalogue.count === 1,
+    catalogue.games.map((g) => g.id).join(','));
+  check('it is Iron Tide', catalogue.games[0].id === 'iron-tide');
+  check('the parked games are not scanned',
+    !catalogue.games.some((g) => ['last-convoy', 'radio-tower', 'pit-stop-scan', 'scrapyard-run', 'signal-lost']
+      .includes(g.id)));
+
+  const parked = await readdir(path.join(root, 'games', '_parked'));
+  check('the parked games are still in the repo', parked.length === 5, parked.join(','));
+
+  const arcade = await import('./app/js/arcade.js');
+  check('the built-in game is one entry', arcade.NATIVE_GAMES.length === 1);
+  const native = arcade.NATIVE_GAMES[0];
+  check('the built-in game carries its modes', native.modes.length >= 5,
+    native.modes.map((m) => m.name).join(' · '));
+  check('the mode count is exported', arcade.NATIVE_MODE_COUNT === native.modes.length);
+
+  const shelf = arcade.mergeCatalogues(arcade.NATIVE_GAMES, catalogue);
+  check('the shelf holds exactly two games', shelf.length === 2, shelf.map((g) => g.title).join(' + '));
+  check('the built-in game is on the shelf', shelf.some((g) => g.id === 'outrun'));
+  check('Iron Tide is on the shelf', shelf.some((g) => g.id === 'iron-tide'));
+
+  const card = arcade.cardHtml(native, null);
+  check('its card shows the modes', /gc-modes/.test(card) && /100 DAYS/.test(card));
+  check('a community card has no mode strip', !/gc-modes/.test(arcade.cardHtml(shelf.find((g) => g.id === 'iron-tide'), null)));
+
+  const index = JSON.parse(await readFile(path.join(root, 'games', 'index.json'), 'utf8'));
+  check('the generated catalogue matches', index.count === 1 && index.games[0].id === 'iron-tide');
+
+  const build = await readFile(path.join(root, 'scripts', 'build.mjs'), 'utf8');
+  check('the build does not ship parked folders', /entry === '_parked'/.test(build)
+    && /entry === '_template'/.test(build));
+  check('the build still ships the shared SDK', !/_shared.*continue/.test(build));
 }
 
 process.exit(problems.length ? 1 : 0);

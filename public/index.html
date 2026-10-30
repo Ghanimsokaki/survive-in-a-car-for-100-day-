@@ -223,6 +223,10 @@
         </div>
 
         <button id="playBtn" class="play-btn">START THE RUN <span>▸</span></button>
+        <div id="loading" class="gone" aria-live="polite">
+          <span class="ld-text">LOADING</span>
+          <span class="ld-bar"><i></i></span>
+        </div>
         <p id="netStatus" class="net-status">checking relay…</p>
       </div>
 
@@ -423,30 +427,15 @@
 </div>
 
 <button id="fsExit" class="fs-exit" data-fullscreen="icon" type="button" title="Fullscreen (Alt+Enter)" aria-label="Toggle fullscreen">⤢</button>
-<div id="loading"><div class="spin"></div><span id="loadingText">WARMING THE ENGINE…</span></div>
-
 <script>
-  // The menu is allowed to fail open: if the module graph cannot load (old
-  // browser, flaky connection, blocked CDN), this card must not trap the player
-  // behind a spinner forever.
-  (function () {
-    var text = document.getElementById('loadingText');
-    var timer = setTimeout(function () {
-      if (document.documentElement.classList.contains('booted')) return;
-      if (text) text.textContent = 'STILL LOADING — CHECK YOUR CONNECTION';
-    }, 7000);
-    var hard = setTimeout(function () {
-      if (document.documentElement.classList.contains('booted')) return;
-      var el = document.getElementById('loading');
-      if (el) el.classList.add('gone');
-      var auth = document.getElementById('auth');
-      if (auth && !document.getElementById('lobby').classList.contains('show')) auth.classList.add('show');
-      clearTimeout(timer);
-    }, 14000);
-    window.addEventListener('load', function () {
-      if (document.documentElement.classList.contains('booted')) { clearTimeout(timer); clearTimeout(hard); }
-    });
-  })();
+  // There is no boot splash any more: the sign-in screen is static HTML and is
+  // usable before a single module parses. This only covers the pathological
+  // case where main.js never loads at all.
+  setTimeout(function () {
+    if (document.documentElement.classList.contains('booted')) return;
+    var status = document.getElementById('netStatus');
+    if (status) status.textContent = 'still connecting — check your connection';
+  }, 6000);
 </script>
 
 <script type="module" src="./js/main.js"></script>

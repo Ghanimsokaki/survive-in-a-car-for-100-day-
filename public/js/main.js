@@ -63,25 +63,130 @@ let starting = false;
  *
  * `game.js` pulls in three.js plus the world, vehicle, avatar, tornado, HUD and
  * crafting modules — about a megabyte. The home screens need none of it, so it
- * is imported on demand: on the first PLAY press, or in the background once the
- * menu is idle (whichever comes first). That is the difference between staring
- * at a blank screen while 1 MB parses and getting the sign-in box instantly.
+ * is fetched on demand. Two rules keep that from ever looking "stuck":
+ *
+ *   1. It is warmed the moment the menu is interactive — not on
+ *      requestIdleCallback, which on this page may never fire because the
+ *      avatar preview keeps drawing frames.
+ *   2. A press of PLAY shows real progress (bytes on the wire, not a spinner),
+ *      keeps the menu usable, and recovers with a retry if anything fails.
  */
+const KIT_FILES = [
+  // [path relative to this module, weight in KB] — weights only drive the bar
+  ['../vendor/three.module.js', 671],
+  ['./game.js', 89],
+  ['./world.js', 38],
+  ['./buildings.js', 34],
+  ['./admin.js', 25],
+  ['./hud.js', 20],
+  ['./avatar.js', 17],
+  ['./vehicle.js', 15],
+  ['./recipes.js', 9],
+  ['./inventory.js', 9],
+  ['./materials.js', 9],
+  ['./enemies.js', 8],
+  ['./tornado.js', 7],
+  ['./net.js', 7],
+  ['./items.js', 7],
+  ['./records.js', 7],
+  ['./loot.js', 5],
+  ['./audio.js', 5],
+  ['./customize.js', 4],
+  ['./effects.js', 3],
+  ['./modes.js', 3],
+  ['./utils.js', 2],
+  ['./palette.js', 1],
+];
+
 let kitPromise = null;
+const kitProgress = { loaded: 0, total: KIT_FILES.reduce((n, [, kb]) => n + kb, 0), ratio: 0 };
+const progressHandlers = new Set();
+
+/** Subscribe to loader progress. Returns an unsubscribe function. */
+export function onKitProgress(fn) {
+  progressHandlers.add(fn);
+  try { fn(kitProgress); } catch { /* a broken listener must not break loading */ }
+  return () => progressHandlers.delete(fn);
+}
+
+export const kitProgressState = () => ({ ...kitProgress });
+
+function reportKit(bytes) {
+  kitProgress.loaded = Math.min(kitProgress.total, kitProgress.loaded + bytes);
+  kitProgress.ratio = kitProgress.total ? kitProgress.loaded / kitProgress.total : 1;
+  for (const fn of progressHandlers) {
+    try { fn(kitProgress); } catch { /* ignore */ }
+  }
+}
+
+/**
+ * Pulls the module graph into the HTTP cache ahead of the import, counting the
+ * bytes as they arrive so the button can show a real percentage. If streaming
+ * is unavailable the file weight is credited when the response lands — either
+ * way the bar only ever moves forward.
+ */
+async function prefetchKit() {
+  await Promise.all(KIT_FILES.map(async ([url, weight]) => {
+    let credited = 0;
+    const credit = (kb) => {
+      const add = Math.max(0, Math.min(kb, weight - credited));
+      if (add <= 0) return;
+      credited += add;
+      reportKit(add);
+    };
+    try {
+      // no cache override: the server's ETag turns a repeat visit into a 304,
+      // and a deploy is never masked by a stale force-cache hit
+      const res = await fetch(new URL(url, import.meta.url).href);
+      if (!res.ok) throw new Error(`http ${res.status}`);
+      if (res.body?.getReader) {
+        const reader = res.body.getReader();
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          credit((value?.byteLength || 0) / 1024);
+        }
+      } else {
+        await res.arrayBuffer();
+      }
+    } catch { /* a missing file must not stall the bar */ }
+    credit(weight);            // whatever did not stream is counted at the end
+  }));
+}
+
 export function loadGameKit() {
   if (!kitPromise) {
-    kitPromise = Promise.all([import('./game.js'), import('./admin.js')])
-      .then(([gameMod, adminMod]) => ({ Game: gameMod.Game, mountAdmin: adminMod.mountAdmin }))
+    const started = prefetchKit().catch(() => {});
+    kitPromise = Promise.all([started, import('./game.js'), import('./admin.js')])
+      .then(([, gameMod, adminMod]) => ({ Game: gameMod.Game, mountAdmin: adminMod.mountAdmin }))
       .catch((err) => { kitPromise = null; throw err; });
   }
   return kitPromise;
 }
 
-/** Warm the kit when the browser is idle, so PLAY does not wait on the network. */
-function warmGameKit() {
-  const run = () => loadGameKit().catch(() => {});
-  if (typeof requestIdleCallback === 'function') requestIdleCallback(run, { timeout: 4000 });
-  else setTimeout(run, 1800);
+/**
+ * Warm the kit as soon as the menu is interactive. `requestIdleCallback` alone
+ * is not enough: this page draws the avatar preview every frame, so a browser
+ * can stay "busy" for minutes and never fire it — which is exactly how PLAY
+ * ended up doing a cold megabyte download on a phone.
+ */
+let warmTimer = null;
+export function warmGameKit({ delay = 600 } = {}) {
+  if (kitPromise) return kitPromise;
+  if (warmTimer) return kitPromise;
+  const run = () => { loadGameKit().catch(() => {}); };
+  warmTimer = setTimeout(run, delay);
+  // and again on the first real interaction, in case the timer was throttled
+  const kick = () => {
+    clearTimeout(warmTimer);
+    warmTimer = null;
+    run();
+  };
+  try {
+    window.addEventListener('pointerdown', kick, { once: true, passive: true });
+    window.addEventListener('keydown', kick, { once: true });
+  } catch { /* detached window */ }
+  return kitPromise;
 }
 
 let fullscreenCtl = null;
@@ -378,6 +483,37 @@ function renderFriends() {
   }
 }
 
+/**
+ * The loading indicator is a slim chip, not a screen. It sits above the PLAY
+ * button, keeps the menu usable underneath, and disappears the moment the world
+ * is on screen. There is deliberately no way for it to cover the game.
+ */
+function setLoading({ active = false, pct = null, note = '' } = {}) {
+  const chip = $('loading');
+  if (chip) {
+    chip.classList.toggle('show', Boolean(active));
+    chip.classList.toggle('gone', !active);
+    const text = chip.querySelector?.('.ld-text') || null;
+    if (text) text.textContent = note || (active ? 'LOADING' : '');
+    if (pct !== null) {
+      const bar = chip.querySelector?.('.ld-bar i');
+      if (bar?.style) bar.style.width = `${Math.max(0, Math.min(100, pct))}%`;
+      chip.setAttribute?.('data-pct', String(Math.round(pct)));
+    }
+  }
+  const btn = $('playBtn');
+  if (btn) btn.classList.toggle('loading', Boolean(active));
+}
+
+/** Toast that works before the 3D HUD exists. */
+function hudToast(text, kind = '') {
+  try {
+    setFriendNote(text, kind === 'warn' ? 'err' : kind);
+  } catch { /* menu already gone */ }
+  const status = $('netStatus');
+  if (status) status.textContent = text;
+}
+
 function setFriendNote(text, kind = '') {
   const note = $('friendsNote');
   if (!note) return;
@@ -431,18 +567,49 @@ async function startRun() {
   saveLocal();
   account.saveProfile({ display_name: state.name, body_color: state.color, car_color: state.carColor });
 
-  // A run is now live — this is the ONLY moment the app is allowed to turn the
-  // phone. The home screens stay portrait; landscape belongs to gameplay.
-  document.body.classList.add('run-live');
-  // Only wait for the rotation when it can actually help: on a phone that is
-  // already sideways there is nothing to lock, and blocking PLAY for 700 ms to
-  // find that out is exactly the "long loading" the player notices.
-  if (isPhone && !landscapeTried && isPortrait()) {
-    await Promise.race([
-      goLandscape(),
-      new Promise((resolve) => setTimeout(() => resolve(false), 380)),
-    ]);
+  // Turning the phone has to happen inside this click, but it must never delay
+  // the game: fire it and carry on. `run-live` is added once the kit is ready.
+  if (isPhone && !landscapeTried && isPortrait()) goLandscape();
+
+  const btn = $('playBtn');
+  const btnLabel = btn ? btn.innerHTML : '';
+  const fails = [];
+  setLoading({ active: true, pct: 0, note: 'LOADING THE 3D ENGINE' });
+  const stopCounter = onKitProgress((p) => {
+    const pct = Math.round((p.ratio || 0) * 100);
+    setLoading({ active: true, pct, note: pct >= 100 ? 'STARTING ENGINE' : `LOADING THE 3D ENGINE · ${pct}%` });
+    if (btn) btn.innerHTML = `LOADING ${pct}%`;
+  });
+
+  // Play is a gesture: the one reliable moment to honour a saved fullscreen
+  // preference. Fire and forget — it must not gate the run.
+  if (!isFullscreen() && readPreference()) {
+    toggleFullscreen({ on: true }).then(() => fullscreenCtl?.sync()).catch(() => {});
   }
+
+  // NO BLOCKING LOADING SCREEN: the menu stays on screen and usable while the
+  // engine streams in. If anything fails we simply stay here with a retry.
+  let kit = null;
+  try {
+    kit = await loadGameKit();
+  } catch (err) {
+    console.error('[load] game kit failed', err);
+    fails.push(String(err?.message || err));
+  }
+  stopCounter();
+  if (!kit) {
+    setLoading({ active: false });
+    document.body.classList.remove('run-live', 'auto-land');
+    document.documentElement.classList.remove('rot-stage');
+    requestPortrait();                  // the menu is portrait: hand it back
+    if (btn) btn.innerHTML = btnLabel;
+    setFriendNote('Could not load the 3D engine — check your connection and press PLAY again.', 'err');
+    hudToast('LOAD FAILED — TAP PLAY TO RETRY', 'warn');
+    starting = false;
+    return;
+  }
+
+  document.body.classList.add('run-live');
   // The arcade hands the iframe a landscape stage, so re-check after the lock.
   // If the device still refuses to turn, the run itself is rotated in CSS:
   // `auto-land` marks "portrait + no lock", `run-live` says the stage is up.
@@ -451,21 +618,16 @@ async function startRun() {
     document.documentElement.classList.add('rot-stage');
   }
 
-  const btn = $('playBtn');
-  if (btn) btn.innerHTML = 'WARMING THE ENGINE…';
-  $('lobby').classList.remove('show');
-  $('loading').classList.remove('gone');
-  // PLAY is a gesture: this is the only reliable moment to re-enter fullscreen
-  // for a player who chose it last time. Failure is silent by design.
-  if (!isFullscreen() && readPreference()) {
-    toggleFullscreen({ on: true }).then(() => fullscreenCtl?.sync()).catch(() => {});
-  }
+  if (btn) btn.innerHTML = 'DROPPING IN…';
+  setLoading({ active: true, pct: 100, note: 'DROPPING IN' });
 
-  await new Promise((r) => setTimeout(r, 140));
+  await new Promise((r) => setTimeout(r, 60));
+
+  // the menu stays up until this exact moment, so nothing ever looks stuck
+  $('lobby').classList.remove('show');
+  $('loading').classList.add('gone');
 
   try {
-    // only now do we pay for three.js + the game modules
-    const kit = await loadGameKit();
     game = new kit.Game({
       mount: $('app'),
       profile: {
@@ -505,15 +667,18 @@ async function startRun() {
     }
   } catch (err) {
     console.error(err);
-    $('loading').classList.add('gone');
-    showArcade();
-    if (btn) btn.innerHTML = 'START THE RUN <span>▸</span>';
+    setLoading({ active: false });
+    document.body.classList.remove('run-live', 'auto-land');
+    document.documentElement.classList.remove('rot-stage');
+    requestPortrait();
+    if (btn) btn.innerHTML = btnLabel;
     setFriendNote(`Could not start: ${err.message}`, 'err');
+    hudToast('COULD NOT START — TAP PLAY TO RETRY', 'warn');
     starting = false;
     return;
   }
 
-  setTimeout(() => $('loading').classList.add('gone'), 250);
+  setLoading({ active: false });
   starting = false;
 }
 

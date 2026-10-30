@@ -219,9 +219,17 @@ kbd{background:#161b25;border:1px solid rgba(255,255,255,.13);border-bottom-widt
 .go-btns{display:flex;gap:10px;justify-content:center}
 
 /* ================= LOADING ================= */
-#loading{position:fixed;inset:0;z-index:80;display:flex;flex-direction:column;gap:16px;align-items:center;
-  justify-content:center;background:#05060a;font-size:10.5px;letter-spacing:3px;color:#8b93a5}
+/* The loading indicator: a chip under PLAY, never a screen. The menu stays
+   visible and usable while the engine streams in. */
+#loading{display:none;flex-direction:column;gap:6px;margin-top:10px;
+  font-size:8.5px;letter-spacing:2px;color:#9aa6b8}
 #loading.gone{display:none}
+#loading.show{display:flex}
+.ld-text{color:#ffd7a1;letter-spacing:2px}
+.ld-bar{display:block;height:4px;border-radius:3px;background:rgba(255,255,255,.09);overflow:hidden}
+.ld-bar i{display:block;height:100%;width:0;border-radius:3px;
+  background:linear-gradient(90deg,#ffb347,#ffd9a0);transition:width .18s linear}
+.play-btn.loading{opacity:.85;cursor:progress}
 .spin{width:34px;height:34px;border-radius:50%;border:2px solid rgba(255,179,71,.2);border-top-color:var(--amber);
   animation:spin .8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
@@ -1427,3 +1435,14 @@ body:not(.run-live) .fs-exit{display:none}
 /* the graphics description under the quality row */
 .quality-hint{margin:6px 0 0;font-size:8px;letter-spacing:.7px;color:#6d8496;line-height:1.5}
 .quality-hint b{color:#ffd7a1}
+
+/* the built-in game is one game with many modes: show them on the card */
+.gc-modes{display:flex;flex-wrap:wrap;gap:4px;margin:2px 0 5px}
+.gc-modes i{font-style:normal;font-size:6.5px;letter-spacing:.8px;padding:2px 5px;border-radius:5px;
+  color:var(--m,#ffb347);background:color-mix(in srgb,var(--m,#ffb347) 14%,transparent);
+  border:1px solid color-mix(in srgb,var(--m,#ffb347) 35%,transparent);white-space:nowrap}
+.gc-modes i.more{color:#8891a3;border-color:rgba(255,255,255,.12);background:rgba(255,255,255,.04)}
+@media (max-width:760px){
+  .gc-modes i{font-size:6px;padding:2px 4px}
+  .gc-modes i:nth-child(n+4){display:none}
+}
