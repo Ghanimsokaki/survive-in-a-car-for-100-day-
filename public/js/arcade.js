@@ -240,6 +240,8 @@ export class Arcade {
     this.playing = null;
     this.frame = null;
     this.lastScore = null;
+    this.readyAt = 0;
+    this.stallTimer = null;
     this.onMessage = this.onMessage.bind(this);
     this.build();
   }
@@ -688,7 +690,6 @@ export class Arcade {
     document.body.classList.remove('auto-land');
     document.documentElement.classList.remove('rot-stage');
     if (isPortrait()) requestLandscape();
-    const player = this.getPlayer();
     this.nodes.player.classList.remove('hidden');
     this.nodes.result.classList.add('hidden');
     this.syncStage();
@@ -699,12 +700,22 @@ export class Arcade {
     // relative URL: the iframe is same-path but sandboxed without same-origin,
     // so it can render our files yet cannot read our DOM, storage or session
     const url = `./${game.path}/${game.entry}?g=${encodeURIComponent(game.id)}`;
+    // one navigation, not two: setting the same URL through both the property
+    // and the attribute makes some browsers fetch the game twice, which is a
+    // needless delay before the first frame
     this.nodes.frame.src = url;
-    this.nodes.frame.setAttribute('src', url);
     this.readyAt = 0;
     setTimeout(() => {
       if (this.playing?.id === game.id) this.postInit();
     }, 900);
+    // and if the frame never says hello, say why instead of waiting forever: a
+    // game that 404s (not bundled) or throws looks exactly like a stuck loading
+    // screen. This is an error message, not a spinner.
+    clearTimeout(this.stallTimer);
+    this.stallTimer = setTimeout(() => {
+      if (this.playing?.id !== game.id || this.readyAt) return;
+      this.nodes.playerStatus.textContent = 'GAME DID NOT START';
+    }, 8000);
   }
 
   postInit() {
@@ -728,16 +739,14 @@ export class Arcade {
 
   closeGame() {
     this.playing = null;
+    clearTimeout(this.stallTimer);
     document.body.classList.remove('run-live');
     document.body.classList.remove('auto-land');
     this.syncStage({ portrait: false, locked: false });
     // back on the home: upright again, and out of fullscreen
     requestPortrait();
     this.nodes?.player?.classList.add('hidden');
-    if (this.nodes?.frame) {
-      this.nodes.frame.src = 'about:blank';
-      this.nodes.frame.setAttribute('src', 'about:blank');
-    }
+    if (this.nodes?.frame) this.nodes.frame.src = 'about:blank';
   }
 
   async onMessage(ev) {
@@ -746,6 +755,8 @@ export class Arcade {
     const game = this.playing;
     if (!game) return;
     if (msg.type === 'arcade:ready') {
+      this.readyAt = Date.now();
+      clearTimeout(this.stallTimer);
       this.postInit();
       this.nodes.playerStatus.textContent = 'LIVE';
       return;

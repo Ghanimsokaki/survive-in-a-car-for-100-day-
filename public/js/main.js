@@ -553,6 +553,17 @@ async function addFriend() {
 async function probeRelay() {
   const el = $('netStatus');
   if (!el) return;
+
+  // Peer-to-peer first: with Supabase for signalling and WebRTC in the browser,
+  // the room runs browser-to-browser and no server of ours is in the path.
+  const supaProbe = account.sb?.url && account.sb?.key ? account.sb.url : '';
+  const peerCapable = Boolean(globalThis.RTCPeerConnection || globalThis.webkitRTCPeerConnection);
+  if (supaProbe && peerCapable) {
+    el.textContent = `● PEER-TO-PEER (signalling via ${String(supaProbe).replace(/^https?:\/\//, '')}) — SHARE THE ROOM CODE TO PLAY TOGETHER`;
+    el.className = 'net-status ok';
+    return;
+  }
+
   // the socket.io server, when the page is being served by it, takes priority:
   // it is the dedicated realtime host and the health route proves it is there
   if (!relayUrl) {
@@ -572,7 +583,7 @@ async function probeRelay() {
     return;
   }
 
-  const supa = account.sb?.url && account.sb?.key ? account.sb.url : '';
+  const supa = supaProbe;
   if (supa) {
     el.textContent = `● SUPABASE REALTIME (${String(supa).replace(/^https?:\/\//, '')}) — SHARE THE ROOM CODE TO PLAY TOGETHER`;
     el.className = 'net-status ok';

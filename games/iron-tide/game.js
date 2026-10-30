@@ -1257,11 +1257,23 @@
   }
 
   /* ------------------------------------------------------------------ boot */
-  tryLoad();
-  paintWallet();
-  renderAll();
-  sdk.ready();
+  // Order matters, and it is the order that fixes the stall the player sees as
+  // "loading": the canvas is already on screen, so start its loop first, then
+  // tell the hub we are up, and only then build the dock. A throwing dock can
+  // no longer leave a black frame and a hub that never hears `arcade:ready`.
   requestAnimationFrame(frame);
+  sdk.ready();
+  try {
+    tryLoad();
+    paintWallet();
+    renderAll();
+  } catch (err) {
+    // in-memory fleet, a half-built dock: the sea still runs, so say what broke
+    // and let the DOCK tab (which re-renders) act as the retry
+    try { console.warn('iron tide: dock render failed', err); } catch { /* no console */ }
+    const hint = $('loadoutHint');
+    if (hint) hint.textContent = 'Dock failed to render — tap DOCK to retry.';
+  }
 
   // exposed for the host test suite (and for curious players in devtools)
   window.__ironTide = {

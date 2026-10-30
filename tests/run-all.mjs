@@ -29,7 +29,10 @@ const suites = [
   ['boot.test.mjs', 'FAST BOOT + PORTRAIT HOME + SUPABASE RELAY'],
   ['graphics.test.mjs', 'GRAPHICS TIERS + FULLSCREEN'],
   ['iron-tide-water.test.mjs', 'IRON TIDE — WATER PHYSICS'],
+  ['iron-tide-boot.test.mjs', 'IRON TIDE — FAST BOOT + DOCK'],
   ['player-profile.test.mjs', 'ACCOUNT PICTURE + SETTINGS'],
+  ['p2p.test.mjs', 'P2P PROTOCOL (WEBRTC)'],
+  ['p2p-e2e.test.mjs', 'P2P ROOMS — HOST + GUESTS'],
   ['net-supabase.test.mjs', 'SUPABASE-FIRST MULTIPLAYER'],
   ['net-e2e.test.mjs', 'SUPABASE ROOMS — LIVE SOCKET'],
   ['lobby.test.mjs', 'LOBBY + MATCHMAKING CODES'],
@@ -37,6 +40,7 @@ const suites = [
   ['socket-e2e.test.mjs', 'SOCKET.IO SERVER — LIVE ROOMS'],
   ['keepalive.test.mjs', 'RENDER KEEP-ALIVE'],
   ['brand.test.mjs', 'GEMBY BRAND + SERVER CONTRACT'],
+  ['docker.test.mjs', 'DOCKERFILE + HUGGING FACE SPACES'],
 ];
 
 await run(process.execPath, ['build.mjs']);

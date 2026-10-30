@@ -149,6 +149,40 @@ console.log('\nhttp surface');
   check('an unknown api route is a JSON 404', missing.status === 404);
 }
 
+// ------------------------------------------------------- community games ---
+// The ship lives in ./games, outside ./public. This server has to serve it from
+// the source tree as well as from a built dist/, or the hub's iframe gets a 404
+// and the player stares at an empty frame: "it never finishes loading".
+console.log('\ncommunity games');
+{
+  const catalogue = await fetch(`${URL}/games/index.json`);
+  const json = catalogue.ok ? await catalogue.json() : { games: [] };
+  check('/games/index.json reaches the shelf', catalogue.ok && Array.isArray(json.games), String(catalogue.status));
+  check('…and lists the ship', json.games.some((g) => g.id === 'iron-tide'));
+
+  const ship = await fetch(`${URL}/games/iron-tide/index.html`);
+  const shipHtml = ship.ok ? await ship.text() : '';
+  check('the ship itself is served', ship.ok, String(ship.status));
+  check('…as HTML, not a fallback page', /text\/html/.test(ship.headers.get('content-type') || '')
+    && shipHtml.includes('IRON TIDE'));
+  check('…and is never cached', /no-store/.test(ship.headers.get('cache-control') || ''),
+    ship.headers.get('cache-control'));
+  check('the directory form resolves too', (await fetch(`${URL}/games/iron-tide/`)).ok);
+
+  for (const file of ['game.js', 'water.js', 'fleet.js']) {
+    const res = await fetch(`${URL}/games/iron-tide/${file}`);
+    check(`the ship loads ${file}`, res.ok, String(res.status));
+  }
+  const sdk = await fetch(`${URL}/games/_shared/sdk.js`);
+  check('the shared SDK ships with it', sdk.ok, String(sdk.status));
+  check('parked developer folders stay private',
+    (await fetch(`${URL}/games/_parked/last-convoy/index.html`)).status === 404);
+  check('the template stays private too',
+    (await fetch(`${URL}/games/_template/game.json`)).status === 404);
+  const notAGame = await fetch(`${URL}/games/nope/index.html`);
+  check('a folder that does not exist is a 404', notAGame.status === 404, String(notAGame.status));
+}
+
 // --------------------------------------------------------------- keep-alive ---
 console.log('\nthe container keeps itself awake');
 {

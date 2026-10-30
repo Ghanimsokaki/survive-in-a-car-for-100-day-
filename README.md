@@ -1,3 +1,13 @@
+---
+title: Gemby Games
+emoji: 🚗
+colorFrom: yellow
+colorTo: gray
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # GEMBY GAMES — 100 Days Outrun & Iron Tide
 
 **Gemby Games** is a **3D multiplayer arcade for phones**, and the shelf carries two games: the flagship
@@ -15,9 +25,11 @@ real-time rooms of 1–8, and a game that runs on plain Node or on **Vercel**.
 
 ```bash
 npm install        # express + socket.io (the game itself needs nothing)
-npm start          # http://localhost:8080 — the Socket.IO room server (PORT || 8080)
+npm start          # http://localhost:8080 — the Socket.IO room server
 npm run relay      # http://localhost:8000 — zero-dependency static + WebSocket relay
-npm test           # 22 headless suites (simulation, accounts, UI flows, the live server)
+npm test           # 25 headless suites (simulation, accounts, UI flows, the live server)
+
+docker build -t gemby-games . && docker run -p 7860:7860 gemby-games   # Hugging Face Spaces layout
 ```
 
 No build step. `public/vendor/three.module.js` is vendored, so the game boots even offline; `npm run relay`
@@ -488,12 +500,23 @@ upgrades early with the right mats).
 
 Plus fuel refining, repair kits, tire patches, full overhauls, armor plating ×3 and hydraulic anchor tiers ×4.
 
-## 👥 Multiplayer — Socket.IO rooms, Supabase beside it
+## 👥 Multiplayer — peer-to-peer first, Socket.IO beside it
 
 Share a **room code** (or press *quick play*). Everyone in the room shares the highway: positions,
-driving/walking state, health, weapon and chat go out up to 15×/s. One JSON envelope, five lanes, tried in
-this order:
+driving/walking state, health, weapon, hits and chat go out up to 15×/s. One JSON envelope, six lanes,
+tried in this order:
 
+0. **Peer-to-peer WebRTC** (`public/js/webrtc.js` + `public/js/p2p.js`). Whoever opens the room is the
+   **host**; everyone else connects straight to them, browser → browser, and nothing of ours is in the
+   path. Supabase Realtime is used *only* as the signalling channel (a separate topic,
+   `realtime:room:p2p-<room>`, carrying `hello` / `join` / `offer` / `answer` / `ice`), so a static
+   deploy with an anon key gets low-latency play for free. The topology is a **star**, not a mesh: a
+   guest holds one connection and the host relays what it hears to the other guests, stamping the real
+   author so nobody can impersonate anybody. Two data channels per peer: `state` (unordered, no
+   retransmits — telemetry that is late is worthless) and `control` (reliable — chat, hits, joins).
+   Rooms are 1–8, ids are re-electable (lowest id keeps hostship), and a silent host is noticed after
+   9 s. It needs no server, but it does need a path between the two networks: **STUN only, no TURN**, so
+   two symmetric NATs (some mobile carriers) cannot pair — which is exactly why the lanes below exist.
 1. **Socket.IO** (`server.js`, `npm start`). A real realtime host: rooms of **1–8**, matchmaking codes,
    15 Hz vehicle telemetry, chat with rate limits, connection-state recovery and ghost-seat reclaiming.
    The server advertises itself on `/api/health` (`engine: "socket.io"`), so a page served by it — or a
@@ -506,14 +529,18 @@ this order:
 4. **HTTP polling** via `POST /api/room` — serverless hosts without sockets, best effort.
 5. **BroadcastChannel** — always on, so two tabs on one machine see each other instantly.
 
-The fallbacks are automatic and quiet: a project that refuses the join, never opens the socket or dies
-mid-session brings the next lane up beside it, and the HUD names whichever lane is actually carrying play
-(`SOCKET.IO` / `SUPABASE` / `RELAY` / `HTTP RELAY`).
+The fallbacks are automatic and quiet: no WebRTC in the browser, a refused signalling topic, a failed
+ICE handshake or a project that refuses the join brings the next lane up beside it, and the HUD names
+whichever lane is actually carrying play (`P2P HOST` / `P2P` / `SOCKET.IO` / `SUPABASE` / `RELAY` /
+`HTTP RELAY`).
 
 `public/js/realtime.js` is a ~200-line, dependency-free client for Supabase's realtime protocol (Phoenix
 channels): join, broadcast, 25 s heartbeat, reconnect with backoff, leave. `tests/net-e2e.test.mjs` runs
 two real clients through a real socket against a stand-in edge and asserts they meet, chat and leave —
-without a relay anywhere.
+without a relay anywhere. `tests/p2p.test.mjs` pins the protocol (validation, clamping, host election);
+`tests/p2p-e2e.test.mjs` stands a fake `RTCPeerConnection` and a broadcast signalling bus behind the real
+room and drives host + two guests through election, handshake, relay, impersonation attempts and a host
+leaving — so the star is tested without a browser.
 
 ### The Socket.IO server (`npm start`)
 
@@ -524,6 +551,11 @@ npm install
 npm start                     # node server.js → http://0.0.0.0:8080  (PORT || 8080, bound to all interfaces)
 PORT=8000 npm start           # …or wherever the host points you
 ```
+
+It also serves the site, the Socket.IO client **and `/games/*`** (the community games live next to
+`public/`, not inside it, so the source tree and a built `dist/` both work — a server started without a
+build used to answer the ship's iframe with a 404, which looked exactly like a game that never finished
+loading). `_`-prefixed folders stay private, `_shared` ships, and game HTML is served `no-store`.
 
 | Endpoint | What it is |
 | --- | --- |
@@ -568,6 +600,31 @@ server → room: player:joined · player:left · room:state · room:closed · ro
 Express or Socket.IO, so they are tested directly; `lib/cors-policy.mjs` holds the allowlist;
 `public/js/sio.js` is the browser half — it loads the client from the server, joins or creates the room,
 re-joins after a reconnect and hands envelopes to the game exactly like every other lane.
+
+### Docker & Hugging Face Spaces
+
+The repository root carries a `Dockerfile` for Hugging Face Spaces:
+
+```dockerfile
+FROM node:18
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+EXPOSE 7860
+CMD ["node", "server.js"]
+```
+
+A Space routes traffic to exactly **7860** and — unlike Render, Railway or Fly — does **not** set `PORT` for a
+Docker space. So the server resolves its port in this order: `PORT` if the host gives one, **7860 inside a
+Space** (detected from `SPACE_ID` / `SPACE_HOST` / `SPACE_REPO_NAME`), 8080 otherwise. The same image therefore
+works unchanged on a Space, on Render, and on a laptop.
+
+`EXPOSE 7860` is documentation for the proxy; the bind comes from that rule, which is why the container is not
+left listening on 8080 with every request timing out. `.dockerignore` keeps `node_modules`, `dist` and `.env`
+out of the image, so `npm install` inside the build is the only source of dependencies.
+
+Full walkthrough: [`docs/DEPLOY-HF.md`](docs/DEPLOY-HF.md).
 
 ### Staying awake on Render
 
@@ -635,8 +692,9 @@ polling relay if Supabase is not configured); for 15 Hz Socket.IO rooms run `npm
 socket open — Render, Railway, Fly, a VPS — and point the game at it with `?relay=https://your-server`, or set
 `window.__OUTRUN_RELAY__` from the deployment's own config.
 
-The room server has its own walkthrough — ports, CORS, the self-ping, how to confirm it from a phone —
-in [`docs/DEPLOY-RENDER.md`](docs/DEPLOY-RENDER.md), and `render.yaml` is a one-click Render blueprint.
+The room server has its own walkthroughs: [`docs/DEPLOY-RENDER.md`](docs/DEPLOY-RENDER.md) (ports, CORS, the
+self-ping, how to confirm it from a phone) with `render.yaml` as a one-click blueprint, and
+[`docs/DEPLOY-HF.md`](docs/DEPLOY-HF.md) for Hugging Face Spaces — the root `Dockerfile` builds there as-is.
 
 ## 🗂 Project layout
 

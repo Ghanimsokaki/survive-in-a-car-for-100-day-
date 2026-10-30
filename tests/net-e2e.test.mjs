@@ -23,13 +23,21 @@ const sandbox = {
   fetch: (...a) => globalThis.fetch(...a),
 };
 vm.createContext(sandbox);
+// net.js now imports the P2P lane. This sandbox is deliberately a runtime with
+// no RTCPeerConnection — exactly like an old webview — so the two names it needs
+// are stubbed, and the suite proves the lane is *declined* rather than fatal.
 const source = ['utils.js', 'realtime.js', 'net.js']
   .map((f) => readFileSync(`${ROOT}public/js/${f}`, 'utf8')
     .replace(/export class /g, 'class ')
     .replace(/^export (const|function) /gm, '$1 ')
-    .replace(/^import .*$/gm, ''))
+    .replace(/^import[\s\S]*?from\s+['"][^'"]+['"];?\s*$/gm, ''))
   .join('\n');
-vm.runInContext(`${source}\n;globalThis.__Net = Net; globalThis.__RT = SupabaseRealtime;`, sandbox, { filename: 'net-bundle.js' });
+const NO_WEBRTC = `
+  const canPeer = () => false;
+  class P2PRoom { constructor() { throw new Error('this runtime has no WebRTC'); } }
+`;
+vm.runInContext(`${NO_WEBRTC}\n${source}\n;globalThis.__Net = Net; globalThis.__RT = SupabaseRealtime;`,
+  sandbox, { filename: 'net-bundle.js' });
 const Net = sandbox.__Net;
 const SupabaseRealtime = sandbox.__RT;
 
@@ -52,6 +60,8 @@ console.log('\ntwo players, one room');
   });
   a.start();
   await wait(150);
+  check('without WebRTC the P2P lane is declined, not fatal', a.lane !== 'webrtc' && a.p2p === null,
+    `lane ${a.lane}`);
   const b = new Net({
     room: 'e2e-room', profile: profileB, supabase,
     onPeer: (p) => bPeers.push(p), onChat: (c) => bChat.push(c),

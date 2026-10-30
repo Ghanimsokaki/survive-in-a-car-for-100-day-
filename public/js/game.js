@@ -2372,15 +2372,16 @@ export class Game {
 
   onNetStatus(mode, text) {
     const lane = this.net?.lane || 'offline';
-    const label = lane === 'socketio' ? 'SOCKET.IO'
-      : lane === 'supabase' ? 'SUPABASE'
-        : lane === 'ws' ? 'RELAY'
-          : lane === 'poll' ? 'HTTP RELAY'
-            : 'CONNECTING';
+    const label = lane === 'webrtc' ? (this.net?.p2pRole === 'host' ? 'P2P HOST' : 'P2P')
+      : lane === 'socketio' ? 'SOCKET.IO'
+        : lane === 'supabase' ? 'SUPABASE'
+          : lane === 'ws' ? 'RELAY'
+            : lane === 'poll' ? 'HTTP RELAY'
+              : 'CONNECTING';
     const where = document.getElementById('netStatus');
     if (where) {
       where.textContent = `● ${label} — ${text}`;
-      where.className = `net-status ${lane === 'socketio' || lane === 'supabase' || lane === 'ws' ? 'ok' : 'warn'}`;
+      where.className = `net-status ${['webrtc', 'socketio', 'supabase', 'ws'].includes(lane) ? 'ok' : 'warn'}`;
     }
     // and in a run, on the HUD chip that already exists
     this.hud?.net?.(label, mode, text);

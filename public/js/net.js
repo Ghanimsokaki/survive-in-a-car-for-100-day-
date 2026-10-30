@@ -1,24 +1,29 @@
 import { uid } from './utils.js';
 import { SupabaseRealtime } from './realtime.js';
 import { SocketIoLane } from './sio.js';
+import { P2PRoom, canPeer } from './webrtc.js';
 
 /**
- * MULTIPLAYER TRANSPORT — Supabase first, our relay only as a fallback.
+ * MULTIPLAYER TRANSPORT — peer-to-peer first, relays only as a fallback.
  *
- * Four lanes, tried in this order:
- *  0. **Socket.IO server** (`server.js` → `npm start`) — the dedicated realtime
+ * Five lanes, tried in this order:
+ *  0. **P2P / WebRTC** (`p2p.js` + `webrtc.js`) — the room is a star around the
+ *     player who created it. Supabase Realtime is used only to *find* each other
+ *     (SDP + ICE); the driving, hits and chat then go straight browser to
+ *     browser over a data channel, which is what "low latency at 60 FPS" means
+ *     in practice. Needs `RTCPeerConnection` and a configured Supabase project.
+ *  1. **Socket.IO server** (`server.js` → `npm start`) — the dedicated realtime
  *     host: rooms of 1–8, matchmaking codes, telemetry at up to 15 Hz. Used
- *     whenever a relay origin is configured (`?relay=https://…`, the page's own
- *     origin when it is served by that server, or `window.__OUTRUN_RELAY__`).
- *  1. Supabase Realtime broadcast — phone → Supabase edge → phones. No server of
- *     ours in the path at all. The default when the project is configured and no
- *     socket.io host was advertised.
- *  2. WebSocket relay (`server.mjs`) — a bare clone with no credentials.
- *  3. HTTP polling (`/api/room`) — Vercel serverless, best effort.
- *  4. BroadcastChannel — extra tabs in the same browser, always on.
+ *     whenever a relay origin is configured and WebRTC is not available
+ *     (`?relay=https://…`, the page's own origin, or `window.__OUTRUN_RELAY__`).
+ *  2. Supabase Realtime broadcast — phone → Supabase edge → phones, no server of
+ *     ours in the path. The fallback when a peer connection cannot be made.
+ *  3. WebSocket relay (`server.mjs`) — a bare clone with no credentials.
+ *  4. HTTP polling (`/api/room`) — Vercel serverless, best effort.
+ *  5. BroadcastChannel — extra tabs in the same browser, always on.
  *
- * All four carry the same JSON envelope, so peers merge cleanly and `consume()`
- * never cares which lane a message arrived on.
+ * Every lane carries the same JSON envelope, so peers merge cleanly and
+ * `consume()` never cares which one a message arrived on.
  */
 export class Net {
   constructor({
@@ -49,7 +54,11 @@ export class Net {
     this.supabase = supabase && supabase.url && supabase.key ? supabase : null;
     this.relayUrl = String(relayUrl || '').replace(/\/+$/, '');
     this.sio = null;                // SocketIoLane instance
-    this.rt = null;                 // SupabaseRealtime instance
+    this.p2p = null;                // P2PRoom instance
+    this.p2pSignal = null;          // SupabaseRealtime instance used for signalling
+    this.p2pTried = false;
+    this.p2pOnline = false;
+    this.rt = null;                 // SupabaseRealtime instance (data lane)
     this.fetchImpl = fetchImpl || ((...a) => globalThis.fetch(...a));
     this.WebSocketImpl = null;      // injectable for tests
     this.lane = 'offline';          // 'supabase' | 'ws' | 'poll' | 'offline'
@@ -59,16 +68,20 @@ export class Net {
 
   get base() { return { id: this.id, name: this.profile.name, color: this.profile.color, carColor: this.profile.carColor }; }
 
+  /** 'host' or 'guest' while a peer-to-peer room is live, '' otherwise. */
+  get p2pRole() { return this.p2p?.role || ''; }
+
   start() {
     try {
       this.bc = new BroadcastChannel(`outrun-${this.room}`);
       this.bc.onmessage = (e) => this.consume(e.data);
     } catch { /* unsupported */ }
-    // LANE 0: the dedicated socket.io server, when one was advertised. It is
-    // asynchronous (the client script has to load), so the slower lanes stay
-    // dark until it has had its chance — dialling two lanes at once would
-    // double every message.
-    if (this.connectSocketIo()) {
+    // LANE 0: peer-to-peer. The room is found over Supabase and then runs
+    // browser-to-browser; the slower lanes stay dark until it has had its
+    // chance, because dialling two lanes at once would double every message.
+    if (this.connectP2P()) {
+      // its own failure path calls fallBackFromP2P()
+    } else if (this.connectSocketIo()) {
       // its own failure path calls fallBackFromSocketIo()
     } else if (this.supabase && this.connectSupabase()) {
       // LANE 1 took it
@@ -80,7 +93,108 @@ export class Net {
   }
 
   /**
-   * LANE 0. Joins the socket.io server. Returns true when a connection attempt
+   * LANE 0. Peer-to-peer: the player who opens the room is the host.
+   *
+   * Supabase Realtime carries the handshake (offers, answers, ICE) on its own
+   * topic — `p2p-<room>` — so signalling never mixes with the broadcast data
+   * lane. Once the data channel is open, Supabase is out of the path entirely.
+   */
+  connectP2P() {
+    if (this.p2pTried || this.p2p) return false;
+    if (!this.supabase || !canPeer()) return false;
+    this.p2pTried = true;
+    try {
+      const signaling = new SupabaseRealtime({
+        url: this.supabase.url,
+        key: this.supabase.key,
+        room: `p2p-${this.room}`,               // a topic of its own
+        onMessage: (msg) => this.p2p?.handleSignal(msg),
+        onStatus: (state, detail) => this.onP2PSignalStatus(state, detail),
+      });
+      if (!signaling.available) return false;
+      this.p2pSignal = signaling;
+
+      this.p2p = new P2PRoom({
+        room: this.room,
+        selfId: this.id,
+        name: this.profile.name,
+        profile: this.profile,
+        signaling: {
+          send: (obj) => signaling.send(obj),
+          close: () => signaling.close(),
+        },
+        onMessage: (msg) => this.consume(msg),
+        onPeer: (peer) => { if (peer?.id) this.consume({ t: 'hello', ...peer, ts: Date.now() }); },
+        onLeave: (peer) => { if (peer?.id) this.drop(peer.id); },
+        onStatus: (state, detail) => this.onP2PStatus(state, detail),
+        onHostChange: () => { /* the HUD reads this.p2p.snapshot() */ },
+      });
+
+      signaling.connect();
+      this.p2p.start();
+      this.lane = 'webrtc';
+      this.mode = 'online';
+      this.onStatus?.('joining', `peer-to-peer · room ${this.room}`);
+      return true;
+    } catch {
+      this.p2p = null;
+      this.p2pSignal = null;
+      return false;
+    }
+  }
+
+  /** The transport under peer-to-peer (Supabase) came up or went away. */
+  onP2PSignalStatus(state, detail = '') {
+    if (!this.alive) return;
+    if (state === 'reconnecting' || state === 'unavailable') {
+      // the signalling channel never opened: no peer connection is possible
+      if (!this.p2pSignal?.everOpened) this.fallBackFromP2P(detail || 'signalling unreachable');
+      else this.onStatus?.('reconnecting', detail || 'signalling reconnecting');
+      return;
+    }
+    if (state === 'error') this.fallBackFromP2P(detail || 'signalling refused');
+  }
+
+  /** The room itself reported a change: connected, electing, or lost. */
+  onP2PStatus(state, detail = '') {
+    if (!this.alive) return;
+    if (state === 'error') { this.fallBackFromP2P(detail || 'p2p failed'); return; }
+    this.lane = 'webrtc';
+    this.mode = 'online';
+    if (state === 'online') {
+      this.onStatus?.('online', detail || `peer-to-peer · room ${this.room}`);
+      if (!this.p2pOnline) {
+        this.p2pOnline = true;
+        this.hello();
+        if (this.lastState) this.send({ t: 'state', ...this.lastState });
+        this.flushPending();
+      }
+    } else if (state === 'signalling' || state === 'joining') {
+      this.onStatus?.('joining', detail || 'finding the room');
+    }
+  }
+
+  /**
+   * A peer connection could not be made (no WebRTC, signalling refused, the ICE
+   * handshake timed out). Tears the lane down and hands over to the next one.
+   */
+  fallBackFromP2P(why = '') {
+    if (!this.p2p && !this.p2pSignal) return;
+    try { this.p2p?.close(); } catch { /* gone */ }
+    try { this.p2pSignal?.close(); } catch { /* gone */ }
+    this.p2p = null;
+    this.p2pSignal = null;
+    this.p2pOnline = false;
+    this.degraded = true;
+    if (!this.alive) return;
+    if (why) this.onStatus?.('poll', `${why} — using the relay`);
+    if (this.connectSocketIo()) return;
+    if (this.connectSupabase()) return;
+    this.connectWS();
+  }
+
+  /**
+   * LANE 1. Joins the socket.io server. Returns true when a connection attempt
    * was made; the lane reports its own success or gives up to the next one.
    */
   connectSocketIo() {
@@ -302,9 +416,11 @@ export class Net {
     };
     if (this.bc) { try { this.bc.postMessage(payload); } catch {} }
     let delivered = false;
-    // LANE 0: the socket.io server
-    if (this.sio) delivered = this.sio.send(payload);
-    // LANE 1: straight to the Supabase edge
+    // LANE 0: peer-to-peer, straight to the other browsers
+    if (this.p2p) delivered = this.p2p.send(payload);
+    // LANE 1: the socket.io server
+    if (!delivered && this.sio) delivered = this.sio.send(payload);
+    // LANE 2: straight to the Supabase edge
     if (!delivered && this.rt) delivered = this.rt.send(payload);
     if (!delivered && this.ws && this.ws.readyState === 1) {
       try { this.ws.send(JSON.stringify(payload)); delivered = true; } catch { /* ignore */ }
@@ -400,6 +516,8 @@ export class Net {
     this.stopPolling();
     try { this.send({ t: 'bye' }); } catch {}
     try { this.bc?.close(); } catch {}
+    try { this.p2p?.close(); } catch {}
+    try { this.p2pSignal?.close(); } catch {}
     try { this.sio?.close(); } catch {}
     try { this.rt?.close(); } catch {}
     try { this.ws?.close(); } catch {}

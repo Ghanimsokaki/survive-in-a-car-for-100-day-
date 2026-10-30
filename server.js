@@ -7,7 +7,8 @@
  * + Vercel-compatible relay); this one is what you deploy to Railway, Render,
  * Fly, a VPS or any container host that keeps a socket open.
  *
- *   npm install && npm start        →  http://0.0.0.0:${PORT:-8080}
+ *   npm install && npm start        →  http://0.0.0.0:8080
+ *   docker build . && docker run -p 7860:7860 .   →  Hugging Face Spaces layout
  *
  * On Render the service keeps itself awake: every ten minutes the process GETs
  * its own public URL (`RENDER_EXTERNAL_URL`, which Render sets for you) with
@@ -48,12 +49,16 @@ import {
 import { createCorsPolicy, socketIoCors } from './lib/cors-policy.mjs';
 import { publicConfig } from './lib/supabase-env.mjs';
 import { startKeepAlive } from './lib/keepalive.mjs';
+import { resolvePort, isHuggingFaceSpace, SPACES_PORT } from './lib/port.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-/** Port: honour the host's PORT (Render injects one), default to 8080. */
-const PORT = process.env.PORT || 8080;
-/** Bind every interface so Render's proxy can route player traffic in. */
+/**
+ * Port: the host's PORT when it gives one (Render does), 7860 inside a Hugging
+ * Face Space (which routes nothing else and does not set PORT), 8080 otherwise.
+ */
+const PORT = resolvePort(process.env);
+/** Bind every interface so the host's proxy can route player traffic in. */
 const HOST = '0.0.0.0';
 
 // tiny .env loader so `npm start` picks up ALLOWED_ORIGINS / SUPABASE_URL
@@ -171,6 +176,38 @@ app.use(express.static(SITE, {
     }
   },
 }));
+
+// Community games live in ./games, next to ./public rather than inside it, so a
+// contributor only has to add a folder (see games/README.md). The built copy in
+// dist/games is served by the mount above when a build has run; this mount is
+// what keeps /games/* working from the source tree — headless `node server.js`
+// on Render, in Docker, and on the dev preview — instead of a 404 in the middle
+// of the hub's iframe (which is exactly what a never-ending "loading" ship
+// looks like from the outside).
+const GAMES = path.join(__dirname, 'games');
+const GAME_CACHE = {
+  '.html': 'no-store, max-age=0',
+  '.json': 'no-store, max-age=0',
+  '.js': 'public, max-age=60, stale-while-revalidate=600',
+  '.css': 'public, max-age=60, stale-while-revalidate=600',
+  '.svg': 'public, max-age=3600',
+};
+// `/games` with no file name is the catalogue itself, exactly like the hub asks.
+app.get('/games', (_req, res) => res.sendFile(path.join(GAMES, 'index.json')));
+
+app.use('/games', (req, res, next) => {
+  // `_`-prefixed folders are developer space (parked samples, the template) and
+  // are not in the catalogue; `_shared` is the SDK every game loads, so it ships.
+  const first = req.path.replace(/^\/+/, '').split('/')[0];
+  if (first && first.startsWith('_') && first !== '_shared') return next();
+  return express.static(GAMES, {
+    index: 'index.html',
+    setHeaders(res, file) {
+      const ext = path.extname(file).toLowerCase();
+      res.setHeader('Cache-Control', GAME_CACHE[ext] || 'public, max-age=60');
+    },
+  })(req, res, next);
+});
 
 // A single-page app: unknown paths get the shell, unless they look like a file.
 // (Written as a plain middleware so it behaves the same on express 4 and 5.)
@@ -402,6 +439,9 @@ server.listen(PORT, HOST, () => {
   console.log(`  → rooms: 1–${MAX_PLAYERS} players · telemetry up to 15 Hz`);
   console.log(`  → CORS: ${corsPolicy.open ? 'OPEN — any front-end' : `${corsPolicy.mode}: ${corsPolicy.origins.join(', ')}`}`);
   console.log(`  → static: ${path.relative(__dirname, SITE) || '.'}`);
+  if (isHuggingFaceSpace(process.env)) {
+    console.log(`  → Hugging Face Space: bound to ${SPACES_PORT} (the only port the Space routes to)`);
+  }
 
   /* ---------------------------------------------------------- keep-alive ---
    * Free hosts sleep after ~15 idle minutes; a 10-minute GET to our own public
