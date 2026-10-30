@@ -107,9 +107,11 @@ console.log('\nhttp surface');
 {
   const health = await (await fetch(`${URL}/health`)).json();
   check('health says it is the socket.io engine', health.engine === 'socket.io');
+  check('…and the service is Gemby Games', health.service === 'gemby-games-realtime', health.service);
   check('health advertises the realtime path', health.realtime?.path === '/socket.io');
   check('health caps rooms at eight', health.maxPlayersPerRoom === 8);
-  check('health lists the Vercel origin', health.cors.origins.includes('https://gemby-game.vercel.app'));
+  check('health reports CORS as open', health.cors.open === true && health.cors.mode === 'open',
+    JSON.stringify(health.cors));
   check('health counts rooms', typeof health.rooms === 'number' && typeof health.players === 'number');
 
   const rooms = await fetch(`${URL}/api/rooms`);
@@ -126,8 +128,10 @@ console.log('\nhttp surface');
     allowed.headers.get('access-control-allow-origin') === 'https://gemby-game.vercel.app');
   check('CORS varies on origin', /origin/i.test(allowed.headers.get('vary') || ''));
 
-  const refused = await fetch(`${URL}/health`, { headers: { Origin: 'https://evil.example.com' } });
-  check('CORS says nothing to a stranger', refused.headers.get('access-control-allow-origin') === null);
+  const anyone = await fetch(`${URL}/health`, { headers: { Origin: 'https://someone-else.example.com' } });
+  check('…and any other front-end as well',
+    anyone.headers.get('access-control-allow-origin') === 'https://someone-else.example.com');
+  check('credentials are allowed through', anyone.headers.get('access-control-allow-credentials') === 'true');
 
   const preflight = await fetch(`${URL}/api/rooms`, {
     method: 'OPTIONS',
@@ -163,30 +167,22 @@ console.log('\nthe container keeps itself awake');
 }
 
 // ------------------------------------------------------- handshake origins ---
-console.log('\nthe handshake obeys CORS');
+console.log('\nthe handshake lets any front-end in');
 {
-  // polling is a plain HTTP request, so the origin allowlist really applies
-  const preview = io(URL, {
-    transports: ['polling'],
-    reconnection: false,
-    timeout: 6000,
-    extraHeaders: { Origin: 'https://8000-abc123.e2b.app' },
-  });
-  let previewOk = true;
-  try { await once(preview, 'connect', 6000); } catch { previewOk = false; }
-  check('the live-preview origin may open a socket', previewOk);
-  preview.close();
-
-  const stranger = io(URL, {
-    transports: ['polling'],
-    reconnection: false,
-    timeout: 4000,
-    extraHeaders: { Origin: 'https://evil.example.com' },
-  });
-  let refused = false;
-  try { await once(stranger, 'connect_error', 4000); refused = true; } catch { refused = false; }
-  check('a stranger origin is refused at the handshake', refused);
-  stranger.close();
+  // polling is a plain HTTP request, so CORS really applies on this path
+  const origins = ['https://gemby-game.vercel.app', 'https://8000-abc123.e2b.app', 'https://some-other-game.example.com'];
+  for (const origin of origins) {
+    const socket = io(URL, {
+      transports: ['polling'],
+      reconnection: false,
+      timeout: 6000,
+      extraHeaders: { Origin: origin },
+    });
+    let connected = true;
+    try { await once(socket, 'connect', 6000); } catch { connected = false; }
+    check(`the socket accepts ${origin}`, connected);
+    socket.close();
+  }
 }
 
 // --------------------------------------------------------------- sockets ---

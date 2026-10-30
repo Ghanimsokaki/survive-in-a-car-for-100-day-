@@ -1,9 +1,9 @@
 {
-  "name": "100-days-outrun",
-  "version": "2.3.0",
+  "name": "gemby-games",
+  "version": "2.4.0",
   "private": true,
   "type": "module",
-  "description": "100 Days Outrun — a 3D multiplayer post-apocalyptic highway survival run with Supabase accounts, friends, phone controls and an Express + Socket.IO realtime server that keeps itself awake on Render.",
+  "description": "Gemby Games — a 3D multiplayer phone arcade (100 Days Outrun, Iron Tide) with Express + Socket.IO realtime rooms.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

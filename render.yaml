@@ -4,7 +4,7 @@
 # 10-minute self-ping that keeps a free container from falling asleep.
 services:
   - type: web
-    name: 100-days-outrun
+    name: gemby-games
     runtime: node
     plan: free
     region: singapore

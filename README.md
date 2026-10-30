@@ -1,12 +1,13 @@
-# 100 DAYS OUTRUN — Highway Survival
+# GEMBY GAMES — 100 Days Outrun & Iron Tide
 
-A **3D multiplayer** post-apocalyptic road-survival run. One rig, one hundred days, and a highway that
-throws scavengers, raider cars, acid rain and Category 5 hypercanes at you the whole way.
+**Gemby Games** is a **3D multiplayer arcade for phones**, and the shelf carries two games: the flagship
+**100 Days Outrun** — one rig, one hundred days, a highway that throws scavengers, raider cars, acid rain and
+Category 5 hypercanes at you the whole way — and **Iron Tide**, the ship builder and fleet battle.
 
 Roblox-style **username + password sign-in**, a **friends list with live presence**, full **phone support**,
-and a game that runs on a plain Node server or on **Vercel** — with zero runtime dependencies.
+real-time rooms of 1–8, and a game that runs on plain Node or on **Vercel**.
 
-![engine](https://img.shields.io/badge/engine-Three.js%20r169-ff8a1e) ![accounts](https://img.shields.io/badge/accounts-Supabase-3ecf8e) ![multiplayer](https://img.shields.io/badge/multiplayer-Socket.IO%20%C2%B7%20Supabase%20%C2%B7%20fallbacks-5ff0ff) ![mobile](https://img.shields.io/badge/phones-touch%20ready-5ff0ff) ![deploy](https://img.shields.io/badge/deploy-Vercel-black)
+![engine](https://img.shields.io/badge/engine-Three.js%20r169-ff8a1e) ![accounts](https://img.shields.io/badge/accounts-Supabase-3ecf8e) ![multiplayer](https://img.shields.io/badge/multiplayer-Socket.IO%20%C2%B7%20Supabase%20%C2%B7%20fallbacks-5ff0ff) ![mobile](https://img.shields.io/badge/phones-touch%20ready-5ff0ff) ![deploy](https://img.shields.io/badge/deploy-Vercel-black) ![rooms](https://img.shields.io/badge/rooms-1%E2%80%938%20players-ffb347)
 
 ---
 
@@ -557,11 +558,11 @@ server → room: player:joined · player:left · room:state · room:closed · ro
   connection-state recovery can hand the same session back inside 45 s. If recovery is impossible (a full
   reload), the browser presents the same `clientId` and the server hands the old seat over instead of
   leaving a ghost car in the road.
-* **CORS** is one allowlist shared by the HTTP routes and the handshake: `gemby-game.vercel.app` (plus
-  `www`), `localhost` and `192.168.x.x` for phone testing, `*.e2b.app` for the live coding preview
-  (`PREVIEW_ORIGINS=0` switches it off), and `ALLOWED_ORIGINS` for anything else —
-  `ALLOWED_ORIGINS="https://*.vercel.app,https://play.example.com"`. Wildcards are matched on the parsed
-  host, so `gemby-game.vercel.app.evil.com` is refused. Lookalikes have their own test suite.
+* **CORS is open** — any front-end may call the API and open a socket (there are no cookies on this relay and
+  no secrets behind it), and the same predicate is shared by the HTTP routes and the handshake. Lock it down
+  when you want to: `ALLOWED_ORIGINS="https://gemby-game.vercel.app,https://*.vercel.app"` restricts it to that
+  list (wildcards matched on the parsed host, so `…vercel.app.evil.com` is refused), `CORS=strict` uses the
+  built-in production list, and `localhost` / `192.168.x.x` always work for phone testing.
 
 `lib/lobby.mjs` holds the rules (caps, codes, sanitising, rate limits, pruning) with no dependency on
 Express or Socket.IO, so they are tested directly; `lib/cors-policy.mjs` holds the allowlist;

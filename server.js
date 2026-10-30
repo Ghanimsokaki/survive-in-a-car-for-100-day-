@@ -1,5 +1,5 @@
 /**
- * 100 DAYS OUTRUN — real-time game server (Express + Socket.IO)
+ * GEMBY GAMES — real-time game server (Express + Socket.IO)
  *
  * This is the dedicated multiplayer host: lobby rooms of 1–8, matchmaking codes,
  * and fast vehicle telemetry relayed at up to 15 Hz per player. It is a
@@ -14,7 +14,7 @@
  * node's native https client — see `lib/keepalive.mjs` and `/health`.`keepalive`.
  *
  * Endpoints
- *   GET  /health                    liveness + room/player counts + CORS policy
+ *   GET  /health                    liveness + room/player counts + CORS mode
  *   GET  /api/rooms                 a public summary of live rooms (no ids)
  *   GET  /api/config, /config.json  Supabase credentials + realtime hints for the page
  *   GET  /socket.io/socket.io.js    the client library for the browser
@@ -83,9 +83,11 @@ app.disable('x-powered-by');
 app.set('trust proxy', true);
 
 /* ------------------------------------------------------------------ CORS ---
- * Applied to every HTTP route with the same predicate the socket handshake
- * uses, so the browser cannot be told one thing by /health and another by the
- * WebSocket upgrade.
+ * OPEN by default: any front-end may call the API and open a socket, which is
+ * what a game relay wants — there are no cookies here and no secrets behind it.
+ * Set ALLOWED_ORIGINS (or CORS=strict) to lock it down; the same predicate is
+ * used by every HTTP route and by the socket handshake, so the browser can
+ * never be told one thing by /health and another by the WebSocket upgrade.
  */
 app.use((req, res, next) => {
   const origin = req.headers.origin;
@@ -110,7 +112,7 @@ app.get('/health', (_req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   res.json({
     ok: true,
-    service: '100-days-outrun-realtime',
+    service: 'gemby-games-realtime',
     version: VERSION,
     engine: 'socket.io',
     uptimeSeconds: Math.round(process.uptime()),
@@ -120,7 +122,7 @@ app.get('/health', (_req, res) => {
     realtime: { engine: 'socket.io', path: '/socket.io' },
     supabase: { configured: publicConfig(process.env).configured },
     keepalive: keepAlive.state(),
-    cors: { origins: corsPolicy.origins },
+    cors: { open: corsPolicy.open, mode: corsPolicy.mode, origins: corsPolicy.origins },
   });
 });
 
@@ -395,10 +397,10 @@ pruneTimer.unref?.();
 /* ----------------------------------------------------------------- listen */
 server.listen(PORT, HOST, () => {
   console.log('');
-  console.log('  100 DAYS OUTRUN — realtime server (socket.io)');
+  console.log('  GEMBY GAMES — realtime server (socket.io)');
   console.log(`  → listening on http://${HOST}:${PORT}`);
   console.log(`  → rooms: 1–${MAX_PLAYERS} players · telemetry up to 15 Hz`);
-  console.log(`  → CORS: ${corsPolicy.origins.join(', ')}`);
+  console.log(`  → CORS: ${corsPolicy.open ? 'OPEN — any front-end' : `${corsPolicy.mode}: ${corsPolicy.origins.join(', ')}`}`);
   console.log(`  → static: ${path.relative(__dirname, SITE) || '.'}`);
 
   /* ---------------------------------------------------------- keep-alive ---

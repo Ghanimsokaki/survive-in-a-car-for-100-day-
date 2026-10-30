@@ -1,7 +1,7 @@
 {
-  "name": "100 Days Outrun — Highway Survival",
-  "short_name": "100 Days",
-  "description": "3D multiplayer post-apocalyptic highway survival. One rig, 100 days, endless storms.",
+  "name": "Gemby Games — 100 Days Outrun",
+  "short_name": "Gemby Games",
+  "description": "Gemby Games: a 3D multiplayer arcade. 100 Days Outrun and Iron Tide, on your phone.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

@@ -82,14 +82,14 @@ npm start                 # node server.js — PORT || 8080, bound to 0.0.0.0
 | `PORT` | `8080` | the port the host assigns; the server binds `0.0.0.0` so Render can route to it |
 | `KEEPALIVE` | `1` | `0` disables the 10-minute self-ping |
 | `KEEPALIVE_MINUTES` | `10` | how often the server GETs its own public URL |
-| `ALLOWED_ORIGINS` | — | extra browser origins, comma separated: `https://*.vercel.app,https://play.example.com` |
-| `PREVIEW_ORIGINS` | `1` | set to `0` to drop the coding-preview wildcard (`*.e2b.app`) from the allowlist |
+| `ALLOWED_ORIGINS` | — | optional: setting a list closes CORS to exactly those origins |
+| `CORS` | `open` | `strict` uses the built-in production allowlist |
 
-`https://gemby-game.vercel.app` is allowed out of the box (plus `www`, `localhost` and `192.168.x.x` for
-phone testing on your own Wi-Fi), so the Vercel front-end can open the socket without any configuration.
-Check it from a phone: `https://your-server/health` lists the exact allowlist it is enforcing, and
-`Access-Control-Allow-Origin` is echoed back only for origins on that list. The same response carries
-`keepalive` — proof that the container is pinging itself and staying up (see `docs/DEPLOY-RENDER.md`).
+**CORS is open** out of the box: any front-end can call the API and open a socket, so the Vercel deploy works
+with no configuration at all. `/health` reports `cors: {open, mode, origins}`, and `Access-Control-Allow-Origin`
+echoes whatever origin asked. To restrict it, set `ALLOWED_ORIGINS` (a list closes the door) or `CORS=strict`
+(built-in production list); `localhost` and `192.168.x.x` always work for phone testing. The same response
+carries `keepalive` — proof that the container is pinging itself and staying up (see `docs/DEPLOY-RENDER.md`).
 
 Point the deployed game at it in one of two ways:
 

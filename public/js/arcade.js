@@ -20,7 +20,7 @@ export function copyViaSelection(text) {
 }
 
 /**
- * THE ARCADE — the hub every session starts in.
+ * THE ARCADE — the Gemby Games hub every session starts in.
  *
  * One built-in game (100 Days Outrun, the 3D engine in this repo) plus every
  * community game found under ./games (see scripts/scan-games.mjs). Community
@@ -251,7 +251,7 @@ export class Arcade {
     root.className = 'arcade hidden';
     root.innerHTML = `
       <header class="arc-top">
-        <div class="arc-logo"><span>100</span> ARCADE</div>
+        <div class="arc-logo"><span>GG</span> GEMBY GAMES</div>
         <label class="arc-search">
           <input id="arcSearch" placeholder="Search games, creators, tags…" autocomplete="off" spellcheck="false" />
         </label>

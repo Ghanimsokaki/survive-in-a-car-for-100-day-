@@ -75,7 +75,7 @@ console.log('\nthe request itself');
   const first = await ping(`${ok.url}/health`);
   check('a healthy server answers 200', first.ok === true && first.status === 200);
   check('…and the request actually arrived', ok.hits.length === 1 && ok.hits[0].url === '/health');
-  check('…identified as the game', /100-days-outrun/.test(ok.hits[0].ua), ok.hits[0].ua);
+  check('…identified as the game', /gemby-games/.test(ok.hits[0].ua), ok.hits[0].ua);
   check('…timed', first.ms >= 0 && typeof first.ms === 'number');
 
   const teapot = await countingServer(503);

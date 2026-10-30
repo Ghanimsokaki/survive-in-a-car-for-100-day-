@@ -25,17 +25,20 @@ const PORT = process.env.PORT || 8080;
 const HOST = '0.0.0.0';
 ```
 
-## 2. Allowing the Vercel front-end
+## 2. CORS — open, or yours to close
 
-`https://gemby-game.vercel.app` (plus `www`) is in the allowlist out of the box, so the deployed game can open
-a socket with no configuration. For any other origin — a custom domain, a Vercel preview branch — add:
+CORS is **open by default**: any front-end (the Vercel deploy, a custom domain, a preview branch, a local
+file) can call the API and open a socket. That is deliberate — this relay holds no cookies and no secrets.
+
+To restrict it instead, set `ALLOWED_ORIGINS` (a list is the opt-in) or `CORS=strict` for the built-in
+production list:
 
 ```text
-ALLOWED_ORIGINS = https://*.vercel.app,https://play.example.com
+ALLOWED_ORIGINS = https://gemby-game.vercel.app,https://*.vercel.app
 ```
 
-Wildcards are matched on the parsed host, so `gemby-game.vercel.app.evil.com` is still refused. Confirm from a
-phone by opening `https://your-service.onrender.com/health` — it lists the exact allowlist it is enforcing.
+Wildcards are matched on the parsed host, so `gemby-game.vercel.app.evil.com` is refused.
+`https://your-service.onrender.com/health` reports `cors: {open, mode, origins}` — the exact policy in force.
 
 Optional, for accounts and the Supabase realtime fallback:
 
