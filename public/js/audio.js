@@ -5,6 +5,8 @@ export class AudioKit {
   constructor() {
     this.ready = false;
     this.enabled = true;
+    this.volume = 0.7;      // 0…1, the player's master volume
+    this.muted = false;
     this.ctx = null;
     this.master = null;
     this.engineGain = null;
@@ -25,7 +27,7 @@ export class AudioKit {
       return;
     }
     this.master = this.ctx.createGain();
-    this.master.gain.value = 0.5;
+    this.master.gain.value = this.masterGain();
     this.master.connect(this.ctx.destination);
 
     // engine: two detuned saws through a lowpass
@@ -66,6 +68,40 @@ export class AudioKit {
     noise2.connect(rf).connect(this.rumbleGain).connect(this.master);
 
     this.ready = true;
+  }
+
+  /**
+   * The gain the master node should have right now. 0.72 at full volume keeps
+   * the mix where it was tuned (the old fixed value was 0.5), and muting is a
+   * real zero rather than a flag the sound effects have to remember to check.
+   */
+  masterGain() {
+    if (this.muted) return 0;
+    return Math.max(0, Math.min(1, this.volume)) * 0.72;
+  }
+
+  /** Applies volume/mute to a live graph (safe to call before init()). */
+  applyGain() {
+    this.enabled = !this.muted && this.volume > 0;
+    if (!this.ready || !this.master) return;
+    try {
+      this.master.gain.setTargetAtTime(this.masterGain(), this.ctx.currentTime, 0.05);
+    } catch {
+      this.master.gain.value = this.masterGain();
+    }
+  }
+
+  setVolume(v) {
+    const n = Number(v);
+    this.volume = Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : this.volume;
+    this.applyGain();
+    return this.volume;
+  }
+
+  setMuted(on) {
+    this.muted = Boolean(on);
+    this.applyGain();
+    return this.muted;
   }
 
   noiseSource(seconds = 2) {

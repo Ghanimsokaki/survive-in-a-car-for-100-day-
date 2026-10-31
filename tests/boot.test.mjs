@@ -67,8 +67,9 @@ console.log('\nhome payload');
   // fallback copy lives in the lobby status line
   check('there is no blocking boot splash', !/id="loading"><div class="spin"/.test(html)
     && !/WARMING THE ENGINE/.test(html));
-  check('the loader is a chip, not a screen', /id="loading" class="gone"/.test(html)
-    && /class="ld-bar"/.test(html));
+  check('there is no loading UI at all', !/id="loading"/.test(html) && !/ld-bar|ld-text/.test(html)
+    && !/LOADING/.test(html));
+  check('the kit is preloaded from the markup', /modulepreload" href="\.\/js\/game\.js"/.test(html));
   check('a stuck boot still says something', /still connecting/.test(html) && /booted/.test(html));
 }
 
@@ -325,8 +326,8 @@ console.log('\nphone gui');
 }
 
 
-// ------------------------------------------------------- no blocking loading
-console.log('\nloading never blocks');
+// ------------------------------------------------------- no loading, anywhere
+console.log('\nno loading screens');
 {
   const main = await readFile(path.join(publicDir, 'js', 'main.js'), 'utf8');
   const css = await readFile(path.join(publicDir, 'styles.css'), 'utf8');
@@ -336,22 +337,15 @@ console.log('\nloading never blocks');
   check('PLAY loads the kit before it touches the lobby',
     startRun.indexOf('await loadGameKit') < startRun.indexOf("$('lobby').classList.remove('show')"));
   check('a failed load returns to the menu, not a spinner',
-    /catch[\s\S]{0,400}setLoading\(\{ active: false \}\)/.test(startRun)
-    && /starting = false/.test(startRun), 'recoverable');
-  check('the button label is restored on failure', /btn.innerHTML = btnLabel/.test(startRun));
-  check('the loader is invisible until PLAY', /id="loading" class="gone"/.test(html));
-  check('the loader cannot cover the game', /#loading\{display:none;/.test(css)
-    && !/#loading\{position:fixed/.test(css));
-  check('progress is a real percentage', /class="ld-bar"/.test(html) && /\.ld-bar i\{[^}]*width:0/.test(css));
+    /catch[\s\S]{0,400}starting = false/.test(startRun) && /showProblem\(/.test(startRun));
+  check('the button is disabled while the engine lands, never re-labelled',
+    /btn\.disabled = true/.test(startRun) && !/btn\.innerHTML = `LOADING/.test(startRun));
+  check('nothing in the run path renders a percentage', !/LOADING \$\{/.test(main) && !/DROPPING IN/.test(main));
+  check('no loading markup survives', !/id="loading"/.test(html));
+  check('no loading styles survive', !/#loading|\\.ld-bar|\\.ld-text/.test(css));
 
-  const { onKitProgress, kitProgressState, warmGameKit } = await import('./app/js/main.js');
-  const seen = [];
-  const off = onKitProgress((p) => seen.push(p.ratio));
-  const state = kitProgressState();
-  check('progress starts at zero', state.ratio === 0 && state.total > 500, `${state.total} KB weight`);
-  check('progress subscribers get the current value immediately', seen.length === 1);
-  check('progress can be unsubscribed', typeof off === 'function');
-  off();
+  const { warmGameKit } = await import('./app/js/main.js');
+  check('the progress API is gone', !('onKitProgress' in (await import('./app/js/main.js'))));
   warmGameKit({ delay: 60 });
   check('the kit warms on a timer, not on an idle callback',
     !/requestIdleCallback\(\s*run/.test(main) && /setTimeout\(run, delay\)/.test(main));

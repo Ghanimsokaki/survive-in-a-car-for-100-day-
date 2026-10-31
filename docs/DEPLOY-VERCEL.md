@@ -67,11 +67,43 @@ In the game, tap **CONNECT SUPABASE** on the sign-in screen. The panel shows a l
 Only the anon/publishable key is ever shipped. A `service_role` JWT or `sb_secret_…` token is detected and
 replaced with an error message instead of being served.
 
-## 6. Known limits on Vercel
+## 6. The realtime server (rooms of 1–8)
 
-* **No WebSockets** in serverless functions → multiplayer uses the HTTP polling relay (`/api/room`) at
-  roughly 3 updates/second. Fine for a handful of friends. For smooth 10 Hz rooms, host `server.mjs` on a
-  Node host (Render, Fly, Railway) and open the game with `?relay=wss://your-relay/ws`.
+Vercel serves the front-end; `server.js` is the room host. Deploy it anywhere that keeps a process alive:
+Render, Railway, Fly, a VPS — anything with a port. There are no build steps and no native modules.
+
+```bash
+npm install
+npm start                 # node server.js — PORT || 8080, bound to 0.0.0.0
+```
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `PORT` | `8080` | the port the host assigns; the server binds `0.0.0.0` so Render can route to it |
+| `KEEPALIVE` | `1` | `0` disables the 10-minute self-ping |
+| `KEEPALIVE_MINUTES` | `10` | how often the server GETs its own public URL |
+| `ALLOWED_ORIGINS` | — | optional: setting a list closes CORS to exactly those origins |
+| `CORS` | `open` | `strict` uses the built-in production allowlist |
+
+**CORS is open** out of the box: any front-end can call the API and open a socket, so the Vercel deploy works
+with no configuration at all. `/health` reports `cors: {open, mode, origins}`, and `Access-Control-Allow-Origin`
+echoes whatever origin asked. To restrict it, set `ALLOWED_ORIGINS` (a list closes the door) or `CORS=strict`
+(built-in production list); `localhost` and `192.168.x.x` always work for phone testing. The same response
+carries `keepalive` — proof that the container is pinging itself and staying up (see `docs/DEPLOY-RENDER.md`).
+
+Point the deployed game at it in one of two ways:
+
+* open the game with `?relay=https://your-server` (kept in the URL, so a shared link stays on that server), or
+* set `window.__OUTRUN_RELAY__ = 'https://your-server'` in the deployment's own config.
+
+Either way the client probes `/health`, sees `engine: "socket.io"`, and the HUD reads **SOCKET.IO**. If the
+server is asleep or unreachable, the next lane (Supabase Realtime) takes over without an error screen.
+
+## 7. Known limits on Vercel
+
+* **No WebSockets** in serverless functions → online play uses Supabase Realtime directly, or the polling
+  relay (`/api/room`) at roughly 3 updates/second when Supabase is not configured. Both are fine for a
+  handful of friends; for 15 Hz rooms with up to eight players, run `server.js` as above.
 * **Polling state is per lambda instance.** Two players may briefly sit on different warm instances; the
   client re-syncs as instances recycle. Same limitation as any stateless relay.
 * **Free Supabase projects pause** after ~a week without traffic. Resume from the dashboard if the game

@@ -1,23 +1,27 @@
-# 100 DAYS OUTRUN — Highway Survival
+# GEMBY GAMES — 100 Days Outrun & Iron Tide
 
-A **3D multiplayer** post-apocalyptic road-survival run. One rig, one hundred days, and a highway that
-throws scavengers, raider cars, acid rain and Category 5 hypercanes at you the whole way.
+**Gemby Games** is a **3D multiplayer arcade for phones**, and the shelf carries two games: the flagship
+**100 Days Outrun** — one rig, one hundred days, a highway that throws scavengers, raider cars, acid rain and
+Category 5 hypercanes at you the whole way — and **Iron Tide**, the ship builder and fleet battle.
 
 Roblox-style **username + password sign-in**, a **friends list with live presence**, full **phone support**,
-and a game that runs on a plain Node server or on **Vercel** — with zero runtime dependencies.
+real-time rooms of 1–8, and a game that runs on plain Node or on **Vercel**.
 
-![engine](https://img.shields.io/badge/engine-Three.js%20r169-ff8a1e) ![accounts](https://img.shields.io/badge/accounts-Supabase-3ecf8e) ![multiplayer](https://img.shields.io/badge/multiplayer-WebSocket%20%2B%20HTTP%20fallback-5ff0ff) ![mobile](https://img.shields.io/badge/phones-touch%20ready-5ff0ff) ![deploy](https://img.shields.io/badge/deploy-Vercel-black)
+![engine](https://img.shields.io/badge/engine-Three.js%20r169-ff8a1e) ![accounts](https://img.shields.io/badge/accounts-Supabase-3ecf8e) ![multiplayer](https://img.shields.io/badge/multiplayer-Socket.IO%20%C2%B7%20Supabase%20%C2%B7%20fallbacks-5ff0ff) ![mobile](https://img.shields.io/badge/phones-touch%20ready-5ff0ff) ![deploy](https://img.shields.io/badge/deploy-Vercel-black) ![rooms](https://img.shields.io/badge/rooms-1%E2%80%938%20players-ffb347)
 
 ---
 
 ## ▶ Play
 
 ```bash
-npm start          # http://localhost:8000
-npm test           # headless suites (simulation, accounts, both UI flows)
+npm install        # express + socket.io (the game itself needs nothing)
+npm start          # http://localhost:8080 — the Socket.IO room server
+npm run relay      # http://localhost:8000 — zero-dependency static + WebSocket relay
+npm test           # 28 headless suites (simulation, accounts, P2P rooms, UI flows, the live server)
 ```
 
-No install step, no build step. `public/vendor/three.module.js` is vendored, so the game boots even offline.
+No build step. `public/vendor/three.module.js` is vendored, so the game boots even offline; `npm run relay`
+serves it with no dependencies at all, and `npm start` adds Socket.IO rooms on top.
 
 ## 🧯 Errors: what is guarded, and where
 
@@ -27,7 +31,8 @@ The game is built so that a failure is *local and visible* instead of a frozen s
 | --- | --- |
 | A module 404s | the dev server answers a real **404** (it used to answer `200` + `index.html`, which the browser reports as a confusing MIME error). PLAY shows "could not load the 3D engine", restores the button and retries. |
 | The 3D kit fails to load | the lobby stays on screen, portrait is handed back, nothing is blocked. |
-| A frame throws | `Game.onFrameError` logs the first one, keeps the loop alive, warns the player after 30, and pauses after 120 instead of burning the battery on a still image. |
+| A frame throws | simulation and drawing are guarded separately. A failed **draw** steps the graphics down one notch and retries (shadows → post layer → resolution → particles → safe mode), so a fussy GPU ends up playable instead of black. A failed **update** keeps the loop alive, warns after 30 frames and pauses after 120 instead of burning the battery on a still image. |
+| Anything throws at all | the **error bar** names the actual message (`PROBLEM: …`) and carries a real **RESTART** button — in a run, and even before the game boots (`window.onerror` / `unhandledrejection`). The last failure is kept in `window.__outrunLastError` for a bug report. |
 | The GPU drops the context (backgrounding, OOM, driver reset) | `webglcontextlost` is caught, drawing pauses, and `webglcontextrestored` resumes the loop with a clean clock. Without this a phone shows a black canvas for the rest of the session. |
 | A browser refuses AudioContext / fullscreen / orientation lock | the feature is skipped (`console.warn` at most); the game keeps playing, silently. |
 | A community game loads without the hub SDK | both Iron Tide and the template fall back to a local `sdk` shim instead of throwing `ReferenceError` every frame. |
@@ -37,21 +42,22 @@ The game is built so that a failure is *local and visible* instead of a frozen s
 fallback, the 404 rules and the loader contract); the browser half is guarded with optional
 chaining so an absent API can never throw.
 
-## ⚡ No loading screen
+## ⚡ No loading — anywhere
 
-There is **no splash and no blocking loading card** anywhere:
+There is **no splash, no loading card, no progress bar and no percentage** left in the app. The words
+"loading" and "loading…" do not appear in the UI at all.
 
-* **Boot** — the sign-in screen is static HTML, so it is interactive before a single module parses. The old
-  "WARMING THE ENGINE…" overlay is gone.
-* **PLAY** — pressing it leaves the lobby on screen and turns the button into a live percentage
-  (`LOADING 42%`) with a thin progress bar underneath. The percentage is measured from the bytes actually on
-  the wire, not a fake timer.
-* **Warm start** — the 3D kit starts downloading 600 ms after the menu is interactive (and again on the first
-  tap). It used to wait for `requestIdleCallback`, which on this page can never fire because the avatar
-  preview draws every frame — that is exactly why PLAY sometimes looked frozen.
-* **It cannot get stuck** — if the kit fails, the chip disappears, the PLAY label is restored, the menu stays
-  up with "could not load the 3D engine — check your connection and press PLAY again", and pressing PLAY
-  retries. The lobby is only hidden once the world is actually built.
+* **Boot** — the sign-in screen is static HTML, so it is interactive before a single module parses.
+* **PLAY** — the lobby stays up and the run begins the instant the engine is ready. The button is only
+  *disabled* while that happens (never re-labelled), so a double tap cannot start two runs, and if
+  something fails you land back on the menu with the real reason in the error bar.
+* **The kit is preloaded from the markup** — `modulepreload` for `game.js`, `world.js`, `hud.js`,
+  `net.js` and friends is in `<head>`, so the browser fetches them at parse time; the loader only
+  *caches* them. By the time a player has typed a name, PLAY has nothing left to wait for.
+* **Warm start** — the kit also starts importing 600 ms after the menu is interactive (and again on the
+  first tap), because `requestIdleCallback` never fires on a page that draws an avatar preview every frame.
+* Removed with it: `#loading`, `.ld-bar`, `.ld-text`, `setLoading()`, `onKitProgress()`,
+  `kitProgressState()`, the byte-counting stream reader and the `LOADING 42%` button copy.
 
 ## ⚡ Fast loading
 
@@ -225,7 +231,48 @@ Once signed in, the lobby shows a friends panel:
 * Remove with ✕. Presence beats every 20 s and friends auto-refresh every 25 s, so the list stays honest.
 * Best run (`best_day`) is stored per account and kept across devices.
 
+**Where to add somebody:** the lobby card, or the **Add Friends** tile in the arcade (top of the hub). Both
+open the same sheet, and both accept:
+
+* an `@username` (`@ghanim`), with or without the `@`;
+* a plain username in any capitalisation (`Ghanim`, `GHANIM`);
+* a **display name**, as long as exactly one survivor has it — an ambiguous name (or a partial match hitting
+  several people) tells you to add by `@username` instead of silently picking somebody.
+
+Every failure is spelled out in the sheet: *no survivor called "…"*, *that is you*, *already on your list*,
+*your Supabase project blocked the write — re-run `supabase/schema.sql`*. Nothing fails silently any more.
+
 Guests still get the shared highway and chat — they just have no persistent friends list.
+
+## 🖼 Your own account picture
+
+Open it from the hub avatar, **⚙ SETTINGS** (lobby or hub) or the in-run gear, then **CHOOSE PICTURE**:
+
+* the photo is **centre-cropped square and resized to 196 px on the device** before it is saved — a 6 MB
+  camera photo becomes a few kilobytes, so the friends list and the Supabase free tier stay happy;
+* the stored value is a `data:` URL in `profiles.avatar_image`; the schema refuses anything that is not a
+  small inline image, or anything over 420 KB;
+* the picture shows in the hub header, the lobby account chip, the friends list, the player panel **and on
+  the 3D nameplate above your head** in a run;
+* **REMOVE** clears it and falls back to your two initials on your saved colour.
+
+Projects on an older schema are handled honestly: the write drops the `avatar_image` column, keeps your name
+and colours, and tells you the picture is saved on this device only. Run `supabase/schema.sql` once to sync.
+
+## 🎛 Settings
+
+One panel, three places to open it (hub ⚙, lobby ⚙, in-run gear, or the **P** key), stored in
+`outrun-settings-v1`:
+
+| Setting | What it does |
+| --- | --- |
+| **VOLUME** | master gain on every synthesised sound (0–100 %, or MUTED) |
+| **MUTE** | a true zero on the audio graph, not a flag each effect has to remember |
+| **SCREEN SHAKE** | 0–100 %; 0 is a still camera, applied at every shake site in one place |
+| **GRAPHICS** | AUTO / LOW / MED / HIGH / ULTRA — applied to the running game immediately |
+
+Changing the tier mid-run re-applies shadows, exposure, pixel ratio, particles and the CSS post layer without
+a restart. The lobby's GRAPHICS row and this panel share one store, so they can never disagree.
 
 ## 📱 Phones
 
@@ -441,22 +488,146 @@ upgrades early with the right mats).
 
 Plus fuel refining, repair kits, tire patches, full overhauls, armor plating ×3 and hydraulic anchor tiers ×4.
 
-## 👥 Multiplayer
+## 👥 Multiplayer — peer-to-peer first, Socket.IO beside it
 
-Share a **room code**. Everyone in the room shares the highway: positions, driving/walking state, health,
-weapon and chat are relayed ~11×/s. Three transport lanes, one JSON envelope:
+Share a **room code** (or press *quick play*). Everyone in the room shares the highway: positions,
+driving/walking state, health, weapon, hits and chat go out up to 15×/s. One JSON envelope, six lanes,
+tried in this order:
 
-1. **WebSocket** relay in `server.mjs` (zero dependencies, hand-rolled RFC 6455).
-2. **HTTP polling** via `POST /api/room` — automatic fallback, and what keeps online play working on Vercel.
-3. **BroadcastChannel** — always on, so two tabs on one machine see each other instantly.
+0. **Peer-to-peer WebRTC** (`public/js/webrtc.js` + `public/js/p2p.js`). Whoever opens the room is the
+   **host**; everyone else connects straight to them, browser → browser, and nothing of ours is in the
+   path. Supabase Realtime is used *only* as the signalling channel (a separate topic,
+   `realtime:room:p2p-<room>`, carrying `hello` / `join` / `offer` / `answer` / `ice`), so a static
+   deploy with an anon key gets low-latency play for free. The topology is a **star**, not a mesh: a
+   guest holds one connection and the host relays what it hears to the other guests, stamping the real
+   author so nobody can impersonate anybody. Two data channels per peer: `state` (unordered, no
+   retransmits — telemetry that is late is worthless) and `control` (reliable — chat, hits, joins).
+   Rooms are 1–8, ids are re-electable (lowest id keeps hostship), and a silent host is noticed after
+   9 s. It needs no server, but it does need a path between the two networks: **STUN only, no TURN**, so
+   two symmetric NATs (some mobile carriers) cannot pair. That case is handled rather than hidden: a
+   connection that never opens is dropped after 8 s, and a guest with no working channel after 12 s hands
+   the room to the next lane — it never sits on `P2P` with an empty map, and `?relay=` still wins if you
+   want to force a particular server.
+1. **Socket.IO** (`server.js`, `npm start`). A real realtime host: rooms of **1–8**, matchmaking codes,
+   15 Hz vehicle telemetry, chat with rate limits, connection-state recovery and ghost-seat reclaiming.
+   The server advertises itself on `/api/health` (`engine: "socket.io"`), so a page served by it — or a
+   page told about it with `?relay=https://your-server` — uses this lane automatically.
+2. **Supabase Realtime**. The client joins the broadcast channel `realtime:room:<room>` **directly** —
+   phone → Supabase edge → phones. No server of ours in the path at all, so it works on a static Vercel
+   deploy with just the anon key.
+3. **WebSocket relay** in `server.mjs` (`npm run relay`) — a bare clone without Supabase credentials, or a
+   self-hosted relay via `?relay=wss://your-relay.example/ws`.
+4. **HTTP polling** via `POST /api/room` — serverless hosts without sockets, best effort.
+5. **BroadcastChannel** — always on, so two tabs on one machine see each other instantly.
 
-Point the client at a remote relay with `?relay=wss://your-relay.example/ws`.
+The fallbacks are automatic and quiet: no WebRTC in the browser, a refused signalling topic, a failed
+ICE handshake or a project that refuses the join brings the next lane up beside it, and the HUD names
+whichever lane is actually carrying play (`P2P HOST` / `P2P` / `SOCKET.IO` / `SUPABASE` / `RELAY` /
+`HTTP RELAY`).
+
+`public/js/realtime.js` is a ~200-line, dependency-free client for Supabase's realtime protocol (Phoenix
+channels): join, broadcast, 25 s heartbeat, reconnect with backoff, leave. `tests/net-e2e.test.mjs` runs
+two real clients through a real socket against a stand-in edge and asserts they meet, chat and leave —
+without a relay anywhere. `tests/p2p.test.mjs` pins the protocol (validation, clamping, host election);
+`tests/p2p-e2e.test.mjs` stands a fake `RTCPeerConnection` and a broadcast signalling bus behind the real
+room and drives host + two guests through election, handshake, relay, impersonation attempts, a host
+leaving and a handshake that never completes; `tests/p2p-net-e2e.test.mjs` then runs two real `Net`
+instances over a real socket to prove the *lane glue* — signalling-only topic, telemetry over the data
+channel, host-stamped authorship, host-quits recovery, dead-topic fallback and the `?relay=` override.
+
+### The Socket.IO server (`npm start`)
+
+`server.js` is the production realtime host: Express for HTTP, Socket.IO for the wire.
+
+```bash
+npm install
+npm start                     # node server.js → http://0.0.0.0:8080  (PORT || 8080, bound to all interfaces)
+PORT=8000 npm start           # …or wherever the host points you
+```
+
+It also serves the site, the Socket.IO client **and `/games/*`** (the community games live next to
+`public/`, not inside it, so the source tree and a built `dist/` both work — a server started without a
+build used to answer the ship's iframe with a 404, which looked exactly like a game that never finished
+loading). `_`-prefixed folders stay private, `_shared` ships, and game HTML is served `no-store`.
+
+| Endpoint | What it is |
+| --- | --- |
+| `GET /health` | liveness, room/player counts, engine + realtime path, and the CORS allowlist |
+| `GET /api/rooms` | public room list (`code`, `mode`, `players`, `max`) — no player ids |
+| `GET /api/config`, `/config.json` | Supabase credentials + realtime hints, exactly what Vercel's function serves |
+| `GET /socket.io/socket.io.js` | the browser client, served by the server itself (no CDN) |
+| `GET *` | the built game (`dist/` when present, `public/` otherwise) |
+
+The wire protocol — every request takes an ack callback that answers `{ok:true,…}` or
+`{ok:false,error:{code,message}}`, so a client never hangs:
+
+```text
+→ room:create {name, mode, code?, clientId?}   ← room:joined {ok, code, you, reconnected, room}
+→ room:join   {code, name, clientId?}          ← room:joined …
+→ room:quick  {name, mode, clientId?}          ← room:joined …      (fullest room with space)
+→ room:sync   {}                               ← room:state {code, mode, host, count, max, players[]}
+→ room:leave  {}                               ← room:left + player:left to the room
+→ msg         {t:'state'|'chat'|'event'|'hello'|'bye', …}
+
+server → room: player:joined · player:left · room:state · room:closed · room:evicted · error:msg
+```
+
+* **1 — 8 players per room.** The ninth is refused with `room_full`; a solo player is a legal room.
+* **Codes** are five characters from an alphabet without `O/0` and `I/1` (so `O`→`Q`, `1`→`L` on the way
+  in). Custom codes of 4–12 characters are honoured — `highway-01` becomes `HIGHWAY01`.
+* **Telemetry** is whitelisted field by field (`x,y,z,yaw,speed,kmh,hp,hpMax,weapon,inCar,car,day`), so a
+  client cannot smuggle `__proto__` or a 4 KB string into everybody else's session, and it is capped at
+  15 Hz per player: a burst is dropped (`{ok:true,throttled:true}`), never punished.
+* **Chat** is one line, 120 characters, 6 messages per 10 s, with the author stamped by the server.
+* **Drops are not departures.** A phone that locks its screen keeps its seat for 6 s, and Socket.IO's
+  connection-state recovery can hand the same session back inside 45 s. If recovery is impossible (a full
+  reload), the browser presents the same `clientId` and the server hands the old seat over instead of
+  leaving a ghost car in the road.
+* **CORS is open** — any front-end may call the API and open a socket (there are no cookies on this relay and
+  no secrets behind it), and the same predicate is shared by the HTTP routes and the handshake. Lock it down
+  when you want to: `ALLOWED_ORIGINS="https://gemby-game.vercel.app,https://*.vercel.app"` restricts it to that
+  list (wildcards matched on the parsed host, so `…vercel.app.evil.com` is refused), `CORS=strict` uses the
+  built-in production list, and `localhost` / `192.168.x.x` always work for phone testing.
+
+`lib/lobby.mjs` holds the rules (caps, codes, sanitising, rate limits, pruning) with no dependency on
+Express or Socket.IO, so they are tested directly; `lib/cors-policy.mjs` holds the allowlist;
+`public/js/sio.js` is the browser half — it loads the client from the server, joins or creates the room,
+re-joins after a reconnect and hands envelopes to the game exactly like every other lane.
+
+### Staying awake on Render
+
+Free containers sleep after ~15 idle minutes. `server.js` keeps itself awake: on boot it starts a single
+interval that, **every 10 minutes, sends a plain GET to its own public URL** (`/health`) using node's native
+`https`/`http` — no dependencies, no cron, no third-party pinger.
+
+```text
+[keepalive] self-ping every 600s → https://gemby-game.onrender.com/health
+[keepalive] ping 1 · HTTP 200 · 118 ms
+```
+
+* The URL comes from `RENDER_EXTERNAL_URL`, which **Render sets automatically**, so there is nothing to
+  configure there. Elsewhere: `PUBLIC_URL`, `SELF_URL`, `KEEPALIVE_URL`, or `RENDER_SERVICE_NAME`
+  (→ `https://<name>.onrender.com`).
+* The interval is deliberately inside the 15-minute window; `KEEPALIVE_MINUTES` changes it, `KEEPALIVE_MS`
+  is the raw override, `KEEPALIVE=0` switches it off, and `KEEPALIVE_PATH` retargets the request.
+* It is honest about itself: `/health` reports `keepalive: {enabled, url, intervalMs, pings, failures,
+  lastStatus, lastAt, lastError}`, so you can confirm from a phone that the container is being woken.
+* It cannot do the impossible: a container that has **already** slept cannot wake itself (nothing is running
+  to send the request), and a free instance is still recycled — the interval simply keeps an awake instance
+  awake. If a deploy has been idle for hours, open the URL once, or add Render's own cron/uptime check as a
+  belt-and-braces backup.
+* Failures never touch the game: a timeout, a refused connection or a 500 is counted, warned about once, and
+  ignored — the timer is `unref()`-ed, so it never keeps a shutting-down process alive.
 
 ### Where the rooms live
 
-The WebSocket lane (`npm start`) keeps rooms in the process. The polling lane — the one that runs on Vercel,
-where there are no sockets — used to keep them in the lambda's module scope, which means two players only saw
-each other if the platform happened to put them on the same warm instance.
+Play does not need any of this any more — it is here because the fallbacks still use it. The Supabase
+Realtime lane keeps nothing: messages exist for the length of a broadcast.
+
+The Socket.IO lane (`npm start`) and the plain WebSocket lane (`npm run relay`) keep rooms in the process. The
+polling lane — the one that runs on Vercel, where there are no sockets — used to keep them in the lambda's
+module scope, which means two players only saw each other if the platform happened to put them on the same warm
+instance.
 
 When Supabase is configured, **the server keeps rooms in Postgres instead**: `lib/room-store.mjs` inserts
 each message into `public.room_messages` (room, author, jsonb payload, timestamp) and reads the last 9
@@ -484,8 +655,13 @@ vercel            # framework preset: Other
 `SUPABASE_ANON_KEY` in *Project → Settings → Environment Variables* (all three environments), then
 **redeploy** — env changes only apply to new deployments. The build log prints
 `supabase accounts: configured (url from SUPABASE_URL)` when they were picked up, and
-`dist/config.json` is generated from them as a fallback. Online play on Vercel uses the polling lane; for
-low-latency WebSocket rooms host `server.mjs` and pass `?relay=`.
+`dist/config.json` is generated from them as a fallback. Online play on Vercel uses Supabase Realtime (or the
+polling relay if Supabase is not configured); for 15 Hz Socket.IO rooms run `npm start` on a host that keeps a
+socket open — Render, Railway, Fly, a VPS — and point the game at it with `?relay=https://your-server`, or set
+`window.__OUTRUN_RELAY__` from the deployment's own config.
+
+The room server has its own walkthrough: [`docs/DEPLOY-RENDER.md`](docs/DEPLOY-RENDER.md) (ports, CORS, the
+self-ping, how to confirm it from a phone), with `render.yaml` as a one-click blueprint.
 
 ## 🗂 Project layout
 
@@ -506,7 +682,8 @@ public/
   js/avatar.js        blocky survivor rig, face, name tag, weapons, walk cycle
   js/enemies.js       hollows, raider cars, boss rig
   js/tornado.js       funnel visuals, swirl debris, pull/lift force field
-  js/net.js           multi-transport multiplayer client
+  js/net.js           multi-transport multiplayer client (socketio → supabase → ws → poll)
+  js/sio.js           Socket.IO lane: client loader, room join/create, re-join on reconnect
   js/hud.js           HUD, radar scope, paginated workbench, chat, toasts
   js/items.js         item + drop-table catalogue (materials, medkits, fuel cans, gear)
   js/loot.js          physical loot drops: meshes, magnet drift, pickup, expiry
@@ -524,18 +701,24 @@ public/
 api/                  Vercel functions: /api/room, /api/health, /api/config, /api/admin
 lib/admin-auth.mjs    server-side owner check (Supabase token → username → allow-list)
 lib/room-store.mjs    room relay storage: Supabase room_messages, memory fallback
+lib/lobby.mjs         rooms, codes, telemetry/chat limits, seat recovery — no dependencies
+lib/cors-policy.mjs   the origin allowlist shared by express and the socket handshake
+lib/keepalive.mjs     the 10-minute self-ping that keeps a free container awake
 games/                community games: <slug>/{game.json,icon.svg,index.html,…,js}
 games/_shared/sdk.js  the postMessage SDK every community game loads
 scripts/scan-games.mjs  validates every game.json and regenerates games/index.json
 supabase/schema.sql   tables, RLS policies, friend RPCs, owner gate, bans, signup trigger
-server.mjs            static + WebSocket + polling relay + config endpoint
+server.js             Express + Socket.IO realtime host (npm start, PORT || 8080, 0.0.0.0)
+render.yaml           Render blueprint: build, start, health check, keep-alive env
+server.mjs            static + WebSocket + polling relay + config endpoint (npm run relay)
 tests/                headless suites (npm test)
 docs/DESIGN.md        game design document
+docs/DEPLOY-RENDER.md the room server on Render: ports, CORS, staying awake
 ```
 
 ## 🧪 Tests
 
-`npm test` copies the browser modules into a shim lane and runs fifteen suites with no browser:
+`npm test` copies the browser modules into a shim lane and runs twenty-eight suites with no browser:
 (`tests/run-all.mjs` is the list; `node tests/build.mjs` must run first after any edit).
 
 * **simulation** — driving, fuel, anchors vs. tornado drift, bosses, scavenging, every recipe, melee,
@@ -562,6 +745,26 @@ docs/DESIGN.md        game design document
   props / clouds), auto-detect, a real `Game` booted at all four tiers (4K shadows, PBR env, rim + fill
   lights, fog, avatar detail, cloud sprites drifting and wrapping), material/segment scaling, and the
   fullscreen module: enter/exit, the keyboard shortcuts, chat-field safety, and the iOS refusal path.
+* **lobby + matchmaking codes** — the rules on their own: codes generated/typed/misread, custom room
+  names, the 1–8 cap, quick play preferring the fullest room, host hand-over, prototype-poisoning and
+  clamping in telemetry, the 15 Hz budget, chat trimming/flooding, held seats and reconnected ghosts.
+* **CORS policy** — the shipped origin allowed, eight lookalikes refused, localhost and LAN phones,
+  `ALLOWED_ORIGINS` extras and wildcards, and the Socket.IO handshake callback.
+* **render keep-alive** — URL resolution (`RENDER_EXTERNAL_URL` and the manual overrides), the interval and
+  its clamps, the request itself against a real local server (200, 503, refused, timeout, bad URL), the loop
+  firing and stopping, `KEEPALIVE=0`, and a dead target counting failures without ever throwing.
+* **socket.io server, live** — a real `node server.js` on a real port: `/health`, `/api/rooms`, the served
+  client, CORS echo/refusal/preflight, then real clients over a WebSocket — create, join, telemetry,
+  throttling, chat, refusal of impostors, the eight-player cap, session recovery after the transport is
+  killed, ghost-seat reclaiming, SIGTERM shutdown.
+* **iron tide boot** — the ship, booted headlessly: it announces `arcade:ready` *before* it builds the dock
+  (so a broken dock cannot black out the canvas), fills the dock and the wallet, sails a sortie, fires,
+  ends the run and reports the score — in a few milliseconds.
+* **p2p protocol / rooms / lane** — the WebRTC protocol on its own (validation, clamping, host election),
+  then a real `P2PRoom` with a fake `RTCPeerConnection`: election, offer/answer/ICE, star relaying,
+  host-stamped authorship, junk dropped, a host leaving; then two real `Net` instances over a real socket,
+  proving the lane glue — signalling on its own Supabase topic, telemetry browser-to-browser, a quitting
+  host, a dead topic and `?relay=`.
 * **loot + inventory + recipes** — 1000 generated recipes unique and browsable, drops only bank when you
   stand on them, magnet/expiry behaviour, stack caps, hotbar pinning, medkit/fuel/repair use, 24-per-page
   workbench paging + search, and every one of the 1,015 recipes crafting without an error.

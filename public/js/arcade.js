@@ -1,5 +1,26 @@
+/** Copies text without the async Clipboard API (http:// origins, old webviews). */
+export function copyViaSelection(text) {
+  try {
+    const doc = globalThis.document;
+    if (!doc?.createElement || !doc.body) return false;
+    const ta = doc.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    ta.style.left = '-9999px';
+    doc.body.appendChild(ta);
+    ta.select?.();
+    const ok = typeof doc.execCommand === 'function' ? doc.execCommand('copy') : false;
+    ta.remove?.();
+    return Boolean(ok);
+  } catch {
+    return false;
+  }
+}
+
 /**
- * THE ARCADE — the hub every session starts in.
+ * THE ARCADE — the Gemby Games hub every session starts in.
  *
  * One built-in game (100 Days Outrun, the 3D engine in this repo) plus every
  * community game found under ./games (see scripts/scan-games.mjs). Community
@@ -14,6 +35,7 @@ import {
   installAutoLandscape, isTouchDevice, isPortrait, requestLandscape, requestPortrait,
 } from './orientation.js';
 import { applyPostClass } from './graphics.js';
+import { paintAvatar, initialsOf } from './account-image.js';
 import { MODES } from './modes.js';
 
 export const CATALOGUE_URL = './games/index.json';
@@ -201,12 +223,14 @@ export class Arcade {
   constructor({
     account = null,
     onPlayNative = () => {},
+    onSettings = null,
     getPlayer = () => ({ name: 'WANDERER', color: '#5ff0ff', room: 'highway-01', quality: 'auto' }),
     fetchImpl = globalThis.fetch,
     stats = null,
   } = {}) {
     this.account = account;
     this.onPlayNative = onPlayNative;
+    this.onSettings = onSettings;
     this.getPlayer = getPlayer;
     this.fetchImpl = fetchImpl;
     this.stats = stats || new ArcadeStats({ account });
@@ -216,6 +240,8 @@ export class Arcade {
     this.playing = null;
     this.frame = null;
     this.lastScore = null;
+    this.readyAt = 0;
+    this.stallTimer = null;
     this.onMessage = this.onMessage.bind(this);
     this.build();
   }
@@ -227,13 +253,14 @@ export class Arcade {
     root.className = 'arcade hidden';
     root.innerHTML = `
       <header class="arc-top">
-        <div class="arc-logo"><span>100</span> ARCADE</div>
+        <div class="arc-logo"><span>GG</span> GEMBY GAMES</div>
         <label class="arc-search">
           <input id="arcSearch" placeholder="Search games, creators, tags…" autocomplete="off" spellcheck="false" />
         </label>
         <div class="arc-top-right">
           <button class="arc-fs" data-fullscreen="label" type="button" title="Fullscreen (Alt+Enter)">⤢ FULLSCREEN</button>
           <span id="arcOnline" class="arc-online">SOLO</span>
+          <button id="arcSettingsBtn" class="arc-gear" type="button" title="Settings" aria-label="Settings">⚙</button>
           <button id="arcProfileBtn" class="arc-avatar" type="button" title="Account">?</button>
         </div>
       </header>
@@ -278,6 +305,21 @@ export class Arcade {
         <div id="apResult" class="ap-result hidden"></div>
       </div>
 
+      <div id="arcFriendsModal" class="arc-modal hidden">
+        <div class="arc-modal-card af-card">
+          <header><h2>FRIENDS</h2><button id="afClose" type="button">✕</button></header>
+          <div class="af-add">
+            <input id="afInput" placeholder="Add by @username" autocomplete="off" autocapitalize="none"
+              spellcheck="false" />
+            <button id="afAdd" type="button">ADD</button>
+          </div>
+          <p id="afNote" class="af-note"></p>
+          <div id="afList" class="af-list"></div>
+          <p class="arc-note">Friends are matched by username. Add somebody once and you show up in each
+            other's lists, with the room you are playing in.</p>
+        </div>
+      </div>
+
       <div id="arcCreate" class="arc-modal hidden">
         <div class="arc-modal-card">
           <header><h2>ADD YOUR GAME</h2><button id="arcCreateClose" type="button">✕</button></header>
@@ -303,7 +345,9 @@ export class Arcade {
       player: $('arcPlayer'), frame: $('apFrame'), playerTitle: $('apTitle'), playerStatus: $('apStatus'),
       result: $('apResult'), records: $('arcRecords'), recordsSec: $('arcRecordsSec'),
       create: $('arcCreate'), createSnippet: $('arcCreateSnippet'), createLink: $('arcCreateLink'),
-      profileBtn: $('arcProfileBtn'),
+      profileBtn: $('arcProfileBtn'), settingsBtn: $('arcSettingsBtn'),
+      friendsModal: $('arcFriendsModal'), afList: $('afList'), afInput: $('afInput'), afNote: $('afNote'),
+      afAdd: $('afAdd'),
     };
 
     root.querySelectorAll('.arc-nav[data-tab]').forEach((b) => {
@@ -330,6 +374,20 @@ export class Arcade {
       this.nodes.recordsSec.classList.remove('hidden');
       this.renderRecords();
     });
+    this.nodes.settingsBtn?.addEventListener('click', () => this.onSettings?.('settings'));
+    $('afClose')?.addEventListener('click', () => this.closeFriends());
+    this.nodes.afAdd?.addEventListener('click', () => this.addFriendFromModal());
+    this.nodes.afInput?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault?.(); this.addFriendFromModal(); }
+    });
+    // the friends strip is rebuilt on every render, so its clicks are delegated
+    this.nodes.friends?.addEventListener?.('click', (e) => {
+      const add = e.target?.closest?.('[data-add-friend]');
+      if (add) { this.openFriends(); return; }
+      const tile = e.target?.closest?.('[data-friend]');
+      if (tile) this.openFriends();
+    });
+    this.nodes.profileBtn?.addEventListener('click', () => this.onSettings?.('account'));
     $('apClose')?.addEventListener('click', () => this.closeGame());
     $('apReload')?.addEventListener('click', () => this.launch(this.playing?.id));
 
@@ -383,11 +441,19 @@ export class Arcade {
   }
 
   async copyManifest() {
+    const text = this.manifestTemplate();
+    // navigator.clipboard only exists on secure origins, and the phone preview
+    // is plain http — fall back to the old selection trick instead of failing.
     try {
-      await navigator.clipboard.writeText(this.manifestTemplate());
-      this.toast('MANIFEST COPIED');
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        this.toast('MANIFEST COPIED');
+        return;
+      }
+      throw new Error('no clipboard');
     } catch {
-      this.toast('COPY FAILED — SELECT IT MANUALLY');
+      const ok = copyViaSelection(text);
+      this.toast(ok ? 'MANIFEST COPIED' : 'COPY FAILED — SELECT IT MANUALLY');
     }
   }
 
@@ -426,6 +492,12 @@ export class Arcade {
 
   // ------------------------------------------------------------------- render
   render() {
+    // Records is a section, not a tab: leaving it for Home/My Games has to put
+    // the grid and the section titles back, otherwise the page is stuck.
+    if (this.nodes.recordsSec) {
+      this.nodes.recordsSec.classList.toggle('hidden', this.tab !== 'records');
+    }
+    if (this.nodes.grid) this.nodes.grid.classList.toggle('hidden', this.tab === 'records');
     const list = filterGames(this.games, { query: this.query, tab: this.tab === 'records' ? 'home' : this.tab });
     const titles = { home: 'Recommended for you', mine: 'My games', new: 'New from the community' };
     if (this.nodes.title) this.nodes.title.textContent = titles[this.tab] || 'Games';
@@ -450,14 +522,119 @@ export class Arcade {
     if (this.nodes.online) {
       this.nodes.online.textContent = this.account?.signedIn ? `${online.length} FRIENDS ONLINE` : 'GUEST MODE';
     }
-    const tiles = friends.slice(0, 8).map((f) => `
-      <button type="button" class="arc-friend${f.online ? ' on' : ''}" data-friend="${escapeHtml(f.name)}">
-        <span class="af-dot"></span><b>${escapeHtml(String(f.name || '?').slice(0, 8))}</b>
+    // the account picture (or initials) lives on the hub's own avatar button
+    const p = this.account?.profile;
+    if (this.nodes.profileBtn && p) {
+      paintAvatar(this.nodes.profileBtn, {
+        image: p.avatar_image || '',
+        name: p.display_name || p.username || 'GUEST',
+        color: p.body_color || '#ffb347',
+      });
+    }
+
+    const tiles = friends.slice(0, 8).map((f) => {
+      const name = f.displayName || f.username || '?';
+      return `
+      <button type="button" class="arc-friend${f.online ? ' on' : ''}" data-friend="${escapeHtml(f.username || name)}"
+        title="${escapeHtml(name)}${f.online ? ' — playing' : ' — offline'}">
+        <span class="af-dot"></span>
+        <span class="af-av">${f.avatar ? `<img src="${f.avatar}" alt="" />` : escapeHtml(initialsOf(name))}</span>
+        <b>${escapeHtml(String(name).slice(0, 8))}</b>
         <em>${f.online ? 'PLAYING' : 'OFFLINE'}</em>
-      </button>`);
+      </button>`;
+    });
     host.innerHTML = `<button type="button" class="arc-friend add" data-add-friend="1">
         <span class="af-plus">+</span><b>Add Friends</b><em>${friends.length ? 'FIND MORE' : 'NOBODY YET'}</em>
       </button>${tiles.join('')}`;
+  }
+
+  // -------------------------------------------------------------- friends UI
+  openFriends() {
+    const modal = this.nodes.friendsModal;
+    if (!modal) return;
+    modal.classList.remove('hidden');
+    this.renderFriendsModal();
+    setTimeout(() => this.nodes.afInput?.focus?.(), 40);
+  }
+
+  closeFriends() {
+    this.nodes.friendsModal?.classList.add('hidden');
+    if (this.nodes.afNote) this.nodes.afNote.textContent = '';
+  }
+
+  friendNote(text, kind = '') {
+    const el = this.nodes.afNote;
+    if (!el) return;
+    el.textContent = text || '';
+    el.className = `af-note ${kind}`;
+  }
+
+  renderFriendsModal() {
+    const host = this.nodes.afList;
+    if (!host) return;
+    if (!this.account?.signedIn) {
+      host.innerHTML = `<p class="af-empty">Sign in with a username to keep a friends list —
+        guests can only play by sharing a room code.</p>`;
+      if (this.nodes.afAdd) this.nodes.afAdd.disabled = true;
+      if (this.nodes.afInput) this.nodes.afInput.disabled = true;
+      return;
+    }
+    if (this.nodes.afAdd) this.nodes.afAdd.disabled = false;
+    if (this.nodes.afInput) this.nodes.afInput.disabled = false;
+
+    const friends = this.account.friends || [];
+    if (!friends.length) {
+      host.innerHTML = `<p class="af-empty">${this.account.friendsLoading ? 'Loading…'
+        : 'No friends yet — type a username above and press ADD.'}</p>`;
+      return;
+    }
+    host.innerHTML = friends.map((f) => {
+      const name = f.displayName || f.username || '?';
+      const where = f.online
+        ? `PLAYING${f.room ? ` · ${escapeHtml(String(f.room).toUpperCase())}` : ''}${f.day ? ` · DAY ${f.day}` : ''}`
+        : 'OFFLINE';
+      return `<div class="af-row${f.online ? ' on' : ''}">
+        <span class="af-av">${f.avatar ? `<img src="${f.avatar}" alt="" />` : escapeHtml(initialsOf(name))}</span>
+        <span class="af-meta"><b>${escapeHtml(name)}</b><em>@${escapeHtml(f.username || '')}</em>
+          <i>${where}</i></span>
+        <button type="button" class="af-del" data-remove="${escapeHtml(f.id)}" title="Remove friend">✕</button>
+      </div>`;
+    }).join('');
+
+    host.querySelectorAll('[data-remove]').forEach((b) => {
+      b.addEventListener('click', async () => {
+        b.disabled = true;
+        try {
+          await this.account.removeFriend(b.dataset.remove);
+          this.friendNote('Friend removed.', 'ok');
+        } catch (e) {
+          this.friendNote(e?.message || 'Could not remove that friend.', 'err');
+          b.disabled = false;
+        }
+        this.renderFriendsModal();
+        this.renderFriends();
+      });
+    });
+  }
+
+  async addFriendFromModal() {
+    const input = this.nodes.afInput;
+    const name = String(input?.value || '').trim();
+    if (!name) { this.friendNote('Type a username first.', 'err'); return; }
+    if (!this.account?.signedIn) { this.friendNote('Sign in to add friends.', 'err'); return; }
+    this.friendNote('Looking them up…', '');
+    if (this.nodes.afAdd) this.nodes.afAdd.disabled = true;
+    try {
+      const target = await this.account.addFriend(name);
+      if (input) input.value = '';
+      this.friendNote(`${target.display_name || target.username} added.`, 'ok');
+      this.renderFriends();
+      this.renderFriendsModal();
+    } catch (e) {
+      this.friendNote(e?.message || 'Could not add that friend.', 'err');
+    } finally {
+      if (this.nodes.afAdd) this.nodes.afAdd.disabled = false;
+    }
   }
 
   renderRecords() {
@@ -513,21 +690,32 @@ export class Arcade {
     document.body.classList.remove('auto-land');
     document.documentElement.classList.remove('rot-stage');
     if (isPortrait()) requestLandscape();
-    const player = this.getPlayer();
     this.nodes.player.classList.remove('hidden');
     this.nodes.result.classList.add('hidden');
     this.syncStage();
     this.nodes.playerTitle.textContent = game.title;
-    this.nodes.playerStatus.textContent = 'LOADING…';
+    // no loading copy anywhere: the frame simply fades in when the game says it
+    // is ready (arcade:ready), and until then the bar shows the game's name
+    this.nodes.playerStatus.textContent = '';
     // relative URL: the iframe is same-path but sandboxed without same-origin,
     // so it can render our files yet cannot read our DOM, storage or session
     const url = `./${game.path}/${game.entry}?g=${encodeURIComponent(game.id)}`;
+    // one navigation, not two: setting the same URL through both the property
+    // and the attribute makes some browsers fetch the game twice, which is a
+    // needless delay before the first frame
     this.nodes.frame.src = url;
-    this.nodes.frame.setAttribute('src', url);
     this.readyAt = 0;
     setTimeout(() => {
       if (this.playing?.id === game.id) this.postInit();
     }, 900);
+    // and if the frame never says hello, say why instead of waiting forever: a
+    // game that 404s (not bundled) or throws looks exactly like a stuck loading
+    // screen. This is an error message, not a spinner.
+    clearTimeout(this.stallTimer);
+    this.stallTimer = setTimeout(() => {
+      if (this.playing?.id !== game.id || this.readyAt) return;
+      this.nodes.playerStatus.textContent = 'GAME DID NOT START';
+    }, 8000);
   }
 
   postInit() {
@@ -551,16 +739,14 @@ export class Arcade {
 
   closeGame() {
     this.playing = null;
+    clearTimeout(this.stallTimer);
     document.body.classList.remove('run-live');
     document.body.classList.remove('auto-land');
     this.syncStage({ portrait: false, locked: false });
     // back on the home: upright again, and out of fullscreen
     requestPortrait();
     this.nodes?.player?.classList.add('hidden');
-    if (this.nodes?.frame) {
-      this.nodes.frame.src = 'about:blank';
-      this.nodes.frame.setAttribute('src', 'about:blank');
-    }
+    if (this.nodes?.frame) this.nodes.frame.src = 'about:blank';
   }
 
   async onMessage(ev) {
@@ -569,6 +755,8 @@ export class Arcade {
     const game = this.playing;
     if (!game) return;
     if (msg.type === 'arcade:ready') {
+      this.readyAt = Date.now();
+      clearTimeout(this.stallTimer);
       this.postInit();
       this.nodes.playerStatus.textContent = 'LIVE';
       return;

@@ -1,7 +1,41 @@
 import { SupabaseClient, explainAuthError, normalizeUsername, validUsername } from './supabase.js';
+import { cleanAvatar } from './account-image.js';
 
 const GUEST_KEY = 'outrun-guest-v1';
 const CONFIG_KEY = 'outrun-supabase-config';
+
+/**
+ * Columns that a project created from an older schema.sql may not have yet.
+ * A write that fails is retried without them, so upgrading the app never bricks
+ * sign-in for somebody who has not re-run the SQL — the feature degrades, the
+ * account does not.
+ */
+const OPTIONAL_COLUMNS = ['avatar_image', 'customization'];
+
+/**
+ * Runs a write, dropping optional columns one at a time if the server rejects
+ * them (PostgREST answers 400 / PGRST204 for an unknown column). Returns the
+ * error only when nothing could be saved at all.
+ */
+async function writeWithFallback(write, row) {
+  let patch = { ...row };
+  const dropped = [];
+  let lastError = null;
+  for (let attempt = 0; attempt <= OPTIONAL_COLUMNS.length; attempt += 1) {
+    try {
+      const out = await write(patch);
+      return { out, saved: patch, dropped, error: null };
+    } catch (e) {
+      lastError = e;
+      const drop = OPTIONAL_COLUMNS.find((c) => c in patch);
+      if (!drop) break;
+      delete patch[drop];
+      dropped.push(drop);
+      if (!Object.keys(patch).length) break;
+    }
+  }
+  return { out: null, saved: null, dropped, error: lastError };
+}
 
 /**
  * Owns the signed-in identity, the profile row, the friends list and the
@@ -264,6 +298,7 @@ export class Account {
       car_color: p.car_color || '#d24a2b',
       best_day: p.best_day || 0,
       customization: p.customization || null,
+      avatar_image: cleanAvatar(p.avatar_image),
       created_at: p.created_at,
     };
   }
@@ -278,9 +313,15 @@ export class Account {
       car_color: colors.car || '#d24a2b',
       best_day: 0,
       customization: colors.custom || {},
+      avatar_image: cleanAvatar(colors.avatar),
     };
-    const out = await this.sb.upsert('profiles', row, 'id');
-    const p = out?.[0] || row;
+    // a project on an older schema may not have customization/avatar_image yet
+    const { out, saved, error } = await writeWithFallback(
+      (patch) => this.sb.upsert('profiles', patch, 'id'),
+      row,
+    );
+    if (error) { this.lastError = explainAuthError(error); throw error; }
+    const p = out?.[0] || saved || row;
     return {
       id: p.id || uid,
       username: p.username || row.username,
@@ -289,36 +330,45 @@ export class Account {
       car_color: p.car_color || row.car_color,
       best_day: p.best_day || 0,
       customization: p.customization || row.customization || null,
+      avatar_image: cleanAvatar(p.avatar_image),
     };
   }
 
+  /**
+   * Saves profile fields. `avatar_image` and `customization` are dropped and
+   * retried if the project's schema predates them, so a picture upload can never
+   * cost the player their name or colours. Resolves to the saved profile.
+   */
   async saveProfile(patch) {
-    if (!this.profile) return;
+    if (!this.profile) return null;
     this.profile = { ...this.profile, ...patch };
-    try { localStorage.setItem(GUEST_KEY, JSON.stringify(this.profile)); } catch {}
+    try { localStorage.setItem(GUEST_KEY, JSON.stringify(this.profile)); } catch { /* quota */ }
     this.emit('profile');
-    if (this.mode === 'account' && this.profile.id) {
-      const dbPatch = {};
-      if (patch.display_name !== undefined) dbPatch.display_name = patch.display_name;
-      if (patch.body_color !== undefined) dbPatch.body_color = patch.body_color;
-      if (patch.car_color !== undefined) dbPatch.car_color = patch.car_color;
-      if (patch.best_day !== undefined) dbPatch.best_day = patch.best_day;
-      if (patch.customization !== undefined) dbPatch.customization = patch.customization;
-      if (Object.keys(dbPatch).length) {
-        try { await this.sb.update('profiles', `id=eq.${this.profile.id}`, dbPatch); }
-        catch (e) {
-          // an older schema without the customization column must not break saving
-          if ('customization' in dbPatch) {
-            delete dbPatch.customization;
-            if (Object.keys(dbPatch).length) {
-              try { await this.sb.update('profiles', `id=eq.${this.profile.id}`, dbPatch); } catch (e2) { this.lastError = explainAuthError(e2); }
-            }
-          } else {
-            this.lastError = explainAuthError(e);
-          }
-        }
-      }
+    if (this.mode !== 'account' || !this.profile.id) return this.profile;
+
+    const dbPatch = {};
+    if (patch.display_name !== undefined) dbPatch.display_name = patch.display_name;
+    if (patch.body_color !== undefined) dbPatch.body_color = patch.body_color;
+    if (patch.car_color !== undefined) dbPatch.car_color = patch.car_color;
+    if (patch.best_day !== undefined) dbPatch.best_day = patch.best_day;
+    if (patch.customization !== undefined) dbPatch.customization = patch.customization;
+    if (patch.avatar_image !== undefined) dbPatch.avatar_image = cleanAvatar(patch.avatar_image);
+    if (!Object.keys(dbPatch).length) return this.profile;
+
+    const { error, dropped } = await writeWithFallback(
+      (row) => this.sb.update('profiles', `id=eq.${this.profile.id}`, row),
+      dbPatch,
+    );
+    if (error) {
+      this.lastError = explainAuthError(error);
+      this.emit('profile-error');
+      return this.profile;
     }
+    if (dropped.includes('avatar_image') && 'avatar_image' in dbPatch) {
+      this.lastError = 'Picture saved on this device only — add the avatar_image column in Supabase to sync it (supabase/schema.sql).';
+      this.emit('profile-error');
+    }
+    return this.profile;
   }
 
   async recordRun({ day, distance }) {
@@ -338,7 +388,7 @@ export class Account {
       if (!ids.length) { this.friends = []; this.friendsLoading = false; this.emit('friends'); return []; }
       const list = ids.map((i) => `"${i}"`).join(',');
       const [profiles, presence] = await Promise.all([
-        this.sb.select('profiles', `id=in.(${list})&select=id,username,display_name,body_color,car_color,best_day`),
+        this.sb.select('profiles', `id=in.(${list})&select=id,username,display_name,body_color,car_color,best_day,avatar_image`),
         this.sb.select('presence', `user_id=in.(${list})&select=user_id,room,day,status,updated_at`).catch(() => []),
       ]);
       const presenceMap = new Map(presence.map((p) => [p.user_id, p]));
@@ -353,6 +403,7 @@ export class Account {
           displayName: p.display_name || p.username,
           color: p.body_color || '#ffb347',
           carColor: p.car_color || '#d24a2b',
+          avatar: cleanAvatar(p.avatar_image),
           bestDay: p.best_day || 0,
           online,
           room: online ? pr.room : null,
@@ -369,31 +420,94 @@ export class Account {
     return this.friends;
   }
 
-  async findUser(username) {
+  /**
+   * Finds a survivor from what the player typed. Usernames are the contract, but
+   * people paste "@Name" with a capital, or type the display name they saw above
+   * somebody's head — so both are tried, and an ambiguous name is reported
+   * instead of silently picking the wrong person.
+   */
+  async findUser(query) {
     if (this.mode !== 'account') throw new Error('Sign in to add friends.');
-    const rows = await this.sb.select('profiles', `username=eq.${encodeURIComponent(normalizeUsername(username))}&select=id,username,display_name`);
-    return rows[0] || null;
+    const raw = String(query || '').trim().replace(/^@+/, '').trim();
+    if (!raw) throw new Error('Type a username.');
+    if (raw.length > 32) throw new Error('That is not a username.');
+
+    const username = normalizeUsername(raw);
+    const base = 'select=id,username,display_name,avatar_image';
+    const byUsername = await this.sb.select('profiles', `username=eq.${encodeURIComponent(username)}&${base}`);
+    if (byUsername?.[0]) return byUsername[0];
+
+    // display name: exact (case-insensitive) first, then a single partial match
+    const byName = await this.sb.select(
+      'profiles',
+      `display_name=ilike.${encodeURIComponent(raw)}&${base}&limit=5`,
+    ).catch(() => []);
+    const exact = (byName || []).filter((r) => String(r.display_name || '').toLowerCase() === raw.toLowerCase());
+    if (exact.length === 1) return exact[0];
+    if (exact.length > 1) throw new Error(`Several survivors are called “${raw}” — add them by @username.`);
+
+    const partial = await this.sb.select(
+      'profiles',
+      `display_name=ilike.${encodeURIComponent(`*${raw}*`)}&${base}&limit=5`,
+    ).catch(() => []);
+    if (partial?.length === 1) return partial[0];
+    if (partial?.length > 1) throw new Error(`Several survivors match “${raw}” — add them by @username.`);
+    return null;
   }
 
-  async addFriend(username) {
+  async addFriend(query) {
     if (this.mode !== 'account') throw new Error('Sign in to add friends.');
-    const target = await this.findUser(username);
-    if (!target) throw new Error('No survivor with that username.');
+    if (!this.profile?.id) throw new Error('Your profile is still loading — try again in a second.');
+
+    const target = await this.findUser(query);
+    if (!target) throw new Error(`No survivor called “${String(query || '').trim().replace(/^@+/, '')}”. Check the spelling of their @username.`);
     if (target.id === this.profile.id) throw new Error('That is you.');
     if (this.friends.some((f) => f.id === target.id)) throw new Error('Already on your friends list.');
 
     try {
       // preferred path: security-definer RPC writes both sides of the friendship
-      await this.sb.rpc('add_friend', { target_username: normalizeUsername(username) });
+      await this.sb.rpc('add_friend', { target_username: normalizeUsername(target.username) });
     } catch (e) {
       const msg = String(e?.message || '').toLowerCase();
       if (msg.includes('no_such_user')) throw new Error('No survivor with that username.');
       if (msg.includes('cannot_add_self')) throw new Error('That is you.');
-      // fallback for projects without the RPC: one-directional row
-      await this.sb.insert('friendships', { user_id: this.profile.id, friend_id: target.id });
+      // The RPC is missing (or refused): write the row we are allowed to write.
+      try {
+        await this.sb.insert('friendships', { user_id: this.profile.id, friend_id: target.id });
+      } catch (e2) {
+        throw new Error(this.explainFriendError(e2));
+      }
     }
+
+    // show the friend straight away — the list can lag a round trip behind
+    this.friends = [
+      ...this.friends,
+      {
+        id: target.id,
+        username: target.username,
+        displayName: target.display_name || target.username,
+        color: target.body_color || '#ffb347',
+        avatar: cleanAvatar(target.avatar_image),
+        online: false,
+      },
+    ];
+    this.emit('friends');
     await this.refreshFriends();
     return target;
+  }
+
+  /** Turns a PostgREST failure into something a player can act on. */
+  explainFriendError(err) {
+    const msg = String(err?.message || '').toLowerCase();
+    if (msg.includes('row-level security') || msg.includes('permission denied')) {
+      return 'Your Supabase project blocked the write — re-run supabase/schema.sql so the friendship policies apply.';
+    }
+    if (msg.includes('foreign key')) return 'That account no longer exists.';
+    if (msg.includes('duplicate key')) return 'You two are already friends.';
+    if (msg.includes('could not find the function') || msg.includes('does not exist')) {
+      return 'Friends need the add_friend function — run supabase/schema.sql in your Supabase project.';
+    }
+    return err?.message || 'Could not add that friend. Try again.';
   }
 
   async removeFriend(id) {

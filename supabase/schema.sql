@@ -19,6 +19,27 @@ create table if not exists public.profiles (
 -- survivor customisation (skin/outfit/hair/accessory/height/build), safe to re-run
 alter table public.profiles add column if not exists customization jsonb not null default '{}'::jsonb;
 
+-- account picture: a square JPEG data URL, resized to 196 px on the device
+-- before upload (a few KB, never a camera photo). Safe to re-run.
+alter table public.profiles add column if not exists avatar_image text not null default '';
+-- only ever store a small, inline image — nothing external, nothing huge
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'profiles_avatar_image_shape'
+  ) then
+    alter table public.profiles
+      add constraint profiles_avatar_image_shape
+      check (
+        avatar_image = ''
+        or (
+          avatar_image ~ '^data:image/(png|jpeg|jpg|webp);base64,'
+          and length(avatar_image) <= 420000
+        )
+      );
+  end if;
+end $$;
+
 alter table public.profiles enable row level security;
 
 drop policy if exists "profiles are readable by signed-in players" on public.profiles;

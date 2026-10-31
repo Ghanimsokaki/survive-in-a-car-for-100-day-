@@ -1,0 +1,33 @@
+# Render blueprint for the realtime room server.
+# The front-end stays on Vercel (/docs/DEPLOY-VERCEL.md); this service owns the
+# sockets: rooms of 1-8, matchmaking codes, 15 Hz vehicle telemetry, and the
+# 10-minute self-ping that keeps a free container from falling asleep.
+services:
+  - type: web
+    name: gemby-games
+    runtime: node
+    plan: free
+    region: singapore
+    branch: main
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      # the Vercel front-end is allowed by default; add your own origins here
+      - key: ALLOWED_ORIGINS
+        value: https://gemby-game.vercel.app
+      # the container pings its own RENDER_EXTERNAL_URL every ten minutes
+      - key: KEEPALIVE
+        value: "1"
+      - key: KEEPALIVE_MINUTES
+        value: "10"
+      - key: KEEPALIVE_PATH
+        value: /health
+      # prompted in the dashboard on first deploy; leave empty for guest-only
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false

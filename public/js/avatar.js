@@ -30,19 +30,45 @@ function faceTexture() {
   return tex;
 }
 
-function nameTexture(name, color) {
+/**
+ * The floating nameplate. When the player has an account picture it is drawn as
+ * a round portrait inside the same plate, so the face you chose follows you into
+ * the world instead of only living on a menu.
+ */
+function nameTexture(name, color, portrait = null) {
   const c = canvasTex(512, 128, (ctx) => {
     ctx.clearRect(0, 0, 512, 128);
     ctx.font = 'bold 52px ui-monospace, monospace';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const textW = ctx.measureText(name).width;
+    const pic = portrait && ctx.drawImage ? 62 : 0;
+    const w = textW + 56 + (pic ? pic + 16 : 0);
+    const left = 256 - w / 2;
     ctx.fillStyle = 'rgba(4,6,10,.62)';
-    const w = ctx.measureText(name).width + 56;
     ctx.beginPath();
-    if (ctx.roundRect) ctx.roundRect(256 - w / 2, 18, w, 70, 16);
-    else ctx.rect(256 - w / 2, 18, w, 70);
+    if (ctx.roundRect) ctx.roundRect(left, 18, w, 70, 16);
+    else ctx.rect(left, 18, w, 70);
     ctx.fill();
-    ctx.fillStyle = color;
-    ctx.fillText(name, 256, 52);
+    if (pic) {
+      // circular clip: the plate stays a rounded pill, the face stays a face
+      ctx.save?.();
+      ctx.beginPath?.();
+      ctx.arc?.(left + 40, 53, 25, 0, Math.PI * 2);
+      ctx.clip?.();
+      try { ctx.drawImage(portrait, left + 15, 28, 50, 50); } catch { /* a picture that will not draw */ }
+      ctx.restore?.();
+      ctx.beginPath?.();
+      ctx.arc?.(left + 40, 53, 25, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(255,179,71,.85)';
+      ctx.lineWidth = 3;
+      ctx.stroke?.();
+      ctx.fillStyle = color;
+      ctx.fillText(name, 256 + pic / 2, 52);
+      ctx.textAlign = 'center';
+    } else {
+      ctx.fillStyle = color;
+      ctx.fillText(name, 256, 52);
+    }
   });
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
@@ -412,10 +438,34 @@ export function buildAvatar({
     if (Array.isArray(head.material)) head.material.forEach((m, i) => { if (i !== 4) m.color.setHex(hex); });
   }
 
-  function setName(nextName) {
+  let portraitEl = null;
+  let playerName = name;
+
+  const repaintTag = () => {
     tagMat.map?.dispose?.();
-    tagMat.map = nameTexture(nextName, '#ffd9a0');
+    tagMat.map = nameTexture(playerName, '#ffd9a0', portraitEl);
     tagMat.needsUpdate = true;
+  };
+
+  function setName(nextName) {
+    playerName = nextName;
+    repaintTag();
+  }
+
+  /**
+   * Points the nameplate at the account picture ('' clears it). Decoding is
+   * asynchronous and best-effort: a broken or blocked picture simply leaves the
+   * plain nameplate alone.
+   */
+  function setPicture(url) {
+    const src = typeof url === 'string' ? url.trim() : '';
+    if (!src) { portraitEl = null; repaintTag(); return; }
+    const Img = globalThis.Image;
+    if (!Img) { portraitEl = null; repaintTag(); return; }
+    const img = new Img();
+    img.onload = () => { portraitEl = img; repaintTag(); };
+    img.onerror = () => { portraitEl = null; repaintTag(); };
+    img.src = src;
   }
 
   let phase = Math.random() * 10;
@@ -448,7 +498,7 @@ export function buildAvatar({
 
   setWeapon('fists');
   api = {
-    root, rig, tag, head,
+    root, rig, tag, head, setPicture,
     parts: { torso, head, armL, armR, legL, legR, hairStyles, accessories },
     animate, attack, setWeapon, setBodyColor, setCustom, setName,
     custom: cfg,

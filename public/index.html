@@ -18,8 +18,8 @@
 <meta name="format-detection" content="telephone=no" />
 <link rel="manifest" href="./manifest.webmanifest" />
 <link rel="apple-touch-icon" href="./icon.svg" />
-<title>100 Days Outrun — Highway Survival</title>
-<meta name="description" content="A 3D multiplayer post-apocalyptic highway survival run. 100 days, one car, endless storms." />
+<title>Gemby Games — 100 Days Outrun · Iron Tide</title>
+<meta name="description" content="Gemby Games — a 3D multiplayer arcade for phones. 100 Days Outrun and Iron Tide, two games, one hub." />
 <link rel="stylesheet" href="./styles.css" />
 <!-- The home only needs these; the 3D engine is imported on PLAY (see main.js).
      Naming them here saves the browser a discovery round trip on a phone. -->
@@ -29,6 +29,16 @@
 <link rel="modulepreload" href="./js/authui.js" />
 <link rel="modulepreload" href="./js/arcade.js" />
 <link rel="modulepreload" href="./js/orientation.js" />
+<!-- the 3D kit: fetched at parse time (low priority) so PLAY has nothing left
+     to wait for. modulepreload does not execute the modules, only caches them. -->
+<link rel="modulepreload" href="./js/game.js" />
+<link rel="modulepreload" href="./js/world.js" />
+<link rel="modulepreload" href="./js/buildings.js" />
+<link rel="modulepreload" href="./js/hud.js" />
+<link rel="modulepreload" href="./js/avatar.js" />
+<link rel="modulepreload" href="./js/vehicle.js" />
+<link rel="modulepreload" href="./js/net.js" />
+<link rel="modulepreload" href="./js/realtime.js" />
 <link rel="dns-prefetch" href="https://fonts.gstatic.com" />
   <link rel="icon" href="./icon.svg" type="image/svg+xml" />
 </head>
@@ -49,10 +59,10 @@
   <div class="auth-wrap">
     <div class="auth-card">
       <div class="auth-brand">
-        <div class="logo-mark">100</div>
+        <div class="logo-mark">GG</div>
         <div>
-          <h1>DAYS OUTRUN</h1>
-          <p class="sub">HIGHWAY SURVIVAL · 3D MULTIPLAYER</p>
+          <h1>GEMBY GAMES</h1>
+          <p class="sub">100 DAYS OUTRUN · 3D MULTIPLAYER</p>
         </div>
       </div>
 
@@ -150,10 +160,11 @@
     <div class="lobby-head">
       <button id="arcadeBtn" class="arcade-back" type="button" title="Back to the arcade">◀ ARCADE</button>
       <button id="fsLobby" class="fs-btn" data-fullscreen="label" type="button" title="Fullscreen (Alt+Enter)">⤢ FULLSCREEN</button>
-      <div class="logo-mark">100</div>
+      <button id="lobbySettingsBtn" class="fs-btn" type="button" title="Account picture &amp; settings">⚙ SETTINGS</button>
+      <div class="logo-mark">GG</div>
       <div class="lobby-title">
-        <h1>DAYS OUTRUN</h1>
-        <p class="sub">HIGHWAY SURVIVAL · 3D MULTIPLAYER</p>
+        <h1>GEMBY GAMES</h1>
+        <p class="sub">100 DAYS OUTRUN · 3D MULTIPLAYER</p>
       </div>
       <div class="account-chip" id="accountChip">
         <i id="accountDot"></i>
@@ -223,10 +234,6 @@
         </div>
 
         <button id="playBtn" class="play-btn">START THE RUN <span>▸</span></button>
-        <div id="loading" class="gone" aria-live="polite">
-          <span class="ld-text">LOADING</span>
-          <span class="ld-bar"><i></i></span>
-        </div>
         <p id="netStatus" class="net-status">checking relay…</p>
       </div>
 
@@ -326,6 +333,7 @@
       <span id="vitals">HP 100</span>
       <span id="weaponRow">FISTS</span>
       <span id="anchorRow">SPIKES LOCKED</span>
+      <span id="linkRow">LINKING</span>
       <span id="fpsRow">60 FPS</span>
     </div>
   </div>
@@ -344,6 +352,11 @@
   <div id="stormBanner" class="hidden"></div>
   <div id="stormMeter" class="storm-meter hidden"></div>
   <div id="crosshair">+</div>
+  <div id="errBar" class="err-bar hidden" role="status">
+    <span id="errText">SOMETHING BROKE</span>
+    <button id="errRestart" type="button">RESTART</button>
+    <button id="errDismiss" type="button" title="Hide">✕</button>
+  </div>
   <button id="mobileMenuBtn" class="mobile-menu" type="button" aria-label="Menu">☰</button>
   <button id="adminBtn" class="admin-fab hidden" type="button" title="Owner console (backquote)"><span>⌘</span> OWNER</button>
 </div>
@@ -427,6 +440,7 @@
 </div>
 
 <button id="fsExit" class="fs-exit" data-fullscreen="icon" type="button" title="Fullscreen (Alt+Enter)" aria-label="Toggle fullscreen">⤢</button>
+<button id="settingsFab" class="settings-fab" type="button" title="Account picture &amp; settings (P)">⚙ SETTINGS</button>
 <script>
   // There is no boot splash any more: the sign-in screen is static HTML and is
   // usable before a single module parses. This only covers the pathological
@@ -436,6 +450,37 @@
     var status = document.getElementById('netStatus');
     if (status) status.textContent = 'still connecting — check your connection';
   }, 6000);
+
+  // Anything that throws before (or instead of) a clean frame loop still has to
+  // reach the player: show the real message and a working RESTART, not a frozen
+  // picture. `window.__outrunLastError` keeps it for a bug report.
+  (function () {
+    var shown = 0;
+    function report(kind, message) {
+      if (shown++ > 4) return;
+      var text = String(message || 'unknown error').split('\n')[0].slice(0, 90);
+      window.__outrunLastError = { kind: kind, message: text, at: Date.now() };
+      var bar = document.getElementById('errBar');
+      var label = document.getElementById('errText');
+      if (label) label.textContent = 'PROBLEM: ' + text.toUpperCase();
+      if (bar) bar.classList.remove('hidden');
+    }
+    window.addEventListener('error', function (e) {
+      report('window', e && (e.message || (e.error && e.error.message)));
+    });
+    window.addEventListener('unhandledrejection', function (e) {
+      var r = e && e.reason;
+      report('promise', r && (r.message || r));
+    });
+    document.addEventListener('DOMContentLoaded', function () {
+      var restart = document.getElementById('errRestart');
+      if (restart) restart.addEventListener('click', function () { location.reload(); });
+      var dismiss = document.getElementById('errDismiss');
+      if (dismiss) dismiss.addEventListener('click', function () {
+        document.getElementById('errBar').classList.add('hidden');
+      });
+    });
+  })();
 </script>
 
 <script type="module" src="./js/main.js"></script>

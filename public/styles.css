@@ -54,6 +54,7 @@ input:focus{border-color:var(--amber);box-shadow:0 0 0 3px rgba(255,179,71,.14)}
 .play-btn{width:100%;padding:16px;border-radius:10px;font-weight:800;letter-spacing:2.5px;font-size:14px;
   background:linear-gradient(100deg,var(--amber),var(--amber-hot));color:#1a0f01;
   box-shadow:0 10px 30px rgba(255,138,30,.32);transition:.15s}
+.play-btn[disabled]{opacity:.62;cursor:progress}
 .play-btn:hover{filter:brightness(1.1);transform:translateY(-1px)}
 .play-btn span{float:right}
 .play-btn.small{width:auto;padding:13px 26px;font-size:12.5px}
@@ -218,18 +219,6 @@ kbd{background:#161b25;border:1px solid rgba(255,255,255,.13);border-bottom-widt
 .go-stats b{font-size:17px;color:var(--amber);letter-spacing:1px}
 .go-btns{display:flex;gap:10px;justify-content:center}
 
-/* ================= LOADING ================= */
-/* The loading indicator: a chip under PLAY, never a screen. The menu stays
-   visible and usable while the engine streams in. */
-#loading{display:none;flex-direction:column;gap:6px;margin-top:10px;
-  font-size:8.5px;letter-spacing:2px;color:#9aa6b8}
-#loading.gone{display:none}
-#loading.show{display:flex}
-.ld-text{color:#ffd7a1;letter-spacing:2px}
-.ld-bar{display:block;height:4px;border-radius:3px;background:rgba(255,255,255,.09);overflow:hidden}
-.ld-bar i{display:block;height:100%;width:0;border-radius:3px;
-  background:linear-gradient(90deg,#ffb347,#ffd9a0);transition:width .18s linear}
-.play-btn.loading{opacity:.85;cursor:progress}
 
 @media (max-width:820px){
   .lobby-body{grid-template-columns:1fr;padding:18px}
@@ -1443,3 +1432,128 @@ body:not(.run-live) .fs-exit{display:none}
   .gc-modes i{font-size:6px;padding:2px 4px}
   .gc-modes i:nth-child(n+4){display:none}
 }
+
+/* ============================================================================
+   PLAYER PANEL — account picture + settings
+   Lives above everything (it can be opened from the arcade, the lobby or a
+   run) and is deliberately one scrollable sheet so a phone never has to hunt
+   for the SAVE button.
+   ==========================================================================*/
+.player-panel{position:fixed;inset:0;z-index:90;display:none;align-items:center;justify-content:center;
+  padding:16px;background:rgba(4,6,10,.72);backdrop-filter:blur(7px)}
+.player-panel.show{display:flex}
+.pp-card{width:min(560px,100%);max-height:calc(100vh - 32px);overflow:auto;background:#0d1118;
+  border:1px solid rgba(255,255,255,.12);border-radius:16px;box-shadow:0 24px 70px rgba(0,0,0,.6)}
+.pp-head{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid rgba(255,255,255,.08);
+  position:sticky;top:0;background:#0d1118;z-index:2}
+.pp-head h2{margin:0;font-size:12px;letter-spacing:2.4px;color:#ffd7a1}
+.pp-head .pp-x{margin-left:auto;background:#171c26;border:1px solid rgba(255,255,255,.12);color:#9aa3b3;
+  border-radius:8px;width:32px;height:32px;font:inherit;font-size:14px;cursor:pointer}
+.pp-head .pp-x:hover{color:#ffb347;border-color:#ffb347}
+.pp-body{padding:16px;display:flex;flex-direction:column;gap:16px}
+.pp-id{display:flex;align-items:center;gap:14px}
+.pp-portrait{width:76px;height:76px;border-radius:50%;flex:none;display:grid;place-items:center;
+  font:inherit;font-weight:800;font-size:24px;letter-spacing:1px;color:#0b0e14;overflow:hidden;
+  border:2px solid rgba(255,255,255,.16);background-size:cover;background-position:center}
+.pp-idmeta{min-width:0}
+.pp-idmeta b{display:block;font-size:15px;letter-spacing:1.2px;color:#eef3fb}
+.pp-idmeta span{display:block;font-size:10px;letter-spacing:1.4px;color:#7f8a9c;margin-top:3px}
+.pp-idmeta em{display:block;font-size:10px;color:#ffb347;margin-top:5px;font-style:normal;letter-spacing:.6px}
+.pp-pic-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:9px}
+.pp-btn{padding:9px 13px;border-radius:9px;background:#171c26;border:1px solid rgba(255,255,255,.12);
+  color:#cdd6e4;font:inherit;font-size:10px;letter-spacing:1.2px;cursor:pointer;min-height:38px}
+.pp-btn:hover{border-color:#ffb347;color:#ffd7a1}
+.pp-btn.primary{background:rgba(255,179,71,.16);border-color:rgba(255,179,71,.5);color:#ffd7a1}
+.pp-btn.danger{background:rgba(255,93,93,.1);border-color:rgba(255,93,93,.4);color:#ff9d9d}
+.pp-btn:disabled{opacity:.45;cursor:not-allowed}
+.pp-section{border-top:1px solid rgba(255,255,255,.07);padding-top:14px}
+.pp-section>h3{margin:0 0 10px;font-size:10px;letter-spacing:2.2px;color:#8ea0b8}
+.pp-row{display:flex;align-items:center;gap:12px;padding:7px 0}
+.pp-row>label,.pp-row>span:first-child{flex:1;font-size:10px;letter-spacing:1.6px;color:#aab6c7}
+.pp-row output{font-size:10px;letter-spacing:1.2px;color:#ffd7a1;min-width:52px;text-align:right}
+.pp-row input[type=range]{flex:2;accent-color:#ffb347;min-width:90px}
+.pp-seg{display:flex;gap:4px;flex-wrap:wrap}
+.pp-seg button{flex:1;min-width:52px;padding:8px 6px;border-radius:8px;background:#141a24;
+  border:1px solid rgba(255,255,255,.1);color:#93a1b5;font:inherit;font-size:9px;letter-spacing:1.3px;cursor:pointer;min-height:36px}
+.pp-seg button.on{background:rgba(255,179,71,.16);border-color:rgba(255,179,71,.55);color:#ffd7a1}
+.pp-toggle{display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none}
+.pp-toggle input{width:18px;height:18px;accent-color:#ffb347}
+.pp-hint{margin:6px 0 0;font-size:9.5px;line-height:1.55;color:#78849a;letter-spacing:.4px}
+.pp-actions{display:flex;gap:8px;position:sticky;bottom:0;background:#0d1118;padding:12px 0 2px;
+  border-top:1px solid rgba(255,255,255,.07);margin-top:2px}
+.pp-actions .pp-btn{flex:1;min-height:44px;font-size:11px}
+.pp-note{margin:0;font-size:10px;letter-spacing:.6px;color:#8ea0b8;min-height:14px}
+.pp-note.ok{color:#6dffa8}
+.pp-note.err{color:#ff8f8f}
+.friend-av{background-size:cover;background-position:center;background-color:#1b2230;display:grid;
+  place-items:center;font-size:9px;font-weight:800;color:#0b0e14;overflow:hidden}
+.arc-avatar{background-size:cover;background-position:center;display:grid;place-items:center;font-size:11px}
+.arc-avatar.has-img{font-size:0;color:transparent;border-color:rgba(255,179,71,.5)}
+.account-chip i.avatar-i{width:22px;height:22px;border-radius:50%;box-shadow:none;background-size:cover;
+  background-position:center;display:grid;place-items:center;font-size:8px;font-weight:800;color:#0b0e14}
+@media (pointer:coarse){
+  .pp-card{max-height:calc(100vh - 16px);border-radius:14px}
+  .pp-portrait{width:64px;height:64px;font-size:20px}
+  .pp-body{padding:12px;gap:12px}
+}
+
+/* hub friends: real avatars, plus the add/remove sheet the strip opens */
+.af-av{width:30px;height:30px;border-radius:50%;flex:none;display:grid;place-items:center;overflow:hidden;
+  background:linear-gradient(160deg,#2b3a55,#141b28);border:1px solid rgba(255,255,255,.12);
+  font-size:10px;font-weight:800;color:#cfdbea}
+.af-av img{width:100%;height:100%;object-fit:cover;display:block}
+.arc-friend .af-av{margin-bottom:1px}
+.arc-gear{font:inherit;font-size:14px;line-height:1;width:32px;height:32px;border-radius:50%;
+  background:#1b2230;border:1px solid rgba(255,255,255,.16);color:#9aa8bb;cursor:pointer}
+.arc-gear:hover{color:#ffb347;border-color:rgba(255,179,71,.5)}
+.arc-modal-card.af-card{width:min(460px,100%)}
+.af-add{display:flex;gap:8px;margin:12px 0 6px}
+.af-add input{flex:1;min-width:0;padding:11px 12px;border-radius:9px;background:#141a24;
+  border:1px solid rgba(255,255,255,.12);color:#e6edf7;font:inherit;font-size:11px;letter-spacing:1px}
+.af-add input:focus{outline:none;border-color:#ffb347}
+.af-add button{padding:11px 16px;border-radius:9px;background:rgba(255,179,71,.16);
+  border:1px solid rgba(255,179,71,.5);color:#ffd7a1;font:inherit;font-size:10px;letter-spacing:1.6px;
+  cursor:pointer;min-height:42px}
+.af-add button:disabled{opacity:.45;cursor:not-allowed}
+.af-note{margin:2px 0 8px;font-size:10px;letter-spacing:.5px;color:#8ea0b8;min-height:13px}
+.af-note.ok{color:#6dffa8}
+.af-note.err{color:#ff8f8f}
+.af-list{display:flex;flex-direction:column;gap:6px;max-height:44vh;overflow:auto}
+.af-row{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:10px;background:#101620;
+  border:1px solid rgba(255,255,255,.06)}
+.af-row.on{border-color:rgba(109,255,168,.28)}
+.af-row .af-av{width:34px;height:34px}
+.af-meta{flex:1;min-width:0}
+.af-meta b{display:block;font-size:11px;letter-spacing:.6px;color:#e6edf7;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.af-meta em{display:block;font-style:normal;font-size:8.5px;letter-spacing:1px;color:#7f8a9c}
+.af-meta i{display:block;font-style:normal;font-size:8px;letter-spacing:1.1px;color:#5f6a7b;margin-top:2px}
+.af-row.on .af-meta i{color:#6dffa8}
+.af-del{width:30px;height:30px;border-radius:8px;background:#171c26;border:1px solid rgba(255,255,255,.1);
+  color:#9aa3b3;font:inherit;cursor:pointer;flex:none}
+.af-del:hover{color:#ff8f8f;border-color:rgba(255,143,143,.5)}
+.af-empty{margin:6px 0;font-size:11px;line-height:1.6;color:#8ea0b8}
+/* in-run gear button, under the fullscreen chip */
+.settings-fab{position:fixed;right:calc(10px + env(safe-area-inset-right,0px));
+  top:calc(46px + env(safe-area-inset-top,0px));z-index:70;display:none;
+  font:inherit;font-size:8px;letter-spacing:1.6px;padding:7px 10px;border-radius:7px;
+  background:rgba(10,14,20,.82);border:1px solid rgba(255,255,255,.16);color:#c6d4e6;
+  cursor:pointer;opacity:.5;transition:opacity .2s}
+body.run-live .settings-fab{display:block}
+.settings-fab:hover,.settings-fab:focus-visible{opacity:1;border-color:#ffb347;color:#ffb347}
+
+/* the error bar: when a frame genuinely fails, say what broke and offer the way
+   out instead of leaving the player to guess at a hidden double-tap */
+.err-bar{position:fixed;left:50%;transform:translateX(-50%);
+  top:calc(8px + env(safe-area-inset-top,0px));z-index:80;display:flex;align-items:center;gap:8px;
+  max-width:min(94vw,520px);padding:7px 9px;border-radius:9px;background:rgba(46,8,10,.94);
+  border:1px solid rgba(255,120,120,.55);box-shadow:0 10px 30px rgba(0,0,0,.45)}
+.err-bar.hidden{display:none}
+.err-bar span{font-size:8.5px;letter-spacing:1.1px;color:#ffd0d0;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;max-width:44vw}
+.err-bar button{font:inherit;font-size:8px;letter-spacing:1.4px;padding:5px 9px;border-radius:6px;
+  background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.22);color:#ffe7e7;cursor:pointer;
+  min-height:26px;flex:none}
+.err-bar button:hover{background:rgba(255,255,255,.18)}
+#linkRow.link-ok{color:#6dffa8}
+#linkRow.link-warn{color:#ffce7a}

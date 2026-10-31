@@ -16,6 +16,9 @@ import {
   DEFAULT_CUSTOM, normalizeCustom, resolveCustom, describeCustom,
 } from './customize.js';
 import { BODY_COLORS, CAR_COLORS, hexToInt } from './palette.js';
+import { PlayerPanel } from './player-panel.js';
+import { loadSettings, saveSettings, applySettings, normalizeSettings } from './settings.js';
+import { paintAvatar, initialsOf } from './account-image.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -48,9 +51,36 @@ try {
   if (MODES.some((m) => m.id === saved.mode)) state.mode = saved.mode;
   if (saved.custom) state.custom = normalizeCustom(saved.custom);
 } catch {}
+// one-time migration: the old lobby saved the tier inside the profile blob
+try {
+  const raw = JSON.parse(localStorage.getItem('outrun-profile') || '{}');
+  if (raw.quality && settings.quality === 'auto') settings = normalizeSettings({ ...settings, quality: raw.quality });
+  state.quality = settings.quality;
+} catch {}
 
 // ------------------------------------------------------------------ account
 const account = new Account();
+// the player's own preferences (volume, shake, graphics). Kept separate from
+// the run's state so they survive every restart.
+let settings = loadSettings();
+
+/**
+ * WHERE MULTIPLAYER LIVES.
+ *  · `?relay=https://host` on the URL — an explicit socket.io server
+ *  · `window.__OUTRUN_RELAY__` — baked in by a deploy
+ *  · the page's own origin, when it was served by `server.js` (detected through
+ *    /api/health, which only that server answers with engine: 'socket.io')
+ * Empty means "no socket.io host": the Supabase lane carries play instead.
+ */
+let relayUrl = (() => {
+  try {
+    const fromQuery = new URLSearchParams(location.search).get('relay') || '';
+    const clean = (v) => String(v || '').trim().replace(/\/+$/, '');
+    if (fromQuery) return clean(fromQuery).replace(/^ws(s?):\/\//i, 'http$1://');
+    return clean(globalThis.__OUTRUN_RELAY__);
+  } catch { return ''; }
+})();
+let playerPanel = null;
 let game = null;
 let admin = null;
 let arcade = null;
@@ -99,58 +129,20 @@ const KIT_FILES = [
 ];
 
 let kitPromise = null;
-const kitProgress = { loaded: 0, total: KIT_FILES.reduce((n, [, kb]) => n + kb, 0), ratio: 0 };
-const progressHandlers = new Set();
-
-/** Subscribe to loader progress. Returns an unsubscribe function. */
-export function onKitProgress(fn) {
-  progressHandlers.add(fn);
-  try { fn(kitProgress); } catch { /* a broken listener must not break loading */ }
-  return () => progressHandlers.delete(fn);
-}
-
-export const kitProgressState = () => ({ ...kitProgress });
-
-function reportKit(bytes) {
-  kitProgress.loaded = Math.min(kitProgress.total, kitProgress.loaded + bytes);
-  kitProgress.ratio = kitProgress.total ? kitProgress.loaded / kitProgress.total : 1;
-  for (const fn of progressHandlers) {
-    try { fn(kitProgress); } catch { /* ignore */ }
-  }
-}
 
 /**
- * Pulls the module graph into the HTTP cache ahead of the import, counting the
- * bytes as they arrive so the button can show a real percentage. If streaming
- * is unavailable the file weight is credited when the response lands — either
- * way the bar only ever moves forward.
+ * Pulls the module graph into the HTTP cache ahead of the import. There is no
+ * progress to show any more — the point of prefetching is that the player never
+ * *sees* the download: by the time they press PLAY the modules are already on
+ * the device, and a repeat visit answers from the ETag cache.
  */
 async function prefetchKit() {
-  await Promise.all(KIT_FILES.map(async ([url, weight]) => {
-    let credited = 0;
-    const credit = (kb) => {
-      const add = Math.max(0, Math.min(kb, weight - credited));
-      if (add <= 0) return;
-      credited += add;
-      reportKit(add);
-    };
+  await Promise.all(KIT_FILES.map(async ([url]) => {
     try {
-      // no cache override: the server's ETag turns a repeat visit into a 304,
-      // and a deploy is never masked by a stale force-cache hit
       const res = await fetch(new URL(url, import.meta.url).href);
       if (!res.ok) throw new Error(`http ${res.status}`);
-      if (res.body?.getReader) {
-        const reader = res.body.getReader();
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          credit((value?.byteLength || 0) / 1024);
-        }
-      } else {
-        await res.arrayBuffer();
-      }
-    } catch { /* a missing file must not stall the bar */ }
-    credit(weight);            // whatever did not stream is counted at the end
+      await res.arrayBuffer();
+    } catch { /* a missing file must not stop the rest */ }
   }));
 }
 
@@ -216,6 +208,21 @@ function refreshPreviews() {
   if (summary) summary.textContent = describeCustom(state.custom);
 }
 
+// -------------------------------------------------------------- player panel
+/**
+ * One sheet for the account picture and the player's own settings, opened from
+ * the hub, the lobby and the in-run gear button. Changes apply live: the audio
+ * graph, the running game and the graphics tier all take effect immediately.
+ */
+function openPlayerPanel(tab = 'account') {
+  playerPanel?.show(tab);
+}
+
+const settingsForGame = () => ({
+  audio: game?.audio || null,
+  game,
+});
+
 // ------------------------------------------------------------------ arcade
 /**
  * The hub. Everything starts here: the built-in 100 Days Outrun plus every
@@ -228,6 +235,7 @@ function showArcade() {
     arcade = new Arcade({
       account,
       onPlayNative: () => showLobby(),
+      onSettings: (tab) => openPlayerPanel(tab),
       getPlayer: () => ({
         name: state.name || 'WANDERER',
         color: state.color,
@@ -252,16 +260,16 @@ function showLobby() {
   // the home is portrait again: unlock landscape and leave fullscreen
   requestPortrait();
   arcade?.hide();
-  // coming back from a run must not leave the button stuck on its loading copy
-  setLoading({ active: false });
+  // coming back from a run must leave PLAY pressable
   const play = $('playBtn');
-  if (play) play.innerHTML = 'START THE RUN <span>▸</span>';
+  if (play) play.disabled = false;
   $('lobby').classList.add('show');
   $('nameInput').value = state.name;
   $('roomInput').value = state.room;
   refreshPreviews();
   renderAccountChip();
   renderFriends();
+  playerPanel?.paint();
   setTimeout(() => lobbyPreview?.resize(), 30);
 }
 
@@ -399,10 +407,18 @@ function renderAccountChip() {
   nameEl.textContent = account.displayName || state.name || 'GUEST';
   if (account.signedIn) {
     metaEl.textContent = `@${account.username}`;
-    dot.style.background = state.color;
-    dot.style.boxShadow = `0 0 10px ${state.color}`;
+    // the chip shows the account picture when there is one, else their colour
+    paintAvatar(dot, {
+      image: account.profile?.avatar_image || '',
+      name: account.displayName || account.username,
+      color: state.color,
+    });
+    dot.classList.toggle('avatar-i', Boolean(account.profile?.avatar_image));
+    dot.style.boxShadow = account.profile?.avatar_image ? 'none' : `0 0 10px ${state.color}`;
   } else {
+    dot.classList.remove('avatar-i');
     metaEl.textContent = account.canUseAccounts ? 'GUEST · LOCAL ONLY' : 'GUEST · ACCOUNTS OFFLINE';
+    dot.style.backgroundImage = 'none';
     dot.style.background = '#6b7385';
     dot.style.boxShadow = 'none';
   }
@@ -455,7 +471,9 @@ function renderFriends() {
   } else {
     list.innerHTML = account.friends.map((f) => `
       <div class="friend-row ${f.online ? 'online' : ''}" data-id="${f.id}">
-        <i class="friend-av" style="background:${f.color}"></i>
+        <i class="friend-av" data-av="${escapeHtml(f.avatar || '')}"
+          style="${f.avatar ? `background-image:url(${f.avatar})` : `background:${f.color}`}">${
+  f.avatar ? '' : escapeHtml(initialsOf(f.displayName || f.username || '?'))}</i>
         <div class="friend-meta">
           <b>${escapeHtml(f.displayName)}</b>
           <span>${f.online ? `IN GAME · DAY ${f.day ?? '?'} · ${escapeHtml(f.room || 'lobby')}` : 'OFFLINE'}</span>
@@ -488,28 +506,6 @@ function renderFriends() {
   if (note && !note.textContent) {
     note.textContent = account.friendsLoading ? 'Syncing…' : '';
   }
-}
-
-/**
- * The loading indicator is a slim chip, not a screen. It sits above the PLAY
- * button, keeps the menu usable underneath, and disappears the moment the world
- * is on screen. There is deliberately no way for it to cover the game.
- */
-function setLoading({ active = false, pct = null, note = '' } = {}) {
-  const chip = $('loading');
-  if (chip) {
-    chip.classList.toggle('show', Boolean(active));
-    chip.classList.toggle('gone', !active);
-    const text = chip.querySelector?.('.ld-text') || null;
-    if (text) text.textContent = note || (active ? 'LOADING' : '');
-    if (pct !== null) {
-      const bar = chip.querySelector?.('.ld-bar i');
-      if (bar?.style) bar.style.width = `${Math.max(0, Math.min(100, pct))}%`;
-      chip.setAttribute?.('data-pct', String(Math.round(pct)));
-    }
-  }
-  const btn = $('playBtn');
-  if (btn) btn.classList.toggle('loading', Boolean(active));
 }
 
 /** Toast that works before the 3D HUD exists. */
@@ -549,19 +545,60 @@ async function addFriend() {
 }
 
 // ----------------------------------------------------------------- net probe
+/**
+ * Says which lane multiplayer will use, before the player has to find out the
+ * hard way. Supabase is the main server now, so it is checked first and named
+ * first; our own relay is only reported when it is the one that will carry play.
+ */
 async function probeRelay() {
   const el = $('netStatus');
   if (!el) return;
+
+  // Peer-to-peer first: with Supabase for signalling and WebRTC in the browser,
+  // the room runs browser-to-browser and no server of ours is in the path.
+  const supaProbe = account.sb?.url && account.sb?.key ? account.sb.url : '';
+  const peerCapable = Boolean(globalThis.RTCPeerConnection || globalThis.webkitRTCPeerConnection);
+  if (supaProbe && peerCapable) {
+    el.textContent = `● PEER-TO-PEER (signalling via ${String(supaProbe).replace(/^https?:\/\//, '')}) — SHARE THE ROOM CODE TO PLAY TOGETHER`;
+    el.className = 'net-status ok';
+    return;
+  }
+
+  // the socket.io server, when the page is being served by it, takes priority:
+  // it is the dedicated realtime host and the health route proves it is there
+  if (!relayUrl) {
+    try {
+      const res = await fetch('/api/health', { cache: 'no-store' });
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.realtime?.engine === 'socket.io' || data?.engine === 'socket.io') {
+          relayUrl = location.origin;
+        }
+      }
+    } catch { /* no local server */ }
+  }
+  if (relayUrl) {
+    el.textContent = `● SOCKET.IO SERVER (${String(relayUrl).replace(/^https?:\/\//, '')}) — SHARE THE ROOM CODE TO PLAY TOGETHER`;
+    el.className = 'net-status ok';
+    return;
+  }
+
+  const supa = supaProbe;
+  if (supa) {
+    el.textContent = `● SUPABASE REALTIME (${String(supa).replace(/^https?:\/\//, '')}) — SHARE THE ROOM CODE TO PLAY TOGETHER`;
+    el.className = 'net-status ok';
+    return;
+  }
   try {
     const res = await fetch('/api/health', { cache: 'no-store' });
     if (res.ok) {
       const data = await res.json();
-      el.textContent = `● RELAY READY (${data.mode || 'node'}) — SHARE THE ROOM CODE TO PLAY TOGETHER`;
-      el.className = 'net-status ok';
+      el.textContent = `● FALLBACK RELAY (${data.mode || 'node'}) — SET SUPABASE_URL + SUPABASE_ANON_KEY FOR THE FAST LANE`;
+      el.className = 'net-status warn';
       return;
     }
   } catch {}
-  el.textContent = '● STATIC MODE — OPEN TWO TABS FOR LOCAL CO-OP';
+  el.textContent = '● LOCAL MODE — OPEN TWO TABS FOR LOCAL CO-OP';
   el.className = 'net-status warn';
 }
 
@@ -578,15 +615,13 @@ async function startRun() {
   // the game: fire it and carry on. `run-live` is added once the kit is ready.
   if (isPhone && !landscapeTried && isPortrait()) goLandscape();
 
+  // NO LOADING STATE OF ANY KIND. The engine is prefetched from first paint, so
+  // the wait here is normally zero; when it is not, the menu simply stays up and
+  // the run begins the moment the modules land. The button is disabled (never
+  // re-labelled) so a second press cannot start two runs.
   const btn = $('playBtn');
-  const btnLabel = btn ? btn.innerHTML : '';
-  const fails = [];
-  setLoading({ active: true, pct: 0, note: 'LOADING THE 3D ENGINE' });
-  const stopCounter = onKitProgress((p) => {
-    const pct = Math.round((p.ratio || 0) * 100);
-    setLoading({ active: true, pct, note: pct >= 100 ? 'STARTING ENGINE' : `LOADING THE 3D ENGINE · ${pct}%` });
-    if (btn) btn.innerHTML = `LOADING ${pct}%`;
-  });
+  const unlock = () => { if (btn) btn.disabled = false; };
+  if (btn) btn.disabled = true;
 
   // Play is a gesture: the one reliable moment to honour a saved fullscreen
   // preference. Fire and forget — it must not gate the run.
@@ -594,24 +629,20 @@ async function startRun() {
     toggleFullscreen({ on: true }).then(() => fullscreenCtl?.sync()).catch(() => {});
   }
 
-  // NO BLOCKING LOADING SCREEN: the menu stays on screen and usable while the
-  // engine streams in. If anything fails we simply stay here with a retry.
+  // The menu stays on screen and usable the whole time; a failure drops straight
+  // back to it with the reason, never into a spinner.
   let kit = null;
   try {
     kit = await loadGameKit();
   } catch (err) {
     console.error('[load] game kit failed', err);
-    fails.push(String(err?.message || err));
   }
-  stopCounter();
   if (!kit) {
-    setLoading({ active: false });
+    unlock();
     document.body.classList.remove('run-live', 'auto-land');
     document.documentElement.classList.remove('rot-stage');
     requestPortrait();                  // the menu is portrait: hand it back
-    if (btn) btn.innerHTML = btnLabel;
-    setFriendNote('Could not load the 3D engine — check your connection and press PLAY again.', 'err');
-    hudToast('LOAD FAILED — TAP PLAY TO RETRY', 'warn');
+    showProblem('COULD NOT OPEN THE ENGINE — CHECK YOUR CONNECTION AND PRESS START AGAIN');
     starting = false;
     return;
   }
@@ -625,14 +656,8 @@ async function startRun() {
     document.documentElement.classList.add('rot-stage');
   }
 
-  if (btn) btn.innerHTML = 'DROPPING IN…';
-  setLoading({ active: true, pct: 100, note: 'DROPPING IN' });
-
-  await new Promise((r) => setTimeout(r, 60));
-
-  // the menu stays up until this exact moment, so nothing ever looks stuck
+  // the menu stays up until the world is actually ready, then it is simply gone
   $('lobby').classList.remove('show');
-  $('loading').classList.add('gone');
 
   try {
     game = new kit.Game({
@@ -644,7 +669,13 @@ async function startRun() {
         custom: state.custom,
       },
       room: state.room,
-      quality: state.quality,
+      quality: settings.quality,
+      // the dedicated socket.io server when one is advertised…
+      relayUrl,
+      // …then Supabase's realtime edge, then the node relay underneath both
+      supabase: account.sb?.url && account.sb?.key
+        ? { url: account.sb.url, key: account.sb.key }
+        : null,
       mode: state.mode,
       onQuit: () => location.reload(),
       onRunEnd: (stats) => {
@@ -653,6 +684,10 @@ async function startRun() {
       },
     });
     game.audio.init();
+    // the player's saved volume / mute / shake / tier apply to the new run
+    applySettings(settings, settingsForGame());
+    // …and so does the account picture, on the nameplate above their head
+    try { game.avatar?.setPicture?.(account.profile?.avatar_image || ''); } catch { /* plain plate */ }
     game.audio.blip(560, 0.18, 'square', 0.1);
     game.started = true;
     game.hud.show();
@@ -674,19 +709,27 @@ async function startRun() {
     }
   } catch (err) {
     console.error(err);
-    setLoading({ active: false });
+    unlock();
     document.body.classList.remove('run-live', 'auto-land');
     document.documentElement.classList.remove('rot-stage');
     requestPortrait();
-    if (btn) btn.innerHTML = btnLabel;
-    setFriendNote(`Could not start: ${err.message}`, 'err');
-    hudToast('COULD NOT START — TAP PLAY TO RETRY', 'warn');
+    showProblem(`COULD NOT START: ${err.message}`);
     starting = false;
     return;
   }
 
-  setLoading({ active: false });
+  unlock();
   starting = false;
+}
+
+/** One way to say "this failed" — the error bar, plus the lobby note while it is up. */
+function showProblem(text) {
+  setFriendNote(text, 'err');
+  const bar = $('errBar');
+  const label = $('errText');
+  if (label) label.textContent = `PROBLEM: ${String(text).toUpperCase()}`;
+  if (bar) bar.classList.remove('hidden');
+  hudToast(text, 'warn');
 }
 
 // presence: keep the friend list honest while playing
@@ -864,8 +907,12 @@ async function boot() {
   qualityRow?.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-quality]');
     if (!btn) return;
-    state.quality = btn.dataset.quality;
+    // both entry points (this row and the player panel) share one store
+    settings = saveSettings({ quality: btn.dataset.quality });
+    state.quality = settings.quality;
     paintQuality();
+    playerPanel?.paintSettings();
+    playerPanel?.apply();
     saveLocal();
   });
   paintQuality();
@@ -895,8 +942,50 @@ async function boot() {
   });
 
   account.on((kind) => {
-    if (kind === 'friends') { renderFriends(); arcade?.renderFriends(); }
-    if (kind === 'profile') renderAccountChip();
+    if (kind === 'friends') { renderFriends(); arcade?.renderFriends(); arcade?.renderFriendsModal(); }
+    if (kind === 'profile') {
+      renderAccountChip();
+      playerPanel?.paintAccount();
+      renderFriends();
+      try { game?.avatar?.setPicture?.(account.profile?.avatar_image || ''); } catch { /* plain plate */ }
+    }
+    if (kind === 'profile-error') {
+      const msg = account.lastError || 'Could not save that.';
+      playerPanel?.note(msg, 'err');
+      hudToast(msg, 'warn');
+    }
+  });
+
+  // ACCOUNT PICTURE + SETTINGS: one panel, opened from the hub, the lobby and
+  // the in-run gear button. `getGame` is a thunk so it always sees the live run.
+  playerPanel = new PlayerPanel({
+    account,
+    getGame: () => game,
+    onSettings: (next) => {
+      settings = next;
+      state.quality = next.quality;
+      paintQuality();
+      saveLocal();
+    },
+    onSignOut: () => {
+      applyProfileToState(account.profile);
+      $('auth').classList.add('show');
+      $('lobby').classList.remove('show');
+      authUI?.show();
+      renderFriends();
+      renderAccountChip();
+    },
+  });
+  playerPanel.apply();
+
+  $('lobbySettingsBtn')?.addEventListener('click', () => openPlayerPanel('settings'));
+  $('settingsFab')?.addEventListener('click', () => openPlayerPanel('settings'));
+  window.addEventListener('keydown', (e) => {
+    if (e.key !== 'p' && e.key !== 'P') return;
+    const typing = /^(input|textarea|select)$/i.test(e.target?.tagName || '');
+    if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+    e.preventDefault?.();
+    playerPanel?.toggle();
   });
 
   authUI = new AuthUI({
@@ -954,7 +1043,6 @@ async function boot() {
     authPreview?.setAvatar(hexToInt(state.color), 'SURVIVOR');
   }
 
-  setTimeout(() => $('loading').classList.add('gone'), 500);
   // the menu is interactive now; pull the 3D kit in the background so the first
   // PLAY press does not start a cold megabyte
   warmGameKit();
