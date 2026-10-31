@@ -174,25 +174,14 @@ const DIST = path.join(__dirname, 'dist');
 const PUBLIC = path.join(__dirname, 'public');
 const SITE = existsSync(path.join(DIST, 'index.html')) ? DIST : PUBLIC;
 
-app.use(express.static(SITE, {
-  index: 'index.html',
-  extensions: ['html'],
-  setHeaders(res, file) {
-    if (/\/vendor\/|\.woff2?$|\.png$|\.jpg$|\.svg$/.test(file)) {
-      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-    } else if (/\.js$|\.css$/.test(file)) {
-      res.setHeader('Cache-Control', 'public, max-age=60, stale-while-revalidate=600');
-    }
-  },
-}));
-
 // Community games live in ./games, next to ./public rather than inside it, so a
-// contributor only has to add a folder (see games/README.md). The built copy in
-// dist/games is served by the mount above when a build has run; this mount is
-// what keeps /games/* working from the source tree — headless `node server.js`
-// on Render, in Docker, and on the dev preview — instead of a 404 in the middle
-// of the hub's iframe (which is exactly what a never-ending "loading" ship
-// looks like from the outside).
+// contributor only has to add a folder (see games/README.md). It is mounted
+// BEFORE the site so it answers `/games` itself, and it serves the repo's copy
+// rather than `dist/games` — one source of truth, and `/games/*` works for a
+// headless `node server.js` on Render, in Docker and on the dev preview, instead
+// of a 404 in the middle of the hub's iframe (which is exactly what a
+// never-ending "loading" ship looks like from the outside). Vercel never runs
+// this file: it serves the built `dist/` (which includes `dist/games`).
 const GAMES = path.join(__dirname, 'games');
 const GAME_CACHE = {
   '.html': 'no-store, max-age=0',
@@ -217,6 +206,18 @@ app.use('/games', (req, res, next) => {
     },
   })(req, res, next);
 });
+
+app.use(express.static(SITE, {
+  index: 'index.html',
+  extensions: ['html'],
+  setHeaders(res, file) {
+    if (/\/vendor\/|\.woff2?$|\.png$|\.jpg$|\.svg$/.test(file)) {
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    } else if (/\.js$|\.css$/.test(file)) {
+      res.setHeader('Cache-Control', 'public, max-age=60, stale-while-revalidate=600');
+    }
+  },
+}));
 
 // A single-page app: unknown paths get the shell, unless they look like a file.
 // (Written as a plain middleware so it behaves the same on express 4 and 5.)

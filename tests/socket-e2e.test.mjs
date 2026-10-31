@@ -162,6 +162,10 @@ console.log('\nhttp surface');
 // and the player stares at an empty frame: "it never finishes loading".
 console.log('\ncommunity games');
 {
+  const bare = await fetch(`${URL}/games`);
+  check('/games answers with the catalogue', bare.ok && !bare.redirected,
+    `${bare.status}${bare.redirected ? ' redirect' : ''}`);
+
   const catalogue = await fetch(`${URL}/games/index.json`);
   const json = catalogue.ok ? await catalogue.json() : { games: [] };
   check('/games/index.json reaches the shelf', catalogue.ok && Array.isArray(json.games), String(catalogue.status));

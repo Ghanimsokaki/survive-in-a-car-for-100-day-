@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generatedAt": "2026-10-30T09:22:19.500Z",
+  "generatedAt": "2026-10-31T00:11:03.983Z",
   "count": 1,
   "games": [
     {
@@ -21,7 +21,7 @@
       "players": "1",
       "featured": true,
       "files": 6,
-      "bytes": 89826,
+      "bytes": 90530,
       "path": "games/iron-tide"
     }
   ]
