@@ -292,8 +292,8 @@
 
     // hull
     const hull = g.createLinearGradient(-20, 0, 22, 0);
-    hull.addColorStop(0, '#39424f');
-    hull.addColorStop(1, '#7d8b9b');
+    hull.addColorStop(0, '#4a5563');
+    hull.addColorStop(1, '#9fb0c2');
     g.fillStyle = hull;
     g.beginPath();
     g.moveTo(28, 0);
@@ -930,10 +930,13 @@
       // a thin health bar above each hull, so the fight is readable
       const width = spec.radius * 1.8;
       const frac = clamp(enemy.hull / Math.max(1, enemy.hullMax), 0, 1);
-      ctx.fillStyle = 'rgba(10,20,30,.75)';
-      ctx.fillRect(enemy.x - width / 2, enemy.y - spec.radius - 18, width, 3.4);
+      ctx.fillStyle = 'rgba(4,10,18,.9)';
+      ctx.fillRect(enemy.x - width / 2 - 1, enemy.y - spec.radius - 13, width + 2, 5.2);
+      ctx.strokeStyle = 'rgba(150,200,225,.28)';
+      ctx.lineWidth = 0.7;
+      ctx.strokeRect(enemy.x - width / 2 - 1, enemy.y - spec.radius - 13, width + 2, 5.2);
       ctx.fillStyle = enemy.id === 'narada' ? 'rgba(255,140,110,.95)' : 'rgba(255,190,120,.95)';
-      ctx.fillRect(enemy.x - width / 2, enemy.y - spec.radius - 18, width * frac, 3.4);
+      ctx.fillRect(enemy.x - width / 2, enemy.y - spec.radius - 12, width * frac, 3.4);
     }
   }
 
@@ -992,11 +995,31 @@
     }
   }
 
-  /** The title screen shows the ship from behind, drifting through the stars. */
-  function drawTitleScene() {
+  /**
+   * The title screen: the ship drifts in whatever free glass the card leaves.
+   * It used to be drawn at a fixed (0, 40), which parked it half off the
+   * top-left corner on every screen — a screenshot showed it at once.
+   */
+  function drawTitleScene(w, h) {
     const t = now * 0.35;
-    drawShip(R.PLAYER_SHIP, ctx, Math.sin(t * 0.7) * 40, 40 + Math.cos(t) * 6,
-      -Math.PI / 2 + Math.sin(t * 0.5) * 0.12, 2.1, 0.75);
+    let baseY = Math.max(84, h * 0.28);
+    let scale = clamp(Math.min(w, h) / 300, 1.6, 2.6);
+    const card = $('titleCard');
+    const rect = card && card.getBoundingClientRect ? card.getBoundingClientRect() : null;
+    if (rect && rect.height > 80 && rect.width > 80) {
+      const room = Math.max(0, rect.top);
+      if (room > 130) {
+        // portrait: there is a band above the card, so the ship sits in it
+        baseY = Math.max(72, room * 0.55);
+        scale = clamp(Math.min(w, room) / 170, 1.5, 2.8);
+      } else {
+        // landscape: the card owns the glass; the ship drifts behind it, big
+        baseY = rect.top + rect.height * 0.5;
+        scale = clamp(w / 330, 2, 3.4);
+      }
+    }
+    drawShip(R.PLAYER_SHIP, ctx, w / 2 + Math.sin(t * 0.7) * Math.min(40, w * 0.08),
+      baseY + Math.cos(t) * 8, -Math.PI / 2 + Math.sin(t * 0.5) * 0.12, scale, 0.75);
   }
 
   function paintHud(force = false) {
@@ -1057,7 +1080,7 @@
       drawShots();
       ctx.restore();
     } else {
-      drawTitleScene();
+      drawTitleScene(w, h);
     }
     ctx.restore();
     if (screen === 'battle') drawMarkers(w, h);

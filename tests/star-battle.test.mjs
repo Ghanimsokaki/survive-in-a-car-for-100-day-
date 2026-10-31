@@ -128,6 +128,8 @@ const R = shipsSandbox.window.StarShips;
 console.log('\nthe game boots in a sandboxed frame');
 const posted = [];
 const rafQueue = [];
+/** Every `translate` the renderer asked for — i.e. where it put things. */
+const drawn = [];
 let it = null;
 let bootError = null;
 {
@@ -146,6 +148,20 @@ let bootError = null;
   globalThis.requestAnimationFrame = (fn) => { rafQueue.push(fn); return rafQueue.length; };
   globalThis.window.devicePixelRatio = 2;
   globalThis.document.title = 'Star Battle';
+
+  // A recording context: the page keeps the one it asks for at boot, so this
+  // sees every draw the game really makes, not a stand-in.
+  const canvas = globalThis.document.getElementById('c');
+  const base = canvas.getContext('2d');
+  const recording = new Proxy(base, {
+    get(target, key) {
+      if (key === 'translate') return (x, y) => { drawn.push([x, y]); return target.translate(x, y); };
+      const value = target[key];
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+    set(target, key, value) { target[key] = value; return true; },
+  });
+  canvas.getContext = () => recording;
 
   const files = ['games/_shared/sdk.js', 'games/star-battle/ships.js', 'games/star-battle/game.js'];
   for (const file of files) {
@@ -167,6 +183,25 @@ check('…with the page title',
 check('the test handle exists', Boolean(it && typeof it.tick === 'function'));
 check('it opens on the title card, not mid-fight', it?.screen === 'title', it?.screen);
 check('nothing is stored locally when storage throws', it?.best === 0, String(it?.best));
+
+/* ----------------------------------------------------------- the hangar */
+console.log('\nthe title card has the ship on it, where you can see it');
+{
+  const frameAt = rafQueue.shift();
+  check('the boot started a frame loop', typeof frameAt === 'function');
+  drawn.length = 0;
+  try {
+    frameAt(1000);
+  } catch (error) {
+    bootError = error && error.message;
+  }
+  check('a frame drew without a throw', bootError === null, bootError || 'clean');
+  // The screen is 320×200 in this DOM. The bug this pins: the ship used to be
+  // drawn at a fixed (0, 40) — the top-left corner, half off the glass.
+  const placed = drawn.find(([x, y]) => y > 30 && y < 190 && Math.abs(x - 160) < 60);
+  check('the title ship is centred on the glass, not parked in the corner',
+    Boolean(placed), drawn.slice(0, 3).map(([x, y]) => `${Math.round(x)},${Math.round(y)}`).join(' · '));
+}
 
 /* ------------------------------------------------------------- the fight */
 console.log('\nthe fight');
