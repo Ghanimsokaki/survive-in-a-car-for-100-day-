@@ -516,7 +516,10 @@ tried in this order:
    retransmits — telemetry that is late is worthless) and `control` (reliable — chat, hits, joins).
    Rooms are 1–8, ids are re-electable (lowest id keeps hostship), and a silent host is noticed after
    9 s. It needs no server, but it does need a path between the two networks: **STUN only, no TURN**, so
-   two symmetric NATs (some mobile carriers) cannot pair — which is exactly why the lanes below exist.
+   two symmetric NATs (some mobile carriers) cannot pair. That case is handled rather than hidden: a
+   connection that never opens is dropped after 8 s, and a guest with no working channel after 12 s hands
+   the room to the next lane — it never sits on `P2P` with an empty map, and `?relay=` still wins if you
+   want to force a particular server.
 1. **Socket.IO** (`server.js`, `npm start`). A real realtime host: rooms of **1–8**, matchmaking codes,
    15 Hz vehicle telemetry, chat with rate limits, connection-state recovery and ghost-seat reclaiming.
    The server advertises itself on `/api/health` (`engine: "socket.io"`), so a page served by it — or a
@@ -539,8 +542,10 @@ channels): join, broadcast, 25 s heartbeat, reconnect with backoff, leave. `test
 two real clients through a real socket against a stand-in edge and asserts they meet, chat and leave —
 without a relay anywhere. `tests/p2p.test.mjs` pins the protocol (validation, clamping, host election);
 `tests/p2p-e2e.test.mjs` stands a fake `RTCPeerConnection` and a broadcast signalling bus behind the real
-room and drives host + two guests through election, handshake, relay, impersonation attempts and a host
-leaving — so the star is tested without a browser.
+room and drives host + two guests through election, handshake, relay, impersonation attempts, a host
+leaving and a handshake that never completes; `tests/p2p-net-e2e.test.mjs` then runs two real `Net`
+instances over a real socket to prove the *lane glue* — signalling-only topic, telemetry over the data
+channel, host-stamped authorship, host-quits recovery, dead-topic fallback and the `?relay=` override.
 
 ### The Socket.IO server (`npm start`)
 

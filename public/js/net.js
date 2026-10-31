@@ -71,6 +71,20 @@ export class Net {
   /** 'host' or 'guest' while a peer-to-peer room is live, '' otherwise. */
   get p2pRole() { return this.p2p?.role || ''; }
 
+  /**
+   * A relay someone asked for *by name* (`?relay=…` or `__OUTRUN_RELAY__`).
+   * Only an explicit override outranks peer-to-peer: a page merely served by the
+   * socket.io server is still allowed to play browser-to-browser first, because
+   * that is the lower-latency path and it costs the server nothing.
+   */
+  get relayOverride() {
+    try {
+      const fromQuery = new URLSearchParams(location.search).get('relay');
+      if (fromQuery) return fromQuery;
+    } catch { /* no location */ }
+    try { return globalThis.window?.__OUTRUN_RELAY__ || ''; } catch { return ''; }
+  }
+
   start() {
     try {
       this.bc = new BroadcastChannel(`outrun-${this.room}`);
@@ -102,6 +116,9 @@ export class Net {
   connectP2P() {
     if (this.p2pTried || this.p2p) return false;
     if (!this.supabase || !canPeer()) return false;
+    // an explicit relay wins: it is the one signal a developer (or a player
+    // behind a network that cannot do ICE) has to force a particular server
+    if (this.relayOverride) { this.p2pTried = true; return false; }
     this.p2pTried = true;
     try {
       const signaling = new SupabaseRealtime({
@@ -511,10 +528,13 @@ export class Net {
   }
 
   close() {
+    // Say goodbye *while the lanes are still open*: `send()` refuses once `alive`
+    // is false, so closing first meant the bye was never actually delivered and
+    // the other players kept a ghost on the map until their prune timer noticed.
+    try { this.send({ t: 'bye' }); } catch { /* the lane is already gone */ }
     this.alive = false;
     clearInterval(this.pruneTimer);
     this.stopPolling();
-    try { this.send({ t: 'bye' }); } catch {}
     try { this.bc?.close(); } catch {}
     try { this.p2p?.close(); } catch {}
     try { this.p2pSignal?.close(); } catch {}

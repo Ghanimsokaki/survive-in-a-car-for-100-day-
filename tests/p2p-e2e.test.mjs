@@ -12,6 +12,8 @@
  * and relaying, and that a host leaving is noticed.
  */
 import { P2PRoom } from '../public/js/webrtc.js';
+import { hostHello } from '../public/js/p2p.js';
+import { createNetwork } from './fake-rtc.mjs';
 
 const problems = [];
 const check = (label, cond, extra = '') => {
@@ -48,115 +50,10 @@ function makeBus() {
 }
 
 /* ------------------------------------------------------- a fake peer connection */
-let pcCounter = 0;
-class FakeChannel {
-  constructor(label, { ordered = true } = {}) {
-    this.label = label;
-    this.ordered = ordered;
-    this.readyState = 'connecting';
-    this.onopen = null;
-    this.onmessage = null;
-    this.onclose = null;
-    this.peer = null;              // the mirrored channel on the other side
-  }
-
-  send(data) {
-    if (this.readyState !== 'open') throw new Error('channel is not open');
-    const other = this.peer;
-    if (!other || other.readyState !== 'open') return;
-    setTimeout(() => other.onmessage?.({ data }), 0);
-  }
-
-  close() {
-    if (this.readyState === 'closed') return;
-    this.readyState = 'closed';
-    setTimeout(() => this.onclose?.({}), 0);
-  }
-
-  open() {
-    if (this.readyState === 'open') return;
-    this.readyState = 'open';
-    setTimeout(() => this.onopen?.({}), 0);
-  }
-}
-
-const registry = new Map();      // pc id → FakePeerConnection
-
-class FakePeerConnection {
-  constructor() {
-    pcCounter += 1;
-    this.id = `pc${pcCounter}`;
-    registry.set(this.id, this);
-    this.localDescription = null;
-    this.remoteDescription = null;
-    this.connectionState = 'new';
-    this.onicecandidate = null;
-    this.ondatachannel = null;
-    this.onconnectionstatechange = null;
-    this.channels = [];
-    this.iceSeen = [];
-  }
-
-  createDataChannel(label, opts = {}) {
-    const channel = new FakeChannel(label, opts);
-    this.channels.push(channel);
-    return channel;
-  }
-
-  async createOffer() { return { type: 'offer', sdp: `v=0\noffer ${this.id}\n` }; }
-  async createAnswer() {
-    const token = String(this.remoteDescription?.sdp || '').match(/offer (\S+)/)?.[1] || '';
-    return { type: 'answer', sdp: `v=0\nanswer ${token}\n` };
-  }
-
-  async setLocalDescription(desc) {
-    this.localDescription = { type: desc.type, sdp: desc.sdp };
-    this.connectionState = this.connectionState === 'new' ? 'connecting' : this.connectionState;
-    // the guest knows who offered (the offer is in its remote description), so
-    // this is where the two fake endpoints meet — as they would on the wire
-    if (desc.type === 'answer') {
-      const token = String(this.remoteDescription?.sdp || '').match(/offer (\S+)/)?.[1] || '';
-      const offerer = registry.get(token);
-      if (offerer && offerer !== this) pair(offerer, this);
-    }
-    // a real stack emits candidates as it gathers; one is enough to prove the path
-    setTimeout(() => this.onicecandidate?.({ candidate: { candidate: `candidate ${this.id}`, sdpMid: '0', sdpMLineIndex: 0 } }), 0);
-  }
-
-  async setRemoteDescription(desc) {
-    this.remoteDescription = { type: desc.type, sdp: desc.sdp };
-  }
-
-  async addIceCandidate(candidate) { this.iceSeen.push(candidate); }
-
-  close() {
-    this.connectionState = 'closed';
-    this.onconnectionstatechange?.({});
-    for (const ch of this.channels) ch.close();
-  }
-}
-
-/** Wires the host's channels to the guest's, and opens them. */
-function pair(hostPc, guestPc) {
-  if (hostPc.connectionState === 'connected' && guestPc.connectionState === 'connected') return;
-  for (const channel of hostPc.channels) {
-    const mirror = new FakeChannel(channel.label, { ordered: channel.ordered });
-    mirror.peer = channel;
-    channel.peer = mirror;
-    guestPc.channels.push(mirror);
-    setTimeout(() => guestPc.ondatachannel?.({ channel: mirror }), 0);
-  }
-  hostPc.connectionState = 'connected';
-  guestPc.connectionState = 'connected';
-  setTimeout(() => {
-    for (const channel of hostPc.channels) {
-      channel.open();
-      channel.peer?.open();
-    }
-    hostPc.onconnectionstatechange?.({});
-    guestPc.onconnectionstatechange?.({});
-  }, 5);
-}
+// Shared with the Net-level suite: a connection that really pairs (offer →
+// answer → channels open → payloads delivered), so the room is exercised rather
+// than stubbed. See tests/fake-rtc.mjs.
+const rtc = createNetwork();
 
 /** One room participant, wired like `net.js` does it. */
 function participant({ id, name, role = 'auto', bus, onMessage = () => {} }) {
@@ -170,7 +67,7 @@ function participant({ id, name, role = 'auto', bus, onMessage = () => {} }) {
     profile: { color: 0xffb347, carColor: 0xd24a2b },
     role,
     signaling: endpoint,
-    createPeer: () => new FakePeerConnection(),
+    createPeer: () => new rtc.RTCPeerConnection(),
     onMessage,
     onPeer: (p) => peers.push(p),
     onLeave: (p) => peers.push({ ...p, left: true }),
@@ -297,11 +194,51 @@ console.log('\nthe host leaving');
   cara.room.close();
 }
 
+console.log('\nwhen the handshake never completes');
+{
+  // A host that announces itself on the topic but whose offers never arrive —
+  // the shape of a symmetric NAT / UDP-blocking carrier. The guest must not sit
+  // on "P2P" forever with an empty map: it has to hand the room to another lane.
+  const statuses = [];
+  const sent = [];
+  const guest = new P2PRoom({
+    room: 'highway-01',
+    selfId: 'p-guest',
+    name: 'Guest',
+    role: 'guest',
+    signaling: { send: (obj) => sent.push(obj), close() {} },
+    createPeer: () => new rtc.RTCPeerConnection(),
+    onStatus: (state, detail) => statuses.push([state, detail || '']),
+    joinEvery: 40,
+    electAfter: 20,
+    openTimeout: 120,
+    connectTimeout: 300,
+  });
+  guest.start();
+  // the ghost host keeps saying hello, so the room looks alive…
+  const ghost = setInterval(() => {
+    guest.handleSignal(hostHello({ room: 'highway-01', from: 'p-ghost', name: 'GHOST', players: 1 }));
+  }, 30);
+  await sleep(120);
+  check('the guest is a guest, waiting', guest.role === 'guest');
+  check('a guest that started without a host adopts the one that announces', guest.hostId === 'p-ghost',
+    JSON.stringify(guest.hostId));
+  check('…and keeps asking to join', sent.filter((m) => m.kind === 'join').length >= 1);
+  check('…not given up yet', !statuses.some(([st, d]) => st === 'error' && /direct connection/.test(d)),
+    statuses.map(([st]) => st).join(','));
+  // …but no offer ever comes, so nothing opens
+  const gaveUp = await waitFor(() => statuses.some(([st, d]) => st === 'error' && /direct connection/.test(d)), 2500);
+  clearInterval(ghost);
+  check('it gives up on a channel that never opens', gaveUp, statuses.map(([st, d]) => `${st}:${d}`).join(' | '));
+  check('…and marks the room lost', guest.lost === true);
+  guest.close();
+}
+
 console.log('\nstats and hygiene');
 {
   const room = new P2PRoom({
     room: 'test', selfId: 'solo', name: 'Solo', signaling: { send: () => {}, close: () => {} },
-    createPeer: () => new FakePeerConnection(), electAfter: 10, helloEvery: 50,
+    createPeer: () => new rtc.RTCPeerConnection(), electAfter: 10, helloEvery: 50,
   });
   room.start();
   await sleep(60);

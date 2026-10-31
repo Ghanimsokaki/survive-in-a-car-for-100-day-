@@ -43,6 +43,10 @@ export class P2PRoom {
     joinEvery = 1600,
     electAfter = 700,
     hostTimeout = 9000,
+    /** how long a peer may sit unopened before the lane is declared dead */
+    openTimeout = 8000,
+    /** how long a guest may wait for *any* working connection before giving up */
+    connectTimeout = 12000,
     maxPeers = MAX_PEERS,
   } = {}) {
     this.room = room;
@@ -65,6 +69,9 @@ export class P2PRoom {
     this.joinEvery = joinEvery;
     this.electAfter = electAfter;
     this.hostTimeout = hostTimeout;
+    this.openTimeout = openTimeout;
+    this.connectTimeout = connectTimeout;
+    this.joiningSince = 0;            // when this guest started waiting for a channel
 
     this.role = role === 'host' || role === 'guest' ? role : '';
     this.hostId = role === 'host' ? selfId : '';
@@ -128,11 +135,44 @@ export class P2PRoom {
   }
 
   watch() {
-    if (this.closed || this.role !== 'guest' || !this.hostId) return;
-    if (this.now() - this.lastHostSeen <= this.hostTimeout) return;
+    if (this.closed) return;
+    const at = this.now();
+
+    // A peer that never opens is not "connecting", it is dead: a symmetric NAT,
+    // a carrier that blocks UDP, or an ICE handshake that came back with nothing
+    // usable. Without this the guest would sit on `P2P` forever with an empty
+    // map while the faster lanes stayed dark — which is exactly what "the game
+    // never loads the other players" looks like.
+    for (const peer of [...this.peers.values()]) {
+      if (peer.opened) continue;
+      if (at - (peer.since ?? peer.lastSeen ?? at) <= this.openTimeout) continue;
+      if (this.role === 'host') {
+        this.destroyPeer(peer, 'never_opened');       // the room itself is fine
+        continue;
+      }
+      this.destroyPeer(peer, 'never_opened');
+      this.lost = true;
+      this.onStatus?.('error', 'no direct connection — the networks block peer-to-peer');
+      this.onHostChange?.(null);
+      return;
+    }
+
+    if (this.role !== 'guest' || !this.hostId) return;
+
+    // Still nothing open after the grace window? The host may be announcing
+    // happily while its offers never arrive, or its ICE never completes. Either
+    // way the guest is stuck on a lane that will not carry play, so hand over.
+    const anyOpen = [...this.peers.values()].some((p) => p.opened);
+    if (!anyOpen && this.joiningSince && at - this.joiningSince > this.connectTimeout) {
+      this.lost = true;
+      this.onStatus?.('error', 'no direct connection — the networks block peer-to-peer');
+      this.onHostChange?.(null);
+      return;
+    }
+
+    if (at - this.lastHostSeen <= this.hostTimeout) return;
     // the host stopped announcing *and* the channel is down: the room is gone
-    const open = [...this.peers.values()].some((p) => p.opened);
-    if (open) return;
+    if ([...this.peers.values()].some((p) => p.opened)) return;
     this.lost = true;
     this.onStatus?.('error', 'the host left the room');
     this.onHostChange?.(null);
@@ -236,6 +276,7 @@ export class P2PRoom {
         // an election that had not started yet, or a guest waiting to be let in
         clearTimeout(this.electTimer);
         this.role = 'guest';
+        this.joiningSince = this.now();
         this.hostId = raw.from;
         this.hostName = raw.name || 'HOST';
         this.onStatus?.('joining', `host ${this.hostName} · room ${this.room}`);
@@ -243,12 +284,23 @@ export class P2PRoom {
         this.requestJoin(true);
         return;
       }
-      if (raw.from !== this.hostId) {
+      if (!this.hostId) {
+        // A player who joined with `role: 'guest'` (or one whose host just left)
+        // has no host to compare against — adopt this one instead of asking
+        // `keepsHostship()` to compare against an empty id, which "wins" and
+        // left the guest waiting forever for a room it had already found.
+        this.hostId = raw.from;
+        this.hostName = raw.name || 'HOST';
+        this.lost = false;
+        this.joiningSince = this.now();
+      } else if (raw.from !== this.hostId) {
         // a different host appeared: two of them both answered us — trust the
         // lower id, which is the same rule the hosts use between themselves
         if (keepsHostship(this.hostId, raw.from)) return;
         this.hostId = raw.from;
         this.hostName = raw.name || 'HOST';
+        this.lost = false;
+        this.joiningSince = this.now();
       }
       this.players = raw.players;
       this.day = raw.day;
@@ -299,6 +351,7 @@ export class P2PRoom {
   /** Two players claimed the same code: this one stands down and joins instead. */
   yieldHostship(hello) {
     this.role = 'guest';
+    this.joiningSince = this.now();
     this.hostId = hello.from;
     this.hostName = hello.name || 'HOST';
     this.day = hello.day || this.day;
@@ -329,7 +382,7 @@ export class P2PRoom {
     }
     const peer = {
       id: peerId, name: String(name || 'SURVIVOR').toUpperCase(), color, carColor,
-      pc, state: null, control: null, opened: false, lastSeen: this.now(), host: false,
+      pc, state: null, control: null, opened: false, lastSeen: this.now(), since: this.now(), host: false,
     };
     this.peers.set(peerId, peer);
 
@@ -376,7 +429,10 @@ export class P2PRoom {
     if (!peer) {
       let pc;
       try { pc = this.createPeer(); } catch { this.onStatus?.('error', 'this browser cannot open a peer connection'); return; }
-      peer = { id: hostId, name: this.hostName || 'HOST', color: 0xffb347, carColor: 0xd24a2b, pc, state: null, control: null, opened: false, lastSeen: this.now(), host: true };
+      peer = {
+        id: hostId, name: this.hostName || 'HOST', color: 0xffb347, carColor: 0xd24a2b,
+        pc, state: null, control: null, opened: false, lastSeen: this.now(), since: this.now(), host: true,
+      };
       this.peers.set(hostId, peer);
       pc.onicecandidate = (ev) => {
         if (ev?.candidate) this.sendSignal(iceSignal({ room: this.room, from: this.selfId, to: hostId, candidate: ev.candidate }));
@@ -552,7 +608,7 @@ export class P2PRoom {
       role: this.role || 'electing',
       host: this.hostId || '',
       hostName: this.hostName || '',
-      players: this.peers.size + (this.role === 'host' ? 1 : 1),
+      players: this.peers.size + 1,               // us, plus everyone connected
       peers: [...this.peers.values()].map((p) => ({
         id: p.id, name: p.name, opened: p.opened, host: Boolean(p.host),
       })),
