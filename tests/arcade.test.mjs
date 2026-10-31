@@ -243,8 +243,25 @@ console.log('\narcade shell');
   arc.launch('test-game');
   check('a community game opens in the frame', arc.playing?.id === 'test-game');
   check('the frame points at the game folder',
-    String(arc.nodes.frame.src).startsWith('./games/test-game/index.html'),
+    String(arc.nodes.frame.src).startsWith('./games/test-game/?g=test-game'),
     String(arc.nodes.frame.src));
+
+  // No loading copy, and the stall timer is armed rather than a spinner.
+  check('opening a game shows no loading text', arc.nodes.playerStatus.textContent === '',
+    JSON.stringify(arc.nodes.playerStatus.textContent));
+  check('a stall timer is armed for a game that never speaks', Boolean(arc.stallTimer));
+
+  // A game that fails must be able to SAY so — the hub shows its words and stops
+  // calling it a stall, which is the difference between "it broke" and silence.
+  await arc.onMessage({ data: { channel: BRIDGE, type: 'arcade:state', payload: { status: 'GAME ERROR - fleet.js' } } });
+  check('a game can report its own failure', arc.nodes.playerStatus.textContent === 'GAME ERROR - FLEET.JS',
+    arc.nodes.playerStatus.textContent);
+  check('…and that counts as having spoken', arc.heardAt > 0);
+
+  // and a healthy game goes LIVE
+  await arc.onMessage({ data: { channel: BRIDGE, type: 'arcade:ready' } });
+  check('a ready game is announced as LIVE', arc.nodes.playerStatus.textContent === 'LIVE',
+    arc.nodes.playerStatus.textContent);
 
   await arc.onMessage({ data: { channel: BRIDGE, type: 'arcade:score', payload: { score: 777, day: 4 } } });
   check('a score from the frame is stored', arc.stats.plays('test-game') === 1 && arc.lastScore.score === 777);

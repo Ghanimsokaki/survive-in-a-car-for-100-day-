@@ -99,7 +99,16 @@ Point the deployed game at it in one of two ways:
 Either way the client probes `/health`, sees `engine: "socket.io"`, and the HUD reads **SOCKET.IO**. If the
 server is asleep or unreachable, the next lane (Supabase Realtime) takes over without an error screen.
 
-## 7. Known limits on Vercel
+## 7. Game URLs (`cleanUrls`)
+
+`vercel.json` sets `cleanUrls: true` and `trailingSlash: false`, so a community game is served at
+`/games/<id>` — **without** a trailing slash — and `/games/<id>/index.html` 308-redirects there. A document
+served at that URL resolves its own relative `<script src="game.js">` against one directory too high, which
+is a 404 and a game that never starts. Every game therefore pins its `<base>` with the inline `pinBase()`
+block from `games/_template/index.html`: copy that block when you add a game, and the page works on Vercel,
+on `node server.js` (which keeps the slash) and under a sub-path deploy alike.
+
+## 8. Known limits on Vercel
 
 * **No WebSockets** in serverless functions → online play uses Supabase Realtime directly, or the polling
   relay (`/api/room`) at roughly 3 updates/second when Supabase is not configured. Both are fine for a

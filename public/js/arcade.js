@@ -241,6 +241,7 @@ export class Arcade {
     this.frame = null;
     this.lastScore = null;
     this.readyAt = 0;
+    this.heardAt = 0;
     this.stallTimer = null;
     this.onMessage = this.onMessage.bind(this);
     this.build();
@@ -697,14 +698,23 @@ export class Arcade {
     // no loading copy anywhere: the frame simply fades in when the game says it
     // is ready (arcade:ready), and until then the bar shows the game's name
     this.nodes.playerStatus.textContent = '';
-    // relative URL: the iframe is same-path but sandboxed without same-origin,
-    // so it can render our files yet cannot read our DOM, storage or session
-    const url = `./${game.path}/${game.entry}?g=${encodeURIComponent(game.id)}`;
+    // Relative URL: the iframe is same-path but sandboxed without same-origin, so
+    // it can render our files yet cannot read our DOM, storage or session.
+    // A directory URL (`…/iron-tide/`) is the stable form: hosts that clean URLs
+    // turn `…/index.html` into `…/iron-tide` — with no trailing slash — and the
+    // game's own relative `<script src="fleet.js">` then resolves one level too
+    // high and 404s. Games can pin their base (Iron Tide does), but asking the
+    // directory costs nothing and avoids the redirect on every other host.
+    const folder = String(game.path || `games/${game.id}`).replace(/^\.?\//, '').replace(/\/+$/, '');
+    const entry = String(game.entry || 'index.html').replace(/^\.?\//, '');
+    const file = !entry || entry === 'index.html' ? '' : entry;
+    const url = `./${folder}/${file}?g=${encodeURIComponent(game.id)}`;
     // one navigation, not two: setting the same URL through both the property
     // and the attribute makes some browsers fetch the game twice, which is a
     // needless delay before the first frame
     this.nodes.frame.src = url;
     this.readyAt = 0;
+    this.heardAt = 0;
     setTimeout(() => {
       if (this.playing?.id === game.id) this.postInit();
     }, 900);
@@ -713,7 +723,8 @@ export class Arcade {
     // screen. This is an error message, not a spinner.
     clearTimeout(this.stallTimer);
     this.stallTimer = setTimeout(() => {
-      if (this.playing?.id !== game.id || this.readyAt) return;
+      // a game that has said *anything* is running — keep its own message
+      if (this.playing?.id !== game.id || this.readyAt || this.heardAt) return;
       this.nodes.playerStatus.textContent = 'GAME DID NOT START';
     }, 8000);
   }
@@ -763,6 +774,7 @@ export class Arcade {
     }
     if (msg.type === 'arcade:close') { this.closeGame(); return; }
     if (msg.type === 'arcade:state') {
+      this.heardAt = Date.now();
       this.nodes.playerStatus.textContent = msg.payload.status
         || (msg.payload.day ? `DAY ${msg.payload.day}` : `SCORE ${msg.payload.score}`);
       return;
