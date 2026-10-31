@@ -1,8 +1,10 @@
-# GEMBY GAMES — 100 Days Outrun & Iron Tide
+# GEMBY GAMES — 100 Days Outrun, Iron Tide & Star Battle
 
-**Gemby Games** is a **3D multiplayer arcade for phones**, and the shelf carries two games: the flagship
+**Gemby Games** is a **3D multiplayer arcade for phones**, and the shelf carries three games: the flagship
 **100 Days Outrun** — one rig, one hundred days, a highway that throws scavengers, raider cars, acid rain and
-Category 5 hypercanes at you the whole way — and **Iron Tide**, the ship builder and fleet battle.
+Category 5 hypercanes at you the whole way — **Iron Tide**, the ship builder and fleet battle, and
+**Star Battle**, where you fly the **U.S.S. Enterprise-E (NCC-1701-E)** against the **Narada** and the
+**Vengeance**.
 
 Roblox-style **username + password sign-in**, a **friends list with live presence**, full **phone support**,
 real-time rooms of 1–8, and a game that runs on plain Node or on **Vercel**.
@@ -95,6 +97,7 @@ game and a star rating you can change any time.
 | --- | --- |
 | **100 DAYS OUTRUN** | the built-in 3D game — *one* game with **five modes** (100 Days · Endless Road · Siege · Fuel Run · Storm Chaser), chosen in the lobby. Its modes are printed on the card, so it reads as one game with a lot inside it, not five downloads. |
 | **IRON TIDE** | the ship builder / fleet battle: build a hull, buy jets, sink other captains. |
+| **STAR BATTLE** | the starship duel: the Enterprise-E against Nero's Narada and Khan's Vengeance, wave after wave. |
 
 The shelf is generated from `games/index.json` (see `scripts/scan-games.mjs`), so it is still a platform:
 add `games/<slug>/` in a pull request and it appears once merged. The five older sample games
@@ -115,6 +118,24 @@ Build the ship, then take it to war.
 * **Sortie** — sail against a fleet of other captains (AI). Steering with the stick, fire broadsides,
   launch jets, and retreat when the hull bar turns red. Sinking ships and surviving the sortie pays
   credits and salvage, and every run is scored into the arcade leaderboard.
+
+### 🖖 Star Battle (starship duel)
+
+One starship, endless waves, on a phone.
+
+* **The player's side is the Enterprise** — the **U.S.S. Enterprise-E, NCC-1701-E**, with
+  **460 hull and 520 shields** that regenerate once the hits stop. Phasers, four quantum torpedoes and an
+  evasive pattern that buys you half a second of doubled thrust.
+* **The enemies are the film ships** — **Nero's Narada**, a mining rig with **900 hull and no shields** that
+  throws torpedo volleys, and **Khan's Vengeance**, a dreadnought with **640 hull and 220 shields** that fires
+  phasers on the move. Wave 1 is a lone Narada; after that every wave is bigger, and then the ships themselves
+  get tougher (capped, so late waves stay beatable).
+* **Controls** — drag the left side for the stick, tap **FIRE** on the right, **TORPEDO** for a quantum
+  spread, **EVADE** to break a lock; keyboard players get WASD/arrows, `Space` to fire, `Shift` for a
+  torpedo and `E` to evade.
+* **The models are one function wide** — the ships are drawn as vector art in `games/star-battle/game.js`
+  by `drawEnterprise`, `drawNarada` and `drawVengeance`, reached through `drawShip(id, …)`. Drop real
+  models in by replacing those three functions; the rules in `ships.js` do not care how a ship is painted.
 
 ### Add your own game (pull request)
 

@@ -353,13 +353,14 @@ console.log('\nno loading screens');
 }
 
 // --------------------------------------------------------- the two-game shelf
-console.log('\ntwo games, many modes');
+console.log('\nthree games, many modes');
 {
   const { scanGames } = await import('../scripts/scan-games.mjs');
   const { catalogue } = await scanGames(path.join(root, 'games'));
-  check('exactly one community game is live', catalogue.count === 1,
+  check('two community games are live', catalogue.count === 2,
     catalogue.games.map((g) => g.id).join(','));
-  check('it is Iron Tide', catalogue.games[0].id === 'iron-tide');
+  check('they are Iron Tide and Star Battle',
+    catalogue.games[0].id === 'iron-tide' && catalogue.games[1].id === 'star-battle');
   check('the parked games are not scanned',
     !catalogue.games.some((g) => ['last-convoy', 'radio-tower', 'pit-stop-scan', 'scrapyard-run', 'signal-lost']
       .includes(g.id)));
@@ -375,16 +376,21 @@ console.log('\ntwo games, many modes');
   check('the mode count is exported', arcade.NATIVE_MODE_COUNT === native.modes.length);
 
   const shelf = arcade.mergeCatalogues(arcade.NATIVE_GAMES, catalogue);
-  check('the shelf holds exactly two games', shelf.length === 2, shelf.map((g) => g.title).join(' + '));
+  check('the shelf holds exactly three games', shelf.length === 3, shelf.map((g) => g.title).join(' + '));
   check('the built-in game is on the shelf', shelf.some((g) => g.id === 'outrun'));
   check('Iron Tide is on the shelf', shelf.some((g) => g.id === 'iron-tide'));
+  check('Star Battle is on the shelf', shelf.some((g) => g.id === 'star-battle'));
+  check('a newcomer does not jump the built-in game', shelf[0].id === 'outrun', shelf.map((g) => g.id).join(' → '));
 
   const card = arcade.cardHtml(native, null);
   check('its card shows the modes', /gc-modes/.test(card) && /100 DAYS/.test(card));
   check('a community card has no mode strip', !/gc-modes/.test(arcade.cardHtml(shelf.find((g) => g.id === 'iron-tide'), null)));
 
   const index = JSON.parse(await readFile(path.join(root, 'games', 'index.json'), 'utf8'));
-  check('the generated catalogue matches', index.count === 1 && index.games[0].id === 'iron-tide');
+  check('the generated catalogue matches',
+    index.count === catalogue.count &&
+    JSON.stringify(index.games.map((g) => g.id)) === JSON.stringify(catalogue.games.map((g) => g.id)),
+    index.games.map((g) => g.id).join(','));
 
   const build = await readFile(path.join(root, 'scripts', 'build.mjs'), 'utf8');
   check('the build does not ship parked folders', /entry === '_parked'/.test(build)

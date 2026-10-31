@@ -32,6 +32,7 @@ const suites = [
   ['graphics.test.mjs', 'GRAPHICS TIERS + FULLSCREEN'],
   ['iron-tide-water.test.mjs', 'IRON TIDE — WATER PHYSICS'],
   ['iron-tide-boot.test.mjs', 'IRON TIDE — FAST BOOT + DOCK'],
+  ['star-battle.test.mjs', 'STAR BATTLE — SHIPS, WAVES + THE FIGHT'],
   ['player-profile.test.mjs', 'ACCOUNT PICTURE + SETTINGS'],
   ['p2p.test.mjs', 'P2P PROTOCOL (WEBRTC)'],
   ['p2p-e2e.test.mjs', 'P2P ROOMS — HOST + GUESTS'],

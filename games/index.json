@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "generatedAt": "2026-10-31T00:11:03.983Z",
-  "count": 1,
+  "generatedAt": "2026-10-31T12:32:01.560Z",
+  "count": 2,
   "games": [
     {
       "id": "iron-tide",
@@ -21,8 +21,29 @@
       "players": "1",
       "featured": true,
       "files": 6,
-      "bytes": 90530,
+      "bytes": 91822,
       "path": "games/iron-tide"
+    },
+    {
+      "id": "star-battle",
+      "title": "STAR BATTLE",
+      "author": "ghanimz",
+      "blurb": "Fly the Enterprise-E against the Narada and the Vengeance: phasers, quantum torpedoes and evasive patterns, wave after wave.",
+      "version": "1.0.0",
+      "entry": "index.html",
+      "icon": "icon.svg",
+      "tags": [
+        "space",
+        "shooter",
+        "pve",
+        "arcade"
+      ],
+      "accent": "#38c8ff",
+      "players": "1",
+      "featured": true,
+      "files": 5,
+      "bytes": 61121,
+      "path": "games/star-battle"
     }
   ]
 }
