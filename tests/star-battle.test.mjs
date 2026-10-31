@@ -16,7 +16,7 @@
  * the shared loader in `tests/game-page.mjs`) — the same loader that catches a
  * game which forgets its `<base>` pin.
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import vm from 'node:vm';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -163,7 +163,12 @@ let bootError = null;
   });
   canvas.getContext = () => recording;
 
-  const files = ['games/_shared/sdk.js', 'games/star-battle/ships.js', 'games/star-battle/game.js'];
+  const files = [
+    'games/_shared/sdk.js',
+    'games/star-battle/ships.js',
+    'games/star-battle/art.js',
+    'games/star-battle/game.js',
+  ];
   for (const file of files) {
     try {
       vm.runInThisContext(read(file), { filename: file });
@@ -175,7 +180,7 @@ let bootError = null;
   it = globalThis.window.__starBattle;
 }
 
-check('every script parsed and ran', bootError === null, bootError || 'sdk.js, ships.js, game.js');
+check('every script parsed and ran', bootError === null, bootError || 'sdk.js, ships.js, art.js, game.js');
 check('the hub was told the game is up',
   posted.some((m) => m?.type === 'arcade:ready'), posted.map((m) => m?.type).join(', '));
 check('…with the page title',
@@ -284,6 +289,30 @@ console.log('\nthe fight');
     `${it.run.kills} kills`);
 }
 
+/* --------------------------------------------------------------- pause */
+console.log('\nthe sector waits when you do');
+{
+  it.start();
+  it.spawnWave();
+  const t0 = it.run.seconds;
+  const x0 = it.run.ship.x;
+  it.pause(true);
+  check('the game can be paused', it.paused === true);
+  it.input.thrust = 1;
+  for (let i = 0; i < 120; i++) it.tick(1 / 60);
+  check('the clock stops', it.run.seconds === t0, `${(it.run.seconds - t0).toFixed(2)}s`);
+  check('…and so does the ship', it.run.ship.x === x0, String(Math.round(it.run.ship.x)));
+  it.pause(false);
+  check('resuming restarts the clock', it.paused === false);
+  it.input.thrust = 0;
+  it.tick(1 / 60);
+  check('…from where it stopped', it.run.seconds > t0);
+  it.pause(true);
+  it.over();
+  check('a finished run is never paused', it.paused === false && it.screen === 'over');
+  it.title();
+}
+
 /* -------------------------------------------------------- the sim survives */
 console.log('\nhundreds of ticks, with the frame loop drawing each one');
 {
@@ -373,6 +402,52 @@ console.log('\nlosing the ship ends the run, and the arcade hears about it');
   check('the best score survived a throwing localStorage', typeof it.best === 'number');
 }
 
+/* ------------------------------------------------------------ the art */
+console.log('\nthe baked ship atlas: heading, fallback, and a real drawImage');
+{
+  const art = globalThis.window.StarArt;
+  check('art.js exposes the renderer', Boolean(art && typeof art.drawShip === 'function'));
+  check('with no image decoded, the game keeps its vector ships', art.ready('player') === false);
+
+  // a heading snaps to a 32-step turntable the same way both ways round
+  check('heading 0 is cell 0', art.headingIndex(0) === 0);
+  check('a quarter turn is 8 cells', art.headingIndex(Math.PI / 2) === 8);
+  check('it wraps instead of going negative', art.headingIndex(-Math.PI / 2) === 24);
+  check('a full turn comes back to the start', art.headingIndex(Math.PI * 2) === 0);
+
+  // pretend the atlas landed: a 1280×640 sheet of 160 px cells
+  const calls = [];
+  const fakeCtx = {
+    save() {}, restore() {}, translate() {}, rotate() {}, scale() {},
+    beginPath() {}, arc() {}, fill() {}, set globalAlpha(v) {}, get globalAlpha() { return 1; },
+    set globalCompositeOperation(v) {}, get globalCompositeOperation() { return 'source-over'; },
+    set fillStyle(v) {}, get fillStyle() { return '#000'; },
+    createRadialGradient: () => ({ addColorStop() {} }),
+    drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh) { calls.push({ sx, sy, sw, dx, dy, dw }); },
+  };
+  art._install('player', { width: 1280, height: 640 }, { tier: 'high', cell: 160 });
+  check('the atlas is now ready', art.ready('player') === true && art.isHigh('player'));
+  const drew = art.drawShip(fakeCtx, 'player', 10, 20, 0, 96, { glow: 0.8 });
+  check('a ship is drawn from the atlas', drew === true && calls.length === 1);
+  check('…from the cell that matches its heading', calls[0].sx === 0 && calls[0].sy === 0, JSON.stringify(calls[0]));
+  calls.length = 0;
+  art.drawShip(fakeCtx, 'player', 0, 0, Math.PI / 16, 96);      // one cell
+  check('…and the next heading is the next cell',
+    calls[0]?.sx === 160 && calls[0]?.sy === 0, JSON.stringify(calls[0]));
+  calls.length = 0;
+  art.drawShip(fakeCtx, 'player', 0, 0, Math.PI / 2, 96);       // 8 cells on
+  check('…a quarter turn is the second row (8 columns)',
+    calls[0]?.sx === 0 && calls[0]?.sy === 160, JSON.stringify(calls[0]));
+  calls.length = 0;
+  art.drawShip(fakeCtx, 'player', 0, 0, Math.PI, 96);
+  check('…half a turn is the second row', calls[0]?.sx === 0 && calls[0]?.sy === 320, JSON.stringify(calls[0]));
+
+  check('a ship with no atlas says so instead of drawing nothing',
+    art.drawShip(fakeCtx, 'narada', 0, 0, 0, 96) === false);
+  art._install('narada', { width: 1280, height: 640 }, { tier: 'low', cell: 96 });
+  check('…and draws once it lands', art.drawShip(fakeCtx, 'narada', 0, 0, 0, 96) === true);
+}
+
 /* ------------------------------------------------------------ the files */
 console.log('\nthe game is a folder the hub can serve');
 {
@@ -389,9 +464,26 @@ console.log('\nthe game is a folder the hub can serve');
   check('the manifest names the folder it lives in',
     manifest.id === 'star-battle' && manifest.entry === 'index.html' && manifest.icon === 'icon.svg');
   check('the icon ships with it', read('games/star-battle/icon.svg').includes('<svg'));
-  check('the ships are drawn from vector art, with one dispatcher to replace',
-    /function drawShip\(id,/.test(game) && /function drawEnterprise\(/.test(game) &&
-    /function drawNarada\(/.test(game) && /function drawVengeance\(/.test(game));
+  check('one dispatcher decides how every ship is drawn',
+    /function drawShip\(id,/.test(game) && /ART\.drawShip\(/.test(game));
+  check('the vector art is still there as the offline fallback',
+    /function drawEnterprise\(/.test(game) && /function drawNarada\(/.test(game) &&
+    /function drawVengeance\(/.test(game));
+  check('the baked turntables ship with the game',
+    /ships-player-high\.png/.test(read('games/star-battle/art/ships.json')) &&
+    /ships-narada-high\.png/.test(read('games/star-battle/art/ships.json')));
+  const art = read('games/star-battle/art/ships.json');
+  const meta = JSON.parse(art);
+  check('the atlas is 32 headings × 3 liveries',
+    meta.angles === 32 && meta.cols * meta.rows === 32 &&
+    ['player', 'narada', 'vengeance'].every((k) => meta.liveries[k]), Object.keys(meta.liveries).join(', '));
+  check('…and it is baked from the model in the repo', meta.source === 'model.fbx', meta.source);
+  for (const [id, livery] of Object.entries(meta.liveries)) {
+    for (const [tier, file] of Object.entries(livery.files)) {
+      const size = statSync(path.join(root, 'games', 'star-battle', 'art', file)).size;
+      check(`${id} ${tier} atlas is a real image`, size > 20000 && size < 2_000_000, `${Math.round(size / 1024)} KB`);
+    }
+  }
   check('the canvas is phone-sized, not a desktop window',
     /viewport/.test(html) && /touch-action/.test(html));
 }

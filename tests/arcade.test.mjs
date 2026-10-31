@@ -14,7 +14,7 @@ const {
   NATIVE_GAMES, mergeCatalogues, filterGames, cardHtml, validateBridgeMessage, BRIDGE, escapeHtml, Arcade,
 } = await import('./app/js/arcade.js');
 const {
-  ArcadeStats, addRating, rankRuns, ratingLabel, normalizeStats,
+  ArcadeStats, addRating, rankRuns, ratingLabel, normalizeStats, BOARD_TTL_MS,
 } = await import('./app/js/arcade-stats.js');
 
 const problems = [];
@@ -279,6 +279,105 @@ console.log('\narcade shell');
   arc.stats.clearLocal();
   arc.destroy();
   check('destroy removes the shell', true);
+}
+
+// ------------------------------------------- the Supabase board, once a minute
+console.log('\nthe leaderboard is fetched once and then reused');
+{
+  // a stand-in Supabase: counts the calls and answers with three runs
+  const calls = [];
+  const account = {
+    sb: {
+      url: 'https://demo.supabase.co', key: 'anon',
+      async select(table, query) {
+        calls.push(`${table}?${query}`);
+        if (table !== 'game_runs') return [];
+        return [
+          { score: 4200, meta: 'GHANIMZ', created_at: '2026-10-31T10:00:00Z' },
+          { score: 3100, meta: 'NERO', created_at: '2026-10-31T09:00:00Z' },
+          { score: 900, meta: 'KHAN', created_at: '2026-10-31T08:00:00Z' },
+        ];
+      },
+    },
+  };
+  let clock = 1_000_000;
+  const stats = new ArcadeStats({ account, storage: null, now: () => clock });
+
+  const first = await stats.topRuns('star-battle', 5);
+  check('the board comes from Supabase', first.length === 3 && first[0].score === 4200,
+    first.map((r) => `${r.name}:${r.score}`).join(' '));
+  check('…best first', first[0].score >= first[1].score && first[1].score >= first[2].score);
+  check('it asked once', calls.length === 1, calls[0]);
+  check('the query is the cheap one (score desc, limited)',
+    /order=score\.desc/.test(calls[0]) && /limit=5/.test(calls[0]), calls[0]);
+
+  // a second read inside the TTL is free
+  const second = await stats.topRuns('star-battle', 5);
+  check('a second read inside the minute costs nothing', calls.length === 1 && second.length === 3);
+  check('and it is the same answer', second[0].score === first[0].score);
+
+  // after the TTL it refetches — once
+  clock += BOARD_TTL_MS + 1;
+  await stats.topRuns('star-battle', 5);
+  check('after the TTL it refetches once', calls.length === 2);
+
+  // prefetch warms several games without a storm of requests
+  const many = new ArcadeStats({ account, storage: null, now: () => clock });
+  await many.prefetch(['iron-tide', 'star-battle', 'outpost'], { concurrency: 2 });
+  check('prefetch asks for each game once', calls.length === 5, `${calls.length - 2} new`);
+  await many.prefetch(['iron-tide', 'star-battle']);
+  check('…and nothing on a second pass', calls.length === 5);
+
+  // failures never take the arcade down
+  const offline = new ArcadeStats({
+    account: { sb: { url: 'https://demo.supabase.co', key: 'anon', select: async () => { throw new Error('offline'); } } },
+    storage: null,
+  });
+  const fallback = await offline.topRuns('star-battle', 5);
+  check('an unreachable Supabase gives an empty board, not a throw', Array.isArray(fallback) && fallback.length === 0);
+  check('…and records why', offline.lastError === 'offline', offline.lastError);
+
+  // no Supabase at all: local runs still work
+  const guest = new ArcadeStats({ storage: null });
+  await guest.submitRun('star-battle', { score: 1234, day: 3 }, 'GUEST');
+  const local = await guest.topRuns('star-battle', 5);
+  check('a guest still sees their own run', local.length === 1 && local[0].score === 1234, JSON.stringify(local));
+  check('…without a server request', guest.requests === 0);
+}
+
+console.log('\nthe hub hands that board to the sandboxed game');
+{
+  const arc = new Arcade({ account: null, getPlayer: () => ({ name: 'GHANIMZ', quality: 'high' }) });
+  const posted = [];
+  arc.nodes.frame = { src: '', contentWindow: { postMessage: (m) => posted.push(m) } };
+  arc.playing = { id: 'star-battle', title: 'STAR BATTLE' };
+  arc.boards.set('star-battle', [{ score: 4200, name: 'GHANIMZ' }, { score: 900, name: 'KHAN' }]);
+  arc.postInit();
+  const init = posted.find((m) => m.type === 'arcade:init');
+  check('init carries the cached board', Array.isArray(init?.payload?.leaderboard)
+    && init.payload.leaderboard.length === 2, JSON.stringify(init?.payload?.leaderboard || null));
+  check('…and the render-quality hint', init?.payload?.quality === 'high', init?.payload?.quality);
+  check('…and the player', init?.payload?.player?.name === 'GHANIMZ');
+
+  // opening a card warms that game's board, and the result of that warming is
+  // what `postInit` then hands to the frame
+  arc.stats = new ArcadeStats({
+    account: {
+      sb: {
+        url: 'https://demo.supabase.co', key: 'anon',
+        async select() { return [{ score: 5150, meta: 'KIRK', created_at: '2026-10-31T12:00:00Z' }]; },
+      },
+    },
+    storage: null,
+  });
+  arc.boards.clear();
+  await arc.loadBoard('star-battle');
+  posted.length = 0;
+  arc.postInit();
+  const init2 = posted.find((m) => m.type === 'arcade:init');
+  check('an opened game gets a freshly warmed board',
+    init2?.payload?.leaderboard?.[0]?.score === 5150, JSON.stringify(init2?.payload?.leaderboard || null));
+  arc.destroy();
 }
 
 process.exit(problems.length ? 1 : 0);

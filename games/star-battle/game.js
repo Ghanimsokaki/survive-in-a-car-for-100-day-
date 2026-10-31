@@ -17,6 +17,8 @@
   'use strict';
 
   const R = window.StarShips;
+  /** The baked turntables (`art.js`); null when the page has no ship atlas. */
+  const ART = window.StarArt || null;
   /** The hub SDK; a stand-in if the page is opened directly (file://, devtools). */
   const sdk = (typeof window !== 'undefined' && window.Arcade) || {
     ready() {}, state() {}, score() {}, close() {}, fit(canvas, dpr = 1) {
@@ -49,12 +51,21 @@
   let nebula = [];
   let waveTimer = 0;           // counts down to the next wave
   let sectorWarn = 0;          // so the boundary message is not spammed
+  let paused = false;          // the player, the hub, or a hidden tab
   let bannerTimer = 0;
   let shake = 0;
   let cam = { x: 0, y: 0 };
   let best = 0;
   let now = 0;                 // seconds since boot, for animation
   let lastStatus = 0;
+  let flashLevel = 0;          // white flash on a big kill / hit
+  let hitMarker = 0;           // seconds left on the "you hit it" cross
+  let damageLevel = 0;         // red vignette, follows the hull bar
+  let quality = 'auto';        // the hub's hint: low | medium | high | auto
+  let dprCap = 2;              // lowered by the watchdog when frames get slow
+  let frames = 0, fps = 60, fpsTimer = 0, slowStreak = 0;
+  const perf = { frames: 0, dropped: 0, dpr: 2, ui: 'high' };
+  let board = null;            // Supabase leaderboard from the hub, when sent
 
   /* ------------------------------------------------------------------ input */
   const input = {
@@ -77,9 +88,44 @@
     try { localStorage.setItem('star-battle-best', String(best)); } catch { /* in-memory only */ }
     paintBest();
   }
-  function paintBest() {
+  function paintBest(isNew = false) {
     const el = $('bestLine');
-    if (el) el.textContent = `BEST SCORE — ${best}`;
+    if (el) {
+      // keep the child span (the "NEW BEST" chip) when there is one
+      const chip = el.querySelector ? el.querySelector('.new') : null;
+      el.textContent = `BEST SCORE — ${best}`;
+      if (chip && el.appendChild) el.appendChild(chip);
+      el.classList.toggle('new-best', Boolean(isNew));
+      if (!isNew) setTimeout(() => el.classList.remove('new-best'), 4000);
+    }
+  }
+
+  /* ------------------------------------------------------------- the board
+   * The hub asks Supabase for the top runs when a game is opened (cached, one
+   * request per game per minute) and hands them over with `arcade:init`. The
+   * game only paints them: no key, no second request, no CORS dance inside the
+   * sandboxed frame.
+   */
+  function paintBoard(rows) {
+    if (Array.isArray(rows)) board = rows;
+    const list = $('boardList');
+    if (!list) return;
+    const rows2 = Array.isArray(board) ? board.slice(0, 5) : [];
+    if (!rows2.length) {
+      if (list.innerHTML !== undefined) list.innerHTML = '<li class="empty">NO RUNS LOGGED YET — BE THE FIRST</li>';
+      return;
+    }
+    const name = String((sdk.player && sdk.player.name) || '').toUpperCase();
+    const items = rows2.map((row, i) => {
+      const who = String(row.name || row.meta || 'PILOT').toUpperCase().slice(0, 10);
+      const mine = name && (row.name || '').toUpperCase() === name;
+      const score = Math.round(Number(row.score) || 0);
+      return `<li class="${mine ? 'you' : ''}"><span class="rank">${i + 1}</span>`
+        + `<span>${who}</span><b>${score.toLocaleString ? score.toLocaleString('en-US') : score}</b></li>`;
+    });
+    if (list.innerHTML !== undefined) list.innerHTML = items.join('');
+    const tag = $('boardTag');
+    if (tag) tag.textContent = `TOP ${rows2.length}`;
   }
 
   /* ------------------------------------------------------------------ stars */
@@ -336,20 +382,69 @@
     g.restore();
   }
 
-  /** Dispatches by ship id; `glow` 0…1 is the engine/weapon brightness. */
+  /**
+   * Dispatches by ship id; `glow` 0…1 is the engine/weapon brightness.
+   *
+   * The baked turntable from `model.fbx` is used when it is in memory, and the
+   * vector art below is the fallback — so a slow network, a blocked image or a
+   * headless test still draws a ship instead of a hole in space.
+   */
+  /**
+   * The atlas keys are liveries ('player'), the game's ids are ships
+   * ('enterprise'). One map, in one place — getting this wrong is exactly how
+   * the player's ship kept drawing its fallback art.
+   */
+  const ART_KEY = { enterprise: 'player', narada: 'narada', vengeance: 'vengeance' };
+  const artKey = (id) => ART_KEY[id] || id;
+
   function drawShip(id, g, x, y, facing, scale, glow, damageFrac = 0) {
+    const spec = R.SHIPS[id] || R.SHIPS.enterprise;
+    if (ART) {
+      // the atlas cell already includes the whole hull, so the diameter is the
+      // model's own footprint times the caller's zoom
+      const diameter = spec.radius * 2.5 * scale;
+      if (ART.drawShip(g, artKey(id), x, y, facing, diameter, {
+        glow: clamp(glow, 0, 1),
+        glowColour: engineColour(id, glow),
+        scale: 1,
+      })) return true;
+    }
     if (id === 'narada') return drawNarada(g, x, y, facing, scale, glow, damageFrac);
     if (id === 'vengeance') return drawVengeance(g, x, y, facing, scale, glow, damageFrac);
     return drawEnterprise(g, x, y, facing, scale, glow);
   }
 
+  /** The additive plume behind each ship, matched to its livery. */
+  function engineColour(id, glow) {
+    const a = clamp(0.25 + glow * 0.6, 0, 1).toFixed(2);
+    if (id === 'narada') return `rgba(255,120,60,${a})`;
+    if (id === 'vengeance') return `rgba(255,170,90,${a})`;
+    return `rgba(120,220,255,${a})`;
+  }
+
+  /** Ask for a ship's atlas the first time it is needed (never at boot). */
+  function ensureArt(id) {
+    if (!ART) return;
+    const key = artKey(id);
+    if (ART.isHigh && ART.isHigh(key)) return;
+    // 2× the on-screen footprint is sharp enough on a phone at DPR 2
+    const need = (R.SHIPS[id] || R.SHIPS.enterprise).radius * 2.5 * 2;
+    ART.load(key, { highNeeded: need });
+  }
+
   /* ------------------------------------------------------------------- waves */
-  function banner(text, seconds = 1.6) {
+  /**
+   * A banner carries a headline and, optionally, a quieter sub-line — the
+   * difference between "WAVE 4" and "WAVE 4 / 2 NARADA · 2 VENGEANCE".
+   */
+  function banner(text, seconds = 1.6, sub = '') {
     const el = $('banner');
-    if (el) {
-      el.textContent = String(text).toUpperCase();
-      el.classList.add('show');
-    }
+    const head = $('bannerText');
+    const under = $('bannerSub');
+    if (head) head.textContent = String(text).toUpperCase();
+    else if (el) el.textContent = String(text).toUpperCase();
+    if (under) under.textContent = String(sub || '').toUpperCase();
+    if (el) el.classList.add('show');
     bannerTimer = seconds;
   }
 
@@ -362,6 +457,7 @@
     let slot = 0;
     const add = (id, extra = {}) => {
       const ship = R.SHIPS[id];
+      ensureArt(id);
       const angle = rand() * TAU;
       const point = R.spawnPoint(angle, ring * (0.85 + rand() * 0.3));
       const hpScale = spec.hpScale;
@@ -387,7 +483,9 @@
     for (let i = 0; i < spec.narada; i++) add('narada');
     for (let i = 0; i < spec.vengeance; i++) add('vengeance');
     waveTimer = 0;
-    banner(`WAVE ${run.wave}`, 1.5);
+    const sub = [spec.narada ? `${spec.narada} NARADA` : '', spec.vengeance ? `${spec.vengeance} VENGEANCE` : '']
+      .filter(Boolean).join(' · ');
+    banner(`WAVE ${run.wave}`, 1.5, sub);
     beep(320, 0.12, 0.05);
   }
 
@@ -409,8 +507,13 @@
   }
 
   /* ------------------------------------------------------------- particles */
+  /** The frame budget decides how generous the fireworks are. */
+  const sparkCap = () => (perf.ui === 'low' ? 90 : perf.ui === 'medium' ? 170 : 260);
+
   function burst(x, y, count, colour, speed = 180) {
-    for (let i = 0; i < count && sparks.length < 260; i++) {
+    const budget = sparkCap() - sparks.length;
+    const n = Math.min(count, Math.max(2, Math.round(count * (perf.ui === 'low' ? 0.5 : perf.ui === 'medium' ? 0.75 : 1))));
+    for (let i = 0; i < n && i < budget; i++) {
       const a = Math.random() * TAU;
       const v = speed * (0.35 + Math.random());
       sparks.push({
@@ -424,13 +527,56 @@
     }
   }
 
-  function ring(x, y, colour) {
-    sparks.push({ x, y, vx: 0, vy: 0, life: 0.45, max: 0.45, colour, size: 0, ring: 30 });
+  function ring(x, y, colour, size = 30, life = 0.45) {
+    sparks.push({ x, y, vx: 0, vy: 0, life, max: life, colour, size: 0, ring: size, grow: size * 2.4 });
+  }
+
+  /** A brief white-out: the impact frame of a torpedo or a lost ship. */
+  function flash(amount = 0.35) {
+    flashLevel = Math.max(flashLevel, amount);
+    const el = $('flash');
+    if (el) el.style.opacity = String(Math.min(0.5, amount));
+  }
+
+  /** A cross where the shot landed, so hits are legible at phone size. */
+  function mark() {
+    hitMarker = 0.22;
   }
 
   /* ------------------------------------------------------------- the player */
   const player = () => run.ship;
   const shipSpec = () => R.SHIPS[R.PLAYER_SHIP];
+
+  /**
+   * Pause is a first-class state: the sim stops, the clock stops, and the
+   * overlay is what the player resumes from. A phone that is locked or a tab
+   * that is hidden pauses itself — losing a run because the screen went dark is
+   * not a difficulty setting.
+   */
+  function setPaused(want, { silent = false } = {}) {
+    const next = screen === 'battle' ? Boolean(want) : false;
+    if (next === paused) return paused;
+    paused = next;
+    const el = $('pause');
+    if (el) el.classList.toggle('hidden', !paused);
+    if (paused && !silent) {
+      banner('PAUSED', 0.001);
+      if (el) quietBanner();
+    }
+    input.fire = false;
+    input.torpedo = false;
+    input.evade = false;
+    input.turn = 0;
+    input.thrust = 0;
+    return paused;
+  }
+
+  /** Hide the in-game banner without ending a pause. */
+  function quietBanner() {
+    const el = $('banner');
+    if (el) el.classList.remove('show');
+    bannerTimer = 0;
+  }
 
   function startBattle() {
     run = R.newRun({ seed: (Math.random() * 0xffff) | 0 });
@@ -446,6 +592,14 @@
     $('title').classList.add('hidden');
     $('result').classList.add('hidden');
     $('hud').classList.remove('hidden');
+    paused = false;
+    const pauseEl = $('pause');
+    if (pauseEl) pauseEl.classList.add('hidden');
+    flashLevel = 0;
+    hitMarker = 0;
+    damageLevel = 0;
+    const dmg = $('damageFx');
+    if (dmg) dmg.style.opacity = '0';
     paintHud(true);
     banner('RED ALERT', 1.2);
     beep(180, 0.2, 0.06);
@@ -460,28 +614,43 @@
     if (result.absorbed > 0) ring(x, y, 'rgba(120,210,255,.9)');
     if (result.bleed > 0) burst(x, y, 8, 'rgba(255,190,120,.9)', 150);
     shake = Math.min(14, shake + (4 + result.bleed * 0.05));
-    if (result.shieldsDown) banner('SHIELDS DOWN', 1.2);
+    if (result.shieldsDown) { banner('SHIELDS DOWN', 1.2, 'ROUTE POWER TO THE HULL'); flash(0.18); }
     paintHud();
     if (result.down) endBattle();
   }
 
   function endBattle() {
     if (screen !== 'battle') return;
+    paused = false;
+    const pauseEl = $('pause');
+    if (pauseEl) pauseEl.classList.add('hidden');
     screen = 'over';
     run.screen = 'over';
     $('hud').classList.add('hidden');
     const score = R.scoreOf({
       kills: run.kills, wave: run.wave, seconds: run.seconds, hull: player().hull,
     });
+    const isBest = score > best;
     $('result').classList.remove('hidden');
     $('resultScore').textContent = String(score);
     $('resultWave').textContent = String(run.wave);
     $('resultKills').textContent = String(run.kills);
     $('resultTime').textContent = `${Math.round(run.seconds)}s`;
+    const title = $('resultTitle');
+    if (title) title.textContent = isBest ? 'NEW BEST RUN' : 'SHIP LOST';
+    const text = $('resultText');
+    if (text) {
+      text.textContent = isBest
+        ? 'Starfleet Command has logged the best run in the sector.'
+        : 'The Enterprise is gone. Starfleet will remember the delay you bought.';
+    }
     saveBest(score);
+    paintBest(isBest);
     sdk.score({ score, day: run.wave, seconds: Math.round(run.seconds), meta: `${run.kills} kills` });
     beep(90, 0.5, 0.07);
     burst(player().x, player().y, 60, 'rgba(255,180,120,.9)', 260);
+    ring(player().x, player().y, 'rgba(255,200,150,.8)', 60, 0.9);
+    flash(0.45);
   }
 
   function backToTitle() {
@@ -524,7 +693,8 @@
       x1: s2.x + Math.cos(s2.facing) * 22, y1: s2.y + Math.sin(s2.facing) * 22,
       x2: found ? found.enemy.x : endX,
       y2: found ? found.enemy.y : endY,
-      life: 0.12, colour: found ? 'rgba(255,225,140,.95)' : 'rgba(160,225,255,.55)',
+      life: 0.12, hit: Boolean(found),
+      colour: found ? 'rgba(255,228,150,.98)' : 'rgba(150,215,255,.5)',
     });
     if (!found) { beep(700, 0.03, 0.012); return; }
     const power = R.beamPower(found.dist, range);
@@ -574,10 +744,13 @@
     enemy.shields = result.shields;
     enemy.hull = result.hull;
     enemy.sinceHit = 0;
-    if (result.absorbed > 0) ring(x, y, 'rgba(255,140,120,.7)');
+    mark();
+    if (result.absorbed > 0) ring(x, y, 'rgba(255,140,120,.7)', 22, 0.34);
     if (result.bleed > 0) burst(x, y, 5, 'rgba(255,210,150,.9)', 120);
-    if (result.shieldsDown) ring(x, y, 'rgba(255,120,120,.9)');
+    if (result.shieldsDown) ring(x, y, 'rgba(255,120,120,.9)', 40, 0.5);
     if (result.down) {
+      flash(0.22);
+      ring(x, y, 'rgba(255,180,120,.85)', 70, 0.6);
       run.kills += 1;
       burst(x, y, 46, 'rgba(255,170,110,.95)', 240);
       ring(x, y, 'rgba(255,220,160,.9)');
@@ -784,7 +957,7 @@
       if (bannerTimer <= 0) $('banner')?.classList.remove('show');
     }
 
-    if (screen !== 'battle') return;
+    if (screen !== 'battle' || paused) return;
     run.seconds += dt;
     updatePlayer(dt);
     for (const enemy of [...enemies]) updateEnemy(enemy, dt);
@@ -897,17 +1070,30 @@
   function drawPlayer() {
     const s = player();
     const spec = shipSpec();
+    ensureArt(R.PLAYER_SHIP);
     const speed = Math.hypot(s.vx, s.vy) / spec.speed;
-    const glow = clamp(0.35 + speed * 0.8 + (s.evadeBoost > 0 ? 0.6 : 0), 0, 1);
+    const flicker = 0.9 + Math.sin(now * 18) * 0.06 + Math.sin(now * 7.3) * 0.04;
+    const glow = clamp((0.32 + speed * 0.75 + (s.evadeBoost > 0 ? 0.55 : 0)) * flicker, 0, 1);
+    // warp streak behind the ship when it is really moving
+    if (speed > 0.55) {
+      const len = 26 + speed * 46;
+      const grad = ctx.createLinearGradient(
+        s.x - Math.cos(s.facing) * len, s.y - Math.sin(s.facing) * len, s.x, s.y);
+      grad.addColorStop(0, 'rgba(90,190,255,0)');
+      grad.addColorStop(1, `rgba(140,225,255,${(0.1 + speed * 0.18).toFixed(2)})`);
+      ctx.strokeStyle = grad;
+      ctx.lineWidth = 6 + speed * 6;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(s.x - Math.cos(s.facing) * len, s.y - Math.sin(s.facing) * len);
+      ctx.lineTo(s.x, s.y);
+      ctx.stroke();
+    }
     drawShip(R.PLAYER_SHIP, ctx, s.x, s.y, s.facing, 1.15, glow);
     // shield bubble, brighter the more of it is left
     const frac = s.shieldsMax ? s.shields / s.shieldsMax : 0;
     if (frac > 0.02) {
-      ctx.strokeStyle = `rgba(110,205,255,${(0.12 + frac * 0.16).toFixed(2)})`;
-      ctx.lineWidth = 1.2;
-      ctx.beginPath();
-      ctx.arc(s.x, s.y, spec.radius + 9, 0, TAU);
-      ctx.stroke();
+      drawShieldRing(s.x, s.y, spec.radius + 10, '110,205,255', 0.1 + frac * 0.2, -now * 0.55);
     }
   }
 
@@ -918,14 +1104,10 @@
       const dmgFrac = 1 - enemy.hull / Math.max(1, enemy.hullMax);
       drawShip(enemy.id, ctx, enemy.x, enemy.y, enemy.facing,
         enemy.id === 'narada' ? 1.4 : 1.1, glow, dmgFrac);
-      // shield shimmer for the Vengeance
+      // shield shimmer for the Vengeance: rotating hex plates, not a flat ring
       if (enemy.shields > 0) {
         const frac = enemy.shieldsMax ? enemy.shields / enemy.shieldsMax : 0;
-        ctx.strokeStyle = `rgba(255,140,120,${(0.1 + frac * 0.18).toFixed(2)})`;
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.arc(enemy.x, enemy.y, spec.radius + 8, 0, TAU);
-        ctx.stroke();
+        drawShieldRing(enemy.x, enemy.y, spec.radius + 9, '255,140,120', 0.1 + frac * 0.22, now * 0.6);
       }
       // a thin health bar above each hull, so the fight is readable
       const width = spec.radius * 1.8;
@@ -940,58 +1122,145 @@
     }
   }
 
+  /**
+   * A shield reads as six arcs that rotate and breathe — enough geometry to
+   * say "this is a bubble", cheap enough for a phone.
+   */
+  function drawShieldRing(x, y, radius, rgb, alpha, spin) {
+    if (alpha <= 0.01) return;
+    ctx.save();
+    ctx.strokeStyle = `rgba(${rgb},${alpha.toFixed(2)})`;
+    ctx.lineWidth = 1.6;
+    const plates = 6;
+    const gap = 0.16;
+    for (let i = 0; i < plates; i++) {
+      const a0 = spin + (i / plates) * TAU + gap;
+      const a1 = spin + ((i + 1) / plates) * TAU - gap;
+      ctx.beginPath();
+      ctx.arc(x, y, radius, a0, a1);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
   function drawShots() {
+    // ---------------------------------------------------------- torpedoes
     for (const shot of shots) {
-      if (shot.side === 'player') {
-        const grad = ctx.createRadialGradient(shot.x, shot.y, 0, shot.x, shot.y, 9);
-        grad.addColorStop(0, 'rgba(255,245,200,.95)');
-        grad.addColorStop(1, 'rgba(255,190,90,0)');
-        ctx.fillStyle = grad;
-        ctx.beginPath();
-        ctx.arc(shot.x, shot.y, 9, 0, TAU);
-        ctx.fill();
-        ctx.fillStyle = 'rgba(255,250,225,.95)';
-        ctx.beginPath();
-        ctx.arc(shot.x, shot.y, 2.6, 0, TAU);
-        ctx.fill();
-      } else {
-        const grad = ctx.createRadialGradient(shot.x, shot.y, 0, shot.x, shot.y, 13);
-        grad.addColorStop(0, 'rgba(255,180,120,.95)');
-        grad.addColorStop(1, 'rgba(255,60,40,0)');
-        ctx.fillStyle = grad;
-        ctx.beginPath();
-        ctx.arc(shot.x, shot.y, 13, 0, TAU);
-        ctx.fill();
-      }
+      const team = shot.side === 'player'
+        ? { core: 'rgba(255,252,235,1)', halo: '255,225,150', tail: '255,180,90' }
+        : { core: 'rgba(255,240,220,1)', halo: '255,140,90', tail: '255,70,40' };
+      const r = shot.side === 'player' ? 8 : 12;
+
+      // a short motion trail, so torpedoes read as moving even on a still frame
+      const trail = shot.side === 'player' ? 26 : 34;
+      const back = Math.atan2(shot.vy, shot.vx) + Math.PI;
+      const grad = ctx.createLinearGradient(
+        shot.x, shot.y, shot.x + Math.cos(back) * trail, shot.y + Math.sin(back) * trail);
+      grad.addColorStop(0, `rgba(${team.halo},.55)`);
+      grad.addColorStop(1, `rgba(${team.tail},0)`);
+      ctx.strokeStyle = grad;
+      ctx.lineWidth = shot.side === 'player' ? 5 : 7;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(shot.x, shot.y);
+      ctx.lineTo(shot.x + Math.cos(back) * trail, shot.y + Math.sin(back) * trail);
+      ctx.stroke();
+
+      const glow = ctx.createRadialGradient(shot.x, shot.y, 0, shot.x, shot.y, r * 2.4);
+      glow.addColorStop(0, `rgba(${team.halo},.95)`);
+      glow.addColorStop(0.45, `rgba(${team.tail},.35)`);
+      glow.addColorStop(1, `rgba(${team.tail},0)`);
+      const prev = ctx.globalCompositeOperation;
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(shot.x, shot.y, r * 2.4, 0, TAU);
+      ctx.fill();
+      ctx.globalCompositeOperation = prev;
+
+      ctx.fillStyle = team.core;
+      ctx.beginPath();
+      ctx.arc(shot.x, shot.y, shot.side === 'player' ? 2.6 : 3.4, 0, TAU);
+      ctx.fill();
     }
 
+    // -------------------------------------------------------------- beams
+    // phasers are additive light: a wide soft body with a hot white core
+    const prevOp = ctx.globalCompositeOperation;
+    ctx.globalCompositeOperation = 'lighter';
     for (const beam of beams) {
-      const alpha = clamp(beam.life / 0.12, 0, 1);
+      const t = clamp(beam.life / 0.12, 0, 1);
+      const alpha = t * (0.6 + Math.sin(now * 60) * 0.12);
+      ctx.globalAlpha = Math.max(0, alpha);
       ctx.strokeStyle = beam.colour;
-      ctx.globalAlpha = alpha;
-      ctx.lineWidth = 2.6;
+      ctx.lineCap = 'round';
+      ctx.lineWidth = 7 * t;
+      ctx.globalAlpha = Math.max(0, alpha * 0.35);
       ctx.beginPath();
       ctx.moveTo(beam.x1, beam.y1);
       ctx.lineTo(beam.x2, beam.y2);
       ctx.stroke();
-      ctx.globalAlpha = 1;
+      ctx.globalAlpha = Math.max(0, alpha);
+      ctx.lineWidth = 2.2;
+      ctx.beginPath();
+      ctx.moveTo(beam.x1, beam.y1);
+      ctx.lineTo(beam.x2, beam.y2);
+      ctx.stroke();
+      // impact bloom at the far end
+      if (beam.hit !== false) {
+        const bloom = ctx.createRadialGradient(beam.x2, beam.y2, 0, beam.x2, beam.y2, 16 * t + 4);
+        bloom.addColorStop(0, 'rgba(255,245,200,.85)');
+        bloom.addColorStop(1, 'rgba(255,200,120,0)');
+        ctx.fillStyle = bloom;
+        ctx.beginPath();
+        ctx.arc(beam.x2, beam.y2, 16 * t + 4, 0, TAU);
+        ctx.fill();
+      }
     }
+    ctx.globalCompositeOperation = prevOp;
+    ctx.globalAlpha = 1;
 
+    // ------------------------------------------------------------ sparks
     for (const spark of sparks) {
       const alpha = clamp(spark.life / spark.max, 0, 1);
       if (spark.ring) {
+        const grow = spark.grow || 0;
+        const r = spark.ring + grow * (1 - alpha);
         ctx.strokeStyle = spark.colour;
-        ctx.globalAlpha = alpha * 0.8;
-        ctx.lineWidth = 1.6;
+        ctx.globalAlpha = alpha * 0.85;
+        ctx.lineWidth = 1.4 + alpha * 1.8;
         ctx.beginPath();
-        ctx.arc(spark.x, spark.y, spark.ring, 0, TAU);
+        ctx.arc(spark.x, spark.y, r, 0, TAU);
         ctx.stroke();
       } else {
         ctx.fillStyle = spark.colour;
         ctx.globalAlpha = alpha;
         ctx.fillRect(spark.x, spark.y, spark.size, spark.size);
+        if (spark.size > 1.6) {
+          ctx.globalAlpha = alpha * 0.25;
+          ctx.fillRect(spark.x - spark.size, spark.y - spark.size, spark.size * 3, spark.size * 3);
+        }
       }
       ctx.globalAlpha = 1;
+    }
+
+    // ------------------------------------------------------ the hit marker
+    if (hitMarker > 0) {
+      const a = clamp(hitMarker / 0.22, 0, 1);
+      const target = targetInArc(shipSpec().phaser.arc, shipSpec().phaser.range);
+      if (target) {
+        ctx.strokeStyle = `rgba(255,240,190,${a.toFixed(2)})`;
+        ctx.lineWidth = 1.6;
+        const e = target.enemy;
+        const r = e.radius + 10;
+        for (const [sx, sy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+          ctx.beginPath();
+          ctx.moveTo(e.x + sx * r, e.y + sy * r - sy * 6);
+          ctx.lineTo(e.x + sx * r, e.y + sy * r);
+          ctx.lineTo(e.x + sx * r - sx * 6, e.y + sy * r);
+          ctx.stroke();
+        }
+      }
     }
   }
 
@@ -1001,6 +1270,7 @@
    * top-left corner on every screen — a screenshot showed it at once.
    */
   function drawTitleScene(w, h) {
+    ensureArt(R.PLAYER_SHIP);
     const t = now * 0.35;
     let baseY = Math.max(84, h * 0.28);
     let scale = clamp(Math.min(w, h) / 300, 1.6, 2.6);
@@ -1018,53 +1288,160 @@
         scale = clamp(w / 330, 2, 3.4);
       }
     }
-    drawShip(R.PLAYER_SHIP, ctx, w / 2 + Math.sin(t * 0.7) * Math.min(40, w * 0.08),
-      baseY + Math.cos(t) * 8, -Math.PI / 2 + Math.sin(t * 0.5) * 0.12, scale, 0.75);
+    // the hangar ships turn slowly, nose-first, as if on a display cradle
+    const heading = -Math.PI / 2 + Math.sin(t * 0.5) * 0.55;
+    const x = w / 2 + Math.sin(t * 0.7) * Math.min(40, w * 0.08);
+    const y = baseY + Math.cos(t) * 8;
+    drawShip(R.PLAYER_SHIP, ctx, x, y, heading, scale, 0.45 + Math.sin(t * 1.7) * 0.12);
+    // a soft cradle glow under the hull, so the ship is not floating on black
+    const glow = ctx.createRadialGradient(x, y, 0, x, y, 120 * scale * 0.8);
+    glow.addColorStop(0, 'rgba(60,150,220,.12)');
+    glow.addColorStop(1, 'rgba(20,60,110,0)');
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(x, y, 120 * scale * 0.8, 0, TAU);
+    ctx.fill();
   }
 
+  /**
+   * Paints the HUD. Every element is optional: the DOM is looked up by id and
+   * skipped when a build of the page does not have it, so this can never throw
+   * inside the render loop (a throw here would freeze the frame loop, which is
+   * exactly the "game did not start" failure this project keeps re-learning).
+   */
   function paintHud(force = false) {
     const s = player();
     const spec = shipSpec();
     const shieldPct = Math.round((s.shields / Math.max(1, s.shieldsMax)) * 100);
     const hullPct = Math.round((s.hull / Math.max(1, s.hullMax)) * 100);
+
     const shieldBar = $('shieldBar');
-    const hullBar = $('hullBar');
     if (shieldBar) shieldBar.style.width = `${shieldPct}%`;
+    const shieldTxt = $('shieldTxt');
+    if (shieldTxt) shieldTxt.textContent = String(Math.round(s.shields));
+    const hullBar = $('hullBar');
     if (hullBar) {
       hullBar.style.width = `${hullPct}%`;
       hullBar.classList.toggle('low', hullPct <= 30);
     }
+    const hullTxt = $('hullTxt');
+    if (hullTxt) hullTxt.textContent = String(Math.round(s.hull));
+    const hullWrap = $('hullBar_wrap');
+    if (hullWrap) hullWrap.classList.toggle('low', hullPct <= 30);
+
     const waveNum = $('waveNum');
     if (waveNum) waveNum.textContent = String(Math.max(1, run.wave));
     const scoreNum = $('scoreNum');
     if (scoreNum) scoreNum.textContent = String(R.scoreOf({
       kills: run.kills, wave: run.wave, seconds: run.seconds, hull: s.hull,
     }));
-    const torpChip = $('torpedoChip');
-    if (torpChip) torpChip.innerHTML = `TORPEDOES <b>${s.torpedoes}</b>`;
-    const evadeBtn = $('evadeBtn');
-    if (evadeBtn) {
-      evadeBtn.disabled = s.evade > 0;
-      evadeBtn.classList.toggle('ready', s.evade <= 0);
-      evadeBtn.textContent = s.evade > 0 ? `${s.evade.toFixed(1)}s` : 'EVADE';
+
+    // torpedo pips: one dot per tube, lit while the tube is loaded
+    const pips = $('torpPips');
+    if (pips) {
+      const html = [];
+      for (let i = 0; i < spec.torpedo.load; i++) {
+        html.push(`<i class="${i < s.torpedoes ? 'on' : ''}"></i>`);
+      }
+      pips.innerHTML = html.join('');
     }
+
+    const evadeBtn = $('evadeBtn');
+    const evadeTxt = $('evadeTxt');
+    const cooling = s.evade > 0;
+    if (evadeBtn) {
+      evadeBtn.disabled = cooling;
+      evadeBtn.classList.toggle('ready', !cooling);
+      evadeBtn.classList.toggle('cool', cooling);
+    }
+    if (evadeTxt) evadeTxt.textContent = cooling ? `${s.evade.toFixed(1)}s` : 'READY';
+
     const torpBtn = $('torpBtn');
-    if (torpBtn) torpBtn.disabled = s.torpedoes <= 0;
+    if (torpBtn) {
+      const dry = s.torpedoes <= 0;
+      torpBtn.disabled = dry;
+      torpBtn.classList.toggle('cool', dry);
+    }
+
+    const fireBtn = $('fireBtn');
+    if (fireBtn) fireBtn.classList.toggle('hot', Boolean(input.fire));
+
+    // the thin progress bar across the top: how deep into the wave you are
+    const bar = $('waveBar');
+    if (bar) {
+      const alive = enemies.length;
+      const frac = alive ? 1 - alive / Math.max(1, R.waveFor(Math.max(1, run.wave)).count) : 1;
+      bar.style.width = `${Math.round((run.wave > 0 ? 0.08 + frac * 0.92 : 0) * 100)}%`;
+    }
+
+    // the red vignette tracks the hull, not the shields: it is a damage warning
+    const want = hullPct <= 45 ? (1 - hullPct / 45) * 0.55 : 0;
+    damageLevel += (want - damageLevel) * 0.25;
+    const dmg = $('damageFx');
+    if (dmg) dmg.style.opacity = damageLevel.toFixed(2);
+
     void force;
-    void spec;
   }
 
   /* ------------------------------------------------------------------ loop */
   let last = performance.now();
   let hudTimer = 0;
+
+  /** The DPR the frame asks for: the hub's quality hint and the watchdog agree. */
+  function targetDpr() {
+    const native = window.devicePixelRatio || 1;
+    const cap = quality === 'low' ? 1 : quality === 'medium' ? 1.25 : 2;
+    return Math.min(native, dprCap, cap);
+  }
+
+  /**
+   * The perf watchdog. A phone that cannot hold ~45 fps loses particles and
+   * resolution *in that order*, and gets them back when the frames are cheap
+   * again — the game stays smooth instead of dropping into a slideshow.
+   */
+  function watchPerf(dt) {
+    frames += 1;
+    fpsTimer += dt;
+    if (fpsTimer < 1) return;
+    fps = frames / fpsTimer;
+    frames = 0;
+    fpsTimer = 0;
+    perf.frames += 1;
+    if (fps < 46) {
+      slowStreak += 1;
+      if (slowStreak >= 2) {
+        slowStreak = 0;
+        perf.dropped += 1;
+        if (perf.ui === 'high') perf.ui = 'medium';
+        else if (perf.ui === 'medium') perf.ui = 'low';
+        else if (dprCap > 1) dprCap = Math.max(1, dprCap - 0.25);
+      }
+    } else if (fps > 57) {
+      slowStreak = 0;
+      if (dprCap < 2) dprCap = Math.min(2, dprCap + 0.25);
+      else if (perf.ui === 'low') perf.ui = 'medium';
+      else if (perf.ui === 'medium' && fps > 59) perf.ui = 'high';
+    }
+  }
+
   function frame(timestamp) {
-    const dt = Math.min(0.05, Math.max(0, (timestamp - last) / 1000));
+    const raw = Math.max(0, (timestamp - last) / 1000);
+    const dt = Math.min(0.05, raw);
     last = timestamp;
-    const fit = sdk.fit(canvas, Math.min(2, window.devicePixelRatio || 1));
+    const fit = sdk.fit(canvas, targetDpr());
     const w = fit.w || canvas.clientWidth || 320;
     const h = fit.h || canvas.clientHeight || 240;
+    perf.dpr = fit.dpr || 1;
+    watchPerf(raw);
 
     update(dt);
+
+    // the flash and the hit marker fade on the render clock, not the sim clock,
+    // so a paused run still clears them
+    if (flashLevel > 0) flashLevel = Math.max(0, flashLevel - dt * 2.6);
+    if (hitMarker > 0) hitMarker = Math.max(0, hitMarker - dt);
+    const flashEl = $('flash');
+    if (flashEl && flashLevel <= 0.01 && flashEl.style.opacity !== '0') flashEl.style.opacity = '0';
 
     ctx.save();
     if (shake > 0.2) {
@@ -1194,6 +1571,20 @@
   on('exitBtn', () => { backToTitle(); sdk.close?.(); });
   on('fireBtn', () => { input.touchFire = true; input.fire = true; });
   addEventListener('mouseup', () => { input.touchFire = false; syncKeyboard(); });
+  on('pauseBtn', () => setPaused(!paused));
+  on('resumeBtn', () => setPaused(false));
+  on('quitBtn', () => { setPaused(false); backToTitle(); sdk.close?.(); });
+  document.addEventListener?.('visibilitychange', () => {
+    try {
+      if (document.hidden) setPaused(true, { silent: true });
+    } catch { /* no document */ }
+  });
+  if (sdk.on) {
+    try {
+      sdk.on('pause', () => setPaused(true));
+      sdk.on('resume', () => setPaused(false));
+    } catch { /* older SDK */ }
+  }
   on('torpBtn', () => { input.torpedo = true; });
   on('evadeBtn', () => { input.evade = true; });
 
@@ -1206,13 +1597,53 @@
   try {
     loadBest();
     paintHud();
+    paintTitleStats();
+    // The atlas is asked for *after* the hub has been told we are up: a slow
+    // image must never delay `arcade:ready`.
+    if (ART) {
+      ART.boot({ highNeeded: R.SHIPS[R.PLAYER_SHIP].radius * 5, ids: ['player'] });
+      ART.load('narada', { highNeeded: 120 });
+      ART.load('vengeance', { highNeeded: 120 });
+    }
   } catch (error) {
     try { console.warn('star battle: boot failed', error); } catch { /* no console */ }
   }
 
+  /** The hangar's stat strip: the numbers come from `ships.js`, not the page. */
+  function paintTitleStats() {
+    const spec = R.SHIPS[R.PLAYER_SHIP];
+    const set = (id, value) => { const el = $(id); if (el) el.textContent = String(value); };
+    set('statHull', spec.hull);
+    set('statShields', spec.shields);
+    set('statPhaser', spec.phaser.dmg);
+    set('statTorp', spec.torpedo.load);
+    const tag = $('qualityTag');
+    if (tag) tag.textContent = `RENDER ${String(quality).toUpperCase()} · ${Math.round(perf.dpr * 100)}%`;
+  }
+
+  /**
+   * The hub's `arcade:init` carries the player, a render-quality hint and (when
+   * Supabase is configured) the top runs for this game. All three are optional.
+   */
+  function applyHubInit(payload) {
+    const data = payload || {};
+    if (data.quality) quality = String(data.quality);
+    if (Array.isArray(data.leaderboard)) paintBoard(data.leaderboard);
+    paintTitleStats();
+    paintHud(true);
+  }
+  if (sdk.on) {
+    try {
+      sdk.on('start', (player) => applyHubInit({ quality: sdk.quality, leaderboard: sdk.leaderboard, player }));
+    } catch { /* an older SDK without events: the local values stand in */ }
+  }
+  applyHubInit({ quality: sdk.quality, leaderboard: sdk.leaderboard });
+
   // test/debug handle: drive the sim without a browser
   window.__starBattle = {
     get screen() { return screen; },
+    get paused() { return paused; },
+    pause: setPaused,
     get run() { return run; },
     get enemies() { return enemies; },
     get shots() { return shots; },
@@ -1221,6 +1652,12 @@
     start: startBattle,
     title: backToTitle,
     over: endBattle,
+    paintBoard,
+    get board() { return board; },
+    get quality() { return quality; },
+    get perf() { return perf; },
+    get art() { return ART; },
+    applyHubInit,
     spawnWave,
     tick: (dt) => { update(dt); paintHud(); },
     setWave: (n) => { run.wave = Math.max(0, n | 0); },
