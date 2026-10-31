@@ -240,6 +240,8 @@ export class Arcade {
     this.playing = null;
     this.frame = null;
     this.lastScore = null;
+    /** game_id → cached top runs, handed to the game with `arcade:init`. */
+    this.boards = new Map();
     this.readyAt = 0;
     this.heardAt = 0;
     this.stallTimer = null;
@@ -474,6 +476,7 @@ export class Arcade {
     if (!catalogue.offline) writeCachedCatalogue(catalogue);
     this.games = mergeCatalogues(NATIVE_GAMES, catalogue);
     this.render();
+    this.warmBoards();
     return this.games;
   }
 
@@ -679,6 +682,10 @@ export class Arcade {
 
   openGame(game) {
     this.playing = game;
+    // Ask for this game's board now. `topRuns` caches for a minute, so this is
+    // free on a second open — and if it is still in flight when the frame says
+    // hello, the next `postInit` (there are two) picks it up.
+    this.loadBoard(game.id).catch(() => {});
     // A game is the one part of the hub that wants landscape. The tap that
     // opened it is a gesture, so this is where the lock is allowed to happen;
     // the menu behind it stays portrait.
@@ -729,6 +736,41 @@ export class Arcade {
     }, 8000);
   }
 
+  /**
+   * Warms every community game's leaderboard *after* the shelf has painted, a
+   * few at a time. One query per game per minute, done while the player is
+   * still choosing — so tapping a card never waits on Supabase.
+   */
+  warmBoards() {
+    const ids = this.games.filter((g) => !g.native).map((g) => g.id);
+    if (!ids.length || !this.stats.prefetch) return Promise.resolve([]);
+    return this.stats.prefetch(ids, { limit: 5, concurrency: 2 })
+      .then(async () => {
+        for (const id of ids) {
+          const cached = this.stats.cachedBoard ? this.stats.cachedBoard(id, 5) : null;
+          if (cached) this.boards.set(id, cached.rows);
+        }
+      })
+      .catch(() => {});
+  }
+
+  /**
+   * Fetches (or reuses) a game's leaderboard so the game itself does not have
+   * to: inside the sandboxed frame there is no Supabase key, and a request per
+   * game open would be a request per game open. One cached query, shared.
+   */
+  async loadBoard(gameId) {
+    if (!gameId) return null;
+    const cached = this.stats.cachedBoard ? this.stats.cachedBoard(gameId, 5) : null;
+    if (cached) {
+      this.boards.set(gameId, cached.rows);
+      return cached.rows;
+    }
+    const rows = await this.stats.topRuns(gameId, 5);
+    this.boards.set(gameId, rows);
+    return rows;
+  }
+
   postInit() {
     const player = this.getPlayer();
     try {
@@ -743,6 +785,10 @@ export class Arcade {
             custom: player.custom || null,
           },
           quality: player.quality || 'auto',
+          // Cached by `ArcadeStats.topRuns` (one Supabase query per game per
+          // minute). Handing it over here is what lets a sandboxed game show a
+          // real leaderboard without a key, a second request or CORS.
+          leaderboard: this.playing ? (this.boards.get(this.playing.id) || null) : null,
         },
       }, '*');
     } catch { /* frame not ready yet — the game's local fallback covers it */ }
@@ -783,6 +829,11 @@ export class Arcade {
       const run = msg.payload;
       this.lastScore = run;
       await this.stats.submitRun(game.id, run, this.getPlayer().name);
+      // that run just changed the board: drop the cached copy so the next
+      // player (or the next round) sees it, without refetching right now
+      this.stats.boards?.delete?.(game.id);
+      this.boards.delete(game.id);
+      this.loadBoard(game.id).catch(() => {});
       this.nodes.playerStatus.textContent = 'RUN LOGGED';
       this.nodes.result.classList.remove('hidden');
       this.nodes.result.innerHTML = `

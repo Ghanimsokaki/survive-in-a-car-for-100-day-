@@ -193,6 +193,8 @@ const GAME_CACHE = {
   '.js': 'public, max-age=60, stale-while-revalidate=600',
   '.css': 'public, max-age=60, stale-while-revalidate=600',
   '.svg': 'public, max-age=3600',
+  // the baked ship turntables: content-addressed by name, so they can be cached
+  '.png': 'public, max-age=604800, stale-while-revalidate=86400',
 };
 // `/games` with no file name is the catalogue itself, exactly like the hub asks.
 app.get('/games', (_req, res) => res.sendFile(path.join(GAMES, 'index.json')));

@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "source": "model.fbx",
+  "angles": 32,
+  "cols": 8,
+  "rows": 4,
+  "sizes": {
+    "high": 160,
+    "low": 96
+  },
+  "liveries": {
+    "player": {
+      "files": {
+        "high": "ships-player-high.png",
+        "low": "ships-player-low.png"
+      },
+      "glow": "#5fd0ff",
+      "size": 1
+    },
+    "narada": {
+      "files": {
+        "high": "ships-narada-high.png",
+        "low": "ships-narada-low.png"
+      },
+      "glow": "#ff7a3c",
+      "size": 1.55
+    },
+    "vengeance": {
+      "files": {
+        "high": "ships-vengeance-high.png",
+        "low": "ships-vengeance-low.png"
+      },
+      "glow": "#ffb14a",
+      "size": 1.2
+    }
+  },
+  "generatedAt": "2026-10-31T14:48:03.048Z",
+  "triangles": 20297,
+  "vertices": 8936
+}

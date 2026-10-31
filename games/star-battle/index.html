@@ -4,120 +4,248 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
 <title>Star Battle</title>
+<meta name="theme-color" content="#03060e" />
 <style>
-  :root{--ink:#03060e;--hud:#7fe4ff;--gold:#ffd578;--red:#ff6b6b;--line:rgba(127,228,255,.25)}
+  :root{
+    --ink:#02050c; --ink2:#071120; --hud:#7fe4ff; --hud-dim:#5d90ad;
+    --gold:#ffd578; --red:#ff6b6b; --green:#6dffa8;
+    --line:rgba(127,228,255,.22); --line-hot:rgba(127,228,255,.55);
+    --panel:linear-gradient(180deg,rgba(10,22,38,.94),rgba(4,9,18,.97));
+  }
   *{box-sizing:border-box}
   html,body{margin:0;height:100%;background:var(--ink);overflow:hidden;
     font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#dff3ff;
-    -webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+    -webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;
+    overscroll-behavior:none;touch-action:none}
   canvas{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none}
 
   /* ------------------------------------------------------------- overlays */
-  .screen{position:fixed;inset:0;display:flex;flex-direction:column;pointer-events:none}
+  .screen{position:fixed;inset:0;display:flex;flex-direction:column;pointer-events:none;z-index:2}
   .screen.hidden{display:none}
-  .scrim{position:fixed;inset:0;background:radial-gradient(circle at 50% 40%,rgba(8,20,38,.55),rgba(2,4,10,.92));
-    pointer-events:none}
+  .scrim{position:absolute;inset:0;pointer-events:none;
+    background:radial-gradient(circle at 50% 42%,rgba(8,20,38,.30),rgba(2,4,10,.90))}
+  /* scanlines + vignette: cheap, drawn once, sells the "bridge display" look */
+  .fx{position:fixed;inset:0;pointer-events:none;z-index:3;
+    background:
+      repeating-linear-gradient(0deg,rgba(0,0,0,.16) 0 1px,transparent 1px 3px),
+      radial-gradient(circle at 50% 50%,transparent 55%,rgba(0,0,0,.55) 100%);
+    mix-blend-mode:multiply;opacity:.55}
+  #damageFx{position:fixed;inset:0;pointer-events:none;z-index:4;opacity:0;
+    background:radial-gradient(circle at 50% 50%,transparent 42%,rgba(255,60,40,.55) 100%);
+    transition:opacity .18s linear}
+  #flash{position:fixed;inset:0;pointer-events:none;z-index:4;opacity:0;background:#cfefff;
+    transition:opacity .22s ease-out}
 
-  /* title / hangar */
-  #title{justify-content:center;align-items:center;pointer-events:auto;padding:18px}
-  .card{width:min(560px,94vw);background:linear-gradient(180deg,rgba(10,22,38,.92),rgba(5,10,20,.95));
-    border:1px solid var(--line);border-radius:14px;padding:18px 20px;
-    box-shadow:0 0 60px rgba(60,180,255,.12) inset}
-  .kicker{font-size:9px;letter-spacing:4px;color:#5d90ad;margin:0 0 6px}
-  h1{margin:0;font-size:26px;letter-spacing:8px;color:var(--hud);font-weight:800;
-    text-shadow:0 0 24px rgba(90,210,255,.5)}
-  .sub{margin:6px 0 14px;font-size:9.5px;letter-spacing:1.6px;line-height:1.7;color:#8fb0c6}
-  .ship-row{display:flex;gap:12px;align-items:center;padding:10px;border-radius:10px;
-    background:rgba(8,18,30,.8);border:1px solid rgba(255,255,255,.06);margin-bottom:10px}
-  .ship-row .badge{width:44px;height:44px;flex:0 0 44px;border-radius:8px;display:grid;place-items:center;
-    background:#0b2135;border:1px solid rgba(127,228,255,.3);font-size:16px}
-  .ship-row b{display:block;font-size:11px;letter-spacing:2.4px;color:#e8f8ff}
-  .ship-row em{display:block;font-style:normal;font-size:8.5px;letter-spacing:1.4px;color:#6f93a8;margin-top:2px}
-  .enemy b{color:#ffd0c8}
-  .enemy .badge{background:#2a1016;border-color:rgba(255,120,110,.3)}
-  .keys{font-size:8.5px;letter-spacing:1.2px;line-height:1.9;color:#6d8ea3;margin:8px 0 4px}
-  .keys kbd{background:#0d1e2e;border:1px solid rgba(255,255,255,.12);border-radius:4px;
-    padding:1px 5px;font:inherit;color:#bfe6f8}
-  .big{width:100%;font:inherit;font-size:13px;letter-spacing:5px;font-weight:800;padding:14px;
-    border-radius:10px;background:linear-gradient(180deg,#38c8ff,#1d86c8);color:#02121c;border:0;
-    cursor:pointer;margin-top:10px;box-shadow:0 6px 24px rgba(56,200,255,.25)}
-  .big:active{transform:translateY(1px)}
-  .best{font-size:9px;letter-spacing:2px;color:#ffd578;text-align:center;margin-top:8px}
+  /* --------------------------------------------------------------- title */
+  #title{justify-content:center;align-items:center;pointer-events:auto;padding:16px}
+  .card{position:relative;width:min(560px,94vw);padding:18px 20px;border-radius:16px;
+    background:var(--panel);border:1px solid var(--line);
+    box-shadow:0 24px 70px rgba(0,0,0,.6),0 0 70px rgba(60,180,255,.10) inset;
+    backdrop-filter:blur(6px)}
+  .card::before,.card::after{content:"";position:absolute;width:16px;height:16px;pointer-events:none;
+    border:2px solid var(--line-hot)}
+  .card::before{top:-1px;left:-1px;border-right:0;border-bottom:0;border-radius:16px 0 0 0}
+  .card::after{bottom:-1px;right:-1px;border-left:0;border-top:0;border-radius:0 0 16px 0}
+  .kicker{display:flex;justify-content:space-between;align-items:center;margin:0 0 8px;
+    font-size:8.5px;letter-spacing:3.4px;color:var(--hud-dim)}
+  .kicker .dot{width:6px;height:6px;border-radius:50%;background:var(--green);
+    box-shadow:0 0 10px var(--green);display:inline-block;margin-right:6px;vertical-align:middle;
+    animation:pulse 2.4s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:.45}50%{opacity:1}}
+  h1{margin:0;font-size:27px;letter-spacing:9px;font-weight:800;color:var(--hud);
+    text-shadow:0 0 26px rgba(90,210,255,.55),0 0 60px rgba(90,210,255,.25)}
+  .sub{margin:7px 0 14px;font-size:9.5px;letter-spacing:1.6px;line-height:1.7;color:#8fb0c6}
 
-  /* battle HUD */
+  .hangar{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}
+  .ship-card{display:flex;gap:9px;align-items:center;padding:9px 10px;border-radius:11px;
+    background:rgba(6,15,26,.85);border:1px solid rgba(255,255,255,.07)}
+  .ship-card .badge{width:34px;height:34px;flex:0 0 34px;border-radius:9px;display:grid;place-items:center;
+    background:#0a2338;border:1px solid rgba(127,228,255,.3);font-size:15px;color:var(--hud)}
+  .ship-card b{display:block;font-size:10px;letter-spacing:2px;color:#eaf8ff}
+  .ship-card em{display:block;font-style:normal;font-size:8px;letter-spacing:1.1px;color:#6f93a8;margin-top:2px}
+  .ship-card.enemy .badge{background:#2a1016;border-color:rgba(255,120,110,.32);color:#ffb3a6}
+
+  .stat-strip{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:12px}
+  .stat-strip .s{padding:7px 6px;border-radius:9px;background:rgba(6,15,26,.8);
+    border:1px solid rgba(255,255,255,.06);text-align:center}
+  .stat-strip span{display:block;font-size:6.5px;letter-spacing:1.6px;color:#6d8ea3;margin-bottom:3px}
+  .stat-strip b{font-size:13px;letter-spacing:.5px;color:#eaf8ff;font-variant-numeric:tabular-nums}
+
+  .board{margin:0 0 12px;padding:9px 10px;border-radius:11px;background:rgba(4,11,20,.85);
+    border:1px solid rgba(255,255,255,.05)}
+  .board h3{margin:0 0 7px;font-size:7.5px;letter-spacing:2.4px;color:#6d8ea3;font-weight:600;
+    display:flex;justify-content:space-between}
+  .board h3 .tag{color:var(--gold);letter-spacing:1.6px}
+  .board ol{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+  .board li{display:flex;justify-content:space-between;gap:8px;font-size:9px;letter-spacing:1.2px;color:#a9c8da}
+  .board li b{color:#eaf8ff;font-variant-numeric:tabular-nums}
+  .board li.you{color:var(--hud)}
+  .board li .rank{color:#5d7f92;width:14px;flex:0 0 14px}
+  .board .empty{font-size:8.5px;letter-spacing:1.4px;color:#52707f}
+
+  .keys{font-size:8px;letter-spacing:1.1px;line-height:1.9;color:#6d8ea3;margin:6px 0 2px}
+  .keys kbd{background:#0d1e2e;border:1px solid rgba(255,255,255,.13);border-bottom-width:2px;
+    border-radius:4px;padding:1px 5px;font:inherit;color:#bfe6f8}
+  .big{position:relative;width:100%;font:inherit;font-size:13px;letter-spacing:5px;font-weight:800;
+    padding:15px;border-radius:12px;background:linear-gradient(180deg,#4ad4ff,#1a7cbe);color:#02121c;
+    border:0;cursor:pointer;margin-top:10px;overflow:hidden;
+    box-shadow:0 8px 26px rgba(56,200,255,.28),0 0 0 1px rgba(255,255,255,.16) inset}
+  .big::after{content:"";position:absolute;inset:0;
+    background:linear-gradient(100deg,transparent 30%,rgba(255,255,255,.45) 50%,transparent 70%);
+    transform:translateX(-120%);animation:sheen 3.6s ease-in-out infinite}
+  @keyframes sheen{0%,55%{transform:translateX(-120%)}85%,100%{transform:translateX(120%)}}
+  .big:active{transform:translateY(1px) scale(.995)}
+  .best{font-size:9px;letter-spacing:2px;color:var(--gold);text-align:center;margin-top:9px}
+  .best .new{display:none;margin-left:6px;color:var(--green)}
+  .best.new-best .new{display:inline;animation:pulse 1s ease-in-out infinite}
+
+  /* ----------------------------------------------------------------- hud */
   #hud{justify-content:space-between}
-  .top{display:flex;gap:10px;padding:10px 12px;align-items:flex-start}
-  .bars{flex:1;max-width:300px;display:flex;flex-direction:column;gap:5px}
-  .bar span{display:block;font-size:7px;letter-spacing:2px;color:#7aa6bd;margin-bottom:2px}
-  .bar i{display:block;height:7px;border-radius:4px;background:#0d1c28;overflow:hidden;
-    border:1px solid rgba(255,255,255,.06)}
-  .bar i u{display:block;height:100%;width:100%;transition:width .12s linear}
-  #shieldBar u{background:linear-gradient(90deg,#59c9ff,#2b7fd0)}
-  #hullBar u{background:linear-gradient(90deg,#6dffa8,#1f9b5e)}
-  .bar.low #hullBar u,#hullBar.low u{background:linear-gradient(90deg,#ff8a6b,#c23c3c)}
-  .readout{text-align:right;font-size:9px;letter-spacing:2px;color:#9fc9dd;line-height:1.8}
-  .readout b{display:block;font-size:15px;letter-spacing:2px;color:#fff}
-  .warn{color:#ff9aa4 !important}
-  .bottom{display:flex;align-items:flex-end;gap:10px;padding:12px}
-  .chip{font-size:8.5px;letter-spacing:1.6px;padding:8px 10px;border-radius:8px;
-    background:rgba(6,16,26,.8);border:1px solid rgba(255,255,255,.1);color:#9fbed0}
-  .chip b{color:#fff}
-  .actions{display:flex;gap:8px;flex:1;justify-content:flex-end;flex-wrap:wrap}
-  .hbtn{pointer-events:auto;font:inherit;font-size:9.5px;letter-spacing:2px;font-weight:700;
-    padding:12px 14px;border-radius:10px;background:rgba(8,20,32,.9);
-    border:1px solid var(--line);color:#d6f1ff;cursor:pointer;min-width:74px}
-  .hbtn.ready{border-color:#6dffa8;color:#baffd6;box-shadow:0 0 18px rgba(109,255,168,.22)}
-  .hbtn:disabled{opacity:.4}
-  .hbtn.fire{border-color:rgba(127,228,255,.6);color:#d8f4ff}
-  .banner{position:fixed;left:0;right:0;top:38%;text-align:center;font-size:15px;letter-spacing:7px;
-    color:var(--hud);text-shadow:0 0 28px rgba(90,210,255,.6);opacity:0;transition:opacity .25s;
-    pointer-events:none}
-  .banner.show{opacity:1}
-
-  /* result */
-  #result{justify-content:center;align-items:center;pointer-events:auto;background:rgba(2,5,11,.9)}
-  #result .card{text-align:center}
-  #result h2{margin:0 0 6px;font-size:17px;letter-spacing:5px;color:#ffd578}
-  #result p{margin:0 0 12px;font-size:9px;letter-spacing:1.6px;color:#8fb0c6;line-height:1.8}
-  .stat-row{display:flex;gap:8px;justify-content:center;margin-bottom:14px;flex-wrap:wrap}
-  .stat{min-width:88px;padding:8px 10px;border-radius:9px;background:rgba(8,18,30,.9);
+  .top{display:flex;gap:10px;padding:calc(10px + env(safe-area-inset-top)) 12px 10px;align-items:flex-start}
+  .bars{flex:1;max-width:320px;display:flex;flex-direction:column;gap:6px}
+  .bar{position:relative}
+  .bar span{display:flex;justify-content:space-between;font-size:7px;letter-spacing:2px;
+    color:#7aa6bd;margin-bottom:3px}
+  .bar span i{font-style:normal;color:#cfeaf8;font-variant-numeric:tabular-nums}
+  .bar .track{position:relative;height:8px;border-radius:5px;background:#0a1622;overflow:hidden;
     border:1px solid rgba(255,255,255,.07)}
-  .stat span{display:block;font-size:7px;letter-spacing:1.8px;color:#6d8ea3}
-  .stat b{font-size:16px;letter-spacing:1px;color:#eaf8ff}
-  .ghost{width:100%;font:inherit;font-size:9.5px;letter-spacing:3px;padding:11px;border-radius:9px;
+  .bar .track u{display:block;height:100%;width:100%;transition:width .14s linear;
+    background-image:linear-gradient(90deg,rgba(255,255,255,.35),rgba(255,255,255,0));
+    background-color:#59c9ff}
+  #shieldBar{background-color:#4fc3ff}
+  #hullBar{background-color:#5be59b}
+  .bar.low #hullBar{background-color:#ff6b6b}
+  .bar .seg{position:absolute;inset:0;pointer-events:none;
+    background:repeating-linear-gradient(90deg,transparent 0 9px,rgba(0,0,0,.55) 9px 10px)}
+  .readout{text-align:right;font-size:8px;letter-spacing:2px;color:#9fc9dd;line-height:1.7}
+  .readout b{display:block;font-size:16px;letter-spacing:1px;color:#fff;
+    font-variant-numeric:tabular-nums;text-shadow:0 0 14px rgba(120,220,255,.5)}
+  .readout .warn{color:#ff9aa4}
+  .pause{pointer-events:auto;flex:0 0 42px;width:42px;height:42px;border-radius:11px;
+    background:rgba(6,16,26,.85);border:1px solid var(--line);color:#bfe6f8;font:inherit;
+    font-size:11px;letter-spacing:1px;cursor:pointer}
+  .pause:active{transform:translateY(1px)}
+  #pause{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+    background:rgba(2,5,11,.86);z-index:6;pointer-events:auto}
+  #pause .card{text-align:center;max-width:340px}
+  #pause h2{margin:0 0 8px;font-size:16px;letter-spacing:6px;color:var(--hud)}
+  #pause p{margin:0 0 12px;font-size:9px;letter-spacing:1.6px;color:#8fb0c6}
+  .wavebar{position:fixed;left:0;top:0;height:2px;background:linear-gradient(90deg,#59c9ff,#6dffa8);
+    width:0;transition:width .2s linear;z-index:5;box-shadow:0 0 10px #59c9ff}
+
+  .bottom{display:flex;align-items:flex-end;gap:9px;
+    padding:10px 12px calc(12px + env(safe-area-inset-bottom))}
+  .chips{display:flex;flex-direction:column;gap:6px}
+  .chip{font-size:8px;letter-spacing:1.4px;padding:7px 9px;border-radius:9px;
+    background:rgba(6,16,26,.82);border:1px solid rgba(255,255,255,.09);color:#9fbed0;
+    display:flex;align-items:center;gap:6px}
+  .pips{display:flex;gap:3px}
+  .pips i{width:7px;height:7px;border-radius:50%;background:#1b3143;border:1px solid rgba(127,228,255,.28)}
+  .pips i.on{background:var(--gold);border-color:var(--gold);box-shadow:0 0 8px rgba(255,213,120,.7)}
+  .actions{display:flex;gap:7px;flex:1;justify-content:flex-end}
+  .hbtn{pointer-events:auto;font:inherit;font-size:9px;letter-spacing:1.8px;font-weight:700;
+    min-width:0;flex:1;max-width:104px;height:52px;border-radius:12px;
+    background:rgba(8,20,32,.9);border:1px solid var(--line);color:#d6f1ff;cursor:pointer;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
+    transition:transform .08s ease,border-color .15s,box-shadow .15s}
+  .hbtn small{font-size:6.5px;letter-spacing:1.2px;color:#6d8ea3;font-weight:600}
+  .hbtn:active{transform:translateY(1px) scale(.98)}
+  .hbtn.fire{border-color:rgba(127,228,255,.6);color:#e8faff;
+    box-shadow:0 0 20px rgba(90,210,255,.22) inset}
+  .hbtn.fire.hot{background:rgba(30,120,180,.55);box-shadow:0 0 22px rgba(90,210,255,.45)}
+  .hbtn.ready{border-color:#6dffa8;color:#baffd6}
+  .hbtn.cool{opacity:.42}
+  .banner{position:fixed;left:0;right:0;top:34%;text-align:center;pointer-events:none;
+    opacity:0;transition:opacity .22s}
+  .banner.show{opacity:1}
+  .banner b{display:block;font-size:16px;letter-spacing:7px;color:var(--hud);
+    text-shadow:0 0 30px rgba(90,210,255,.7)}
+  .banner i{display:block;font-style:normal;margin-top:5px;font-size:8px;letter-spacing:3px;color:#7ea6bb}
+
+  /* -------------------------------------------------------------- result */
+  #result{justify-content:center;align-items:center;pointer-events:auto;
+    background:radial-gradient(circle at 50% 40%,rgba(8,20,38,.7),rgba(2,4,10,.96))}
+  #result .card{text-align:center}
+  #result h2{margin:0 0 6px;font-size:17px;letter-spacing:5px;color:var(--gold)}
+  #result p{margin:0 0 12px;font-size:9px;letter-spacing:1.5px;color:#8fb0c6;line-height:1.8}
+  .stat-row{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-bottom:14px}
+  .stat{padding:9px 6px;border-radius:10px;background:rgba(8,18,30,.9);
+    border:1px solid rgba(255,255,255,.07)}
+  .stat span{display:block;font-size:6.5px;letter-spacing:1.6px;color:#6d8ea3;margin-bottom:3px}
+  .stat b{font-size:16px;letter-spacing:.5px;color:#eaf8ff;font-variant-numeric:tabular-nums}
+  .stat.hero{border-color:rgba(255,213,120,.35);background:rgba(30,24,10,.55)}
+  .stat.hero b{color:var(--gold)}
+  .ghost{width:100%;font:inherit;font-size:9.5px;letter-spacing:3px;padding:12px;border-radius:10px;
     margin-top:8px;background:#0c1c2a;border:1px solid var(--line);color:#a8cadd;cursor:pointer}
+  .ghost:active{transform:translateY(1px)}
   .hidden{display:none !important}
-  @media (max-width:420px){
-    h1{font-size:20px;letter-spacing:5px}
-    .card{padding:14px}
-    .hbtn{padding:11px 10px;min-width:64px;font-size:9px}
+
+  /* A short landscape phone has very little height: the card has to give. */
+  @media (max-height:520px){
+    .card{padding:12px 14px;width:min(520px,92vw)}
+    h1{font-size:19px;letter-spacing:6px}
+    .sub{margin:4px 0 8px;font-size:8.5px;line-height:1.5}
+    .hangar,.stat-strip,.keys{display:none}
+    .board{margin-bottom:8px}
+    .big{padding:11px;margin-top:6px}
+    .banner b{font-size:13px}
+    .hbtn{height:46px}
+  }
+  @media (max-width:380px){
+    h1{font-size:21px;letter-spacing:6px}
+    .stat-strip{grid-template-columns:repeat(2,1fr)}
+    .hangar{grid-template-columns:1fr}
+    .hbtn{font-size:8px;letter-spacing:1.2px}
+    .bars{max-width:220px}
+  }
+  @media (prefers-reduced-motion:reduce){
+    .big::after{animation:none}
+    .kicker .dot{animation:none}
   }
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
+<div class="fx"></div>
+<div id="damageFx"></div>
+<div id="flash"></div>
+<div class="wavebar" id="waveBar"></div>
 
 <!-- ======================= TITLE / HANGAR ======================= -->
 <div id="title" class="screen">
   <div class="scrim"></div>
   <div class="card" id="titleCard">
-    <p class="kicker">STARFLEET — SECTOR 001</p>
+    <p class="kicker"><span><i class="dot"></i>STARFLEET · SECTOR 001</span><span id="qualityTag">RENDER AUTO</span></p>
     <h1>STAR BATTLE</h1>
     <p class="sub">One starship against the dark. Hold the line as long as you can.</p>
 
-    <div class="ship-row">
-      <span class="badge">◈</span>
-      <span>
-        <b>U.S.S. ENTERPRISE</b>
-        <em>NCC-1701-E · PHASERS · QUANTUM TORPEDOES · EVASIVE PATTERN</em>
-      </span>
+    <div class="hangar">
+      <div class="ship-card">
+        <span class="badge">◈</span>
+        <span>
+          <b>ENTERPRISE-E</b>
+          <em>NCC-1701-E · YOU</em>
+        </span>
+      </div>
+      <div class="ship-card enemy">
+        <span class="badge">✦</span>
+        <span>
+          <b>NARADA · VENGEANCE</b>
+          <em>HOSTILE CONTACTS</em>
+        </span>
+      </div>
     </div>
-    <div class="ship-row enemy">
-      <span class="badge">✦</span>
-      <span>
-        <b>NARADA · VENGEANCE</b>
-        <em>HOSTILE CONTACTS — THEY COME IN WAVES, AND THEY GET WORSE</em>
-      </span>
+
+    <div class="stat-strip">
+      <div class="s"><span>HULL</span><b id="statHull">460</b></div>
+      <div class="s"><span>SHIELDS</span><b id="statShields">520</b></div>
+      <div class="s"><span>PHASER</span><b id="statPhaser">30</b></div>
+      <div class="s"><span>TORPEDO</span><b id="statTorp">4</b></div>
+    </div>
+
+    <div class="board" id="board">
+      <h3><span id="boardTitle">SECTOR LEADERBOARD</span><span class="tag" id="boardTag">TOP 5</span></h3>
+      <ol id="boardList"><li class="empty">NO RUNS LOGGED YET — BE THE FIRST</li></ol>
     </div>
 
     <p class="keys">
@@ -126,7 +254,7 @@
       On a phone: left half steers, right half fires, and the buttons do the rest.
     </p>
     <button id="launchBtn" class="big" type="button">ENGAGE ▸</button>
-    <p class="best" id="bestLine">BEST SCORE — 0</p>
+    <p class="best" id="bestLine">BEST SCORE — 0<span class="new">NEW BEST</span></p>
   </div>
 </div>
 
@@ -134,22 +262,42 @@
 <div id="hud" class="screen hidden">
   <div class="top">
     <div class="bars">
-      <div class="bar"><span>SHIELDS</span><i><u id="shieldBar" style="width:100%"></u></i></div>
-      <div class="bar"><span>HULL</span><i><u id="hullBar" style="width:100%"></u></i></div>
+      <div class="bar" id="shieldBar_wrap">
+        <span>SHIELDS <i id="shieldTxt">520</i></span>
+        <div class="track"><u id="shieldBar" style="width:100%"></u><div class="seg"></div></div>
+      </div>
+      <div class="bar" id="hullBar_wrap">
+        <span>HULL <i id="hullTxt">460</i></span>
+        <div class="track"><u id="hullBar" style="width:100%"></u><div class="seg"></div></div>
+      </div>
     </div>
     <div class="readout">
       <span>WAVE</span><b id="waveNum">1</b>
       <span>SCORE</span><b id="scoreNum">0</b>
     </div>
+    <button id="pauseBtn" class="pause" type="button" aria-label="Pause">❚❚</button>
   </div>
-  <div class="banner" id="banner"></div>
+  <div class="banner" id="banner"><b id="bannerText"></b><i id="bannerSub"></i></div>
   <div class="bottom">
-    <div class="chip" id="torpedoChip">TORPEDOES <b>4</b></div>
-    <div class="actions">
-      <button id="evadeBtn" class="hbtn" type="button">EVADE</button>
-      <button id="torpBtn" class="hbtn" type="button">TORPEDO</button>
-      <button id="fireBtn" class="hbtn fire ready" type="button">FIRE</button>
+    <div class="chips">
+      <div class="chip" id="torpedoChip"><span>TORPEDO</span><span class="pips" id="torpPips"></span></div>
+      <div class="chip" id="evadeChip"><span>EVADE</span><b id="evadeTxt">READY</b></div>
     </div>
+    <div class="actions">
+      <button id="evadeBtn" class="hbtn" type="button">EVADE<small>E</small></button>
+      <button id="torpBtn" class="hbtn" type="button">TORPEDO<small>SHIFT</small></button>
+      <button id="fireBtn" class="hbtn fire" type="button">FIRE<small>SPACE</small></button>
+    </div>
+  </div>
+</div>
+
+<!-- ============================ PAUSE ============================ -->
+<div id="pause" class="hidden">
+  <div class="card">
+    <h2>PAUSED</h2>
+    <p>Throttle held at station keeping. The sector waits.</p>
+    <button id="resumeBtn" class="big" type="button">RESUME ▸</button>
+    <button id="quitBtn" class="ghost" type="button">LEAVE THE SECTOR</button>
   </div>
 </div>
 
@@ -159,7 +307,7 @@
     <h2 id="resultTitle">SHIP LOST</h2>
     <p id="resultText">The Enterprise is gone. Starfleet will remember the delay you bought.</p>
     <div class="stat-row">
-      <div class="stat"><span>SCORE</span><b id="resultScore">0</b></div>
+      <div class="stat hero"><span>SCORE</span><b id="resultScore">0</b></div>
       <div class="stat"><span>WAVE</span><b id="resultWave">1</b></div>
       <div class="stat"><span>KILLS</span><b id="resultKills">0</b></div>
       <div class="stat"><span>TIME</span><b id="resultTime">0s</b></div>
@@ -196,6 +344,7 @@
 </script>
 <script src="../_shared/sdk.js"></script>
 <script src="ships.js"></script>
+<script src="art.js"></script>
 <script src="game.js"></script>
 </body>
 </html>

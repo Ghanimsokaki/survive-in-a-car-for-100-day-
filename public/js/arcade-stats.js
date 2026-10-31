@@ -80,13 +80,87 @@ const storage = () => {
   try { return typeof localStorage === 'undefined' ? null : localStorage; } catch { return null; }
 };
 
+/**
+ * How long a leaderboard answer is reused before Supabase is asked again. One
+ * request per game per minute is the whole point: a board that is a minute old
+ * is still a board, and the query is the slowest thing the arcade does.
+ */
+export const BOARD_TTL_MS = 60_000;
+
 export class ArcadeStats {
-  constructor({ account = null, storage: store = null } = {}) {
+  constructor({ account = null, storage: store = null, now = () => Date.now() } = {}) {
     this.account = account;
     this.store = store || storage();
     this.data = this.loadLocal();
     this.server = false;      // true once a Supabase read succeeded
     this.lastError = '';
+    this.now = now;
+    /** game_id → { at, rows } — memory first, then a short-lived local copy. */
+    this.boards = new Map();
+    this.requests = 0;        // how many times Supabase was actually called
+  }
+
+  /** Cached board, or null when it is missing or older than the TTL. */
+  cachedBoard(gameId, limit = 5) {
+    const key = String(gameId || '');
+    const hit = this.boards.get(key);
+    if (!hit) return null;
+    if (this.now() - hit.at > BOARD_TTL_MS) return null;
+    return { rows: hit.rows.slice(0, limit), at: hit.at, cached: true };
+  }
+
+  /**
+   * The top runs for one game — Supabase first, cached for `BOARD_TTL_MS`, and
+   * merged with whatever this device has played (so a guest sees their own
+   * run before it ever reaches the server). Never throws.
+   */
+  async topRuns(gameId, limit = 5) {
+    const cached = this.cachedBoard(gameId, limit);
+    if (cached) return cached.rows;
+    const local = rankRuns(this.data.best[gameId] || [])
+      .slice(0, limit)
+      .map((r) => ({ score: r.score, name: r.name, meta: r.meta, at: r.at }));
+    const sb = this.sb;
+    if (!sb) {
+      this.boards.set(String(gameId), { at: this.now(), rows: local });
+      return local;
+    }
+    this.requests += 1;
+    try {
+      const rows = await sb.select('game_runs',
+        `game_id=eq.${encodeURIComponent(gameId)}&select=score,meta,created_at&order=score.desc&limit=${Math.max(1, Math.min(20, limit))}`);
+      const server = (rows || []).map((r) => ({
+        score: Number(r.score) || 0,
+        name: String(r.meta || 'PILOT').slice(0, 14),
+        meta: String(r.meta || '').slice(0, 40),
+        at: Date.parse(r.created_at) || 0,
+      }));
+      const merged = rankRuns([...server, ...local]).slice(0, limit);
+      this.boards.set(String(gameId), { at: this.now(), rows: merged });
+      this.server = true;
+      return merged;
+    } catch (err) {
+      this.lastError = err?.message || 'board_offline';
+      this.boards.set(String(gameId), { at: this.now(), rows: local });
+      return local;
+    }
+  }
+
+  /**
+   * Warms the caches the arcade is about to need. Called when the shelf is
+   * painted, not when a card is tapped, so the data is already there by the
+   * time a player is looking at it.
+   */
+  prefetch(gameIds = [], { limit = 5, concurrency = 3 } = {}) {
+    const queue = [...new Set(gameIds.map(String))].filter((id) => id && !this.cachedBoard(id, limit));
+    const run = async () => {
+      while (queue.length) {
+        const id = queue.shift();
+        // eslint-disable-next-line no-await-in-loop
+        await this.topRuns(id, limit);
+      }
+    };
+    return Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, run));
   }
 
   loadLocal() {

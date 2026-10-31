@@ -133,9 +133,23 @@ One starship, endless waves, on a phone.
 * **Controls** — drag the left side for the stick, tap **FIRE** on the right, **TORPEDO** for a quantum
   spread, **EVADE** to break a lock; keyboard players get WASD/arrows, `Space` to fire, `Shift` for a
   torpedo and `E` to evade.
-* **The models are one function wide** — the ships are drawn as vector art in `games/star-battle/game.js`
-  by `drawEnterprise`, `drawNarada` and `drawVengeance`, reached through `drawShip(id, …)`. Drop real
-  models in by replacing those three functions; the rules in `ships.js` do not care how a ship is painted.
+* **The ships are the real model** — `model.fbx` in the repository root (a futuristic sci-fi starship,
+  149k triangles, with the base-colour, normal, metallic and roughness maps in `starship+3d+model.zip`)
+  is baked into **32-heading turntables** at build time by `npm run bake`. The bake decimates the mesh,
+  reads the model's own textures, lights and shades it, and writes
+  `games/star-battle/art/ships-{player,narada,vengeance}-{high,low}.png` — so the game draws the
+  *actual model* in three liveries, one `drawImage` per ship, with no 6.7 MB download and no WebGL
+  dependency inside the sandboxed iframe. Change the model, re-run `npm run bake`, done.
+* **If the atlas cannot load** (offline, a blocked image, a headless test), `game.js` falls back to the
+  vector art in `drawEnterprise` / `drawNarada` / `drawVengeance` — the game is never a hole in space.
+* **Rendering** — additive engine bloom and warp trails, six-plate rotating shields, phaser beams with a
+  hot core and an impact bloom, torpedo trails, shockwave rings, screen shake, a hit-marker bracket, a
+  damage vignette that tracks the hull, and an adaptive-quality watchdog: a phone that cannot hold ~45 fps
+  loses particles and resolution first, and gets them back when the frames are cheap again.
+* **The leaderboard is Supabase, fetched once** — the hub queries `game_runs` for a game's top five at
+  most **once a minute** (`ArcadeStats.topRuns`, cached in memory and prefetched when the shelf paints),
+  and hands the answer to the game with `arcade:init`. The game inside the sandboxed frame has no key and
+  makes no request of its own; it just paints the board on the title card.
 
 ### Add your own game (pull request)
 

@@ -41,6 +41,13 @@
     /** Player details handed over by the hub (name, colour, customisation, room). */
     player: { name: 'WANDERER', color: '#5ff0ff', room: 'highway-01', custom: null },
     quality: 'auto',
+    /**
+     * Top runs for this game, handed over by the hub with `arcade:init`.
+     * The hub has the Supabase client and a cached board; a game inside the
+     * sandboxed frame has neither, so this is the only cheap way to show a
+     * real leaderboard. `[{ score, name, meta, at }]`, best first, or null.
+     */
+    leaderboard: null,
 
     on(kind, fn) {
       if (!listeners[kind]) throw new Error(`unknown arcade event "${kind}"`);
@@ -103,6 +110,9 @@
       case 'arcade:init': {
         sdk.player = Object.assign(sdk.player, data.payload && data.payload.player || {});
         sdk.quality = (data.payload && data.payload.quality) || 'auto';
+        if (Array.isArray(data.payload && data.payload.leaderboard)) {
+          sdk.leaderboard = data.payload.leaderboard;
+        }
         if (!started) { started = true; emit('start', sdk.player); }
         break;
       }
