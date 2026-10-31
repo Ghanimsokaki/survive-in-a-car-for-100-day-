@@ -12,6 +12,16 @@
 </head>
 <body>
 <canvas id="c"></canvas>
+<!-- Pin the base: hosts that clean URLs (Vercel) serve this page as
+     `/games/my-game` with no trailing slash, and a relative `game.js` would then
+     resolve to `/games/game.js` and 404. Copy this block as-is. -->
+<script>
+  (function pinBase() {
+    var dir = location.pathname.replace(/\/index\.html?$/i, '/');
+    if (dir.slice(-1) !== '/') dir += '/';
+    document.write('<base href="' + dir + '">');
+  })();
+</script>
 <script src="../_shared/sdk.js"></script>
 <script src="game.js"></script>
 </body>

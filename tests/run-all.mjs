@@ -25,6 +25,7 @@ const suites = [
   ['tornado-anchor.test.mjs', 'TORNADO LAB + ANCHOR CRAFTING'],
   ['records-storm.test.mjs', 'RECORDS + STORM METER'],
   ['arcade.test.mjs', 'ARCADE + COMMUNITY GAMES'],
+  ['games-paths.test.mjs', 'GAMES UNDER VERCEL URL RULES'],
   ['fleet.test.mjs', 'FLEET BUILDER + AUTO LANDSCAPE'],
   ['boot.test.mjs', 'FAST BOOT + PORTRAIT HOME + SUPABASE RELAY'],
   ['graphics.test.mjs', 'GRAPHICS TIERS + FULLSCREEN'],

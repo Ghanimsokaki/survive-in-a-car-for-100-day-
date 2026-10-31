@@ -17,7 +17,7 @@ real-time rooms of 1–8, and a game that runs on plain Node or on **Vercel**.
 npm install        # express + socket.io (the game itself needs nothing)
 npm start          # http://localhost:8080 — the Socket.IO room server
 npm run relay      # http://localhost:8000 — zero-dependency static + WebSocket relay
-npm test           # 28 headless suites (simulation, accounts, P2P rooms, UI flows, the live server)
+npm test           # 29 headless suites (simulation, accounts, P2P rooms, UI flows, the live server)
 ```
 
 No build step. `public/vendor/three.module.js` is vendored, so the game boots even offline; `npm run relay`
@@ -117,6 +117,11 @@ Build the ship, then take it to war.
   credits and salvage, and every run is scored into the arcade leaderboard.
 
 ### Add your own game (pull request)
+
+Games live in `games/<id>/` and are loaded in a sandboxed iframe. **Pin your base** — copy the `pinBase()`
+block from `_template/index.html` — because hosts disagree about trailing slashes: Vercel serves
+`/games/<id>` without one, and a relative `<script src="game.js">` would then ask for `/games/game.js` and
+404. That is what made Iron Tide look like a game that never loads.
 
 ```
 games/<your-game>/
@@ -718,7 +723,7 @@ docs/DEPLOY-RENDER.md the room server on Render: ports, CORS, staying awake
 
 ## 🧪 Tests
 
-`npm test` copies the browser modules into a shim lane and runs twenty-eight suites with no browser:
+`npm test` copies the browser modules into a shim lane and runs twenty-nine suites with no browser:
 (`tests/run-all.mjs` is the list; `node tests/build.mjs` must run first after any edit).
 
 * **simulation** — driving, fuel, anchors vs. tornado drift, bosses, scavenging, every recipe, melee,
@@ -734,6 +739,9 @@ docs/DEPLOY-RENDER.md the room server on Render: ports, CORS, staying awake
   player's token is refused, the shipped anon key cannot unlock admin, forged ban calls return 403.
 * **arcade** — catalogue scan + merge (community manifests validated, featured-first ordering), the
   sandboxed iframe contract, and the hub's ratings/records paths.
+* **games under Vercel's URL rules** — a static server that applies `cleanUrls` + `trailingSlash: false`
+  (`/games/iron-tide/index.html` → `/games/iron-tide`, no slash) and proves the ship still loads its own
+  files there — the trailing slash that was missing was the whole "the game did not start" bug.
 * **fleet builder + auto landscape** — Iron Tide's hulls, modules, jets, slot limits, dock purchases, enemy
   scaling and payouts, plus a full booted game: sail, fire, win, lose, return to dock; and the orientation
   helper's idempotence, listeners and landscape state.

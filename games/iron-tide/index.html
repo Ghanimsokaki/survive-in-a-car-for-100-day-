@@ -164,6 +164,34 @@
   </div>
 </div>
 
+<!-- Where am I? The four files below are named relatively, which only works if
+     the document URL ends in a slash. Hosts disagree: Express and Render keep the
+     slash, Vercel strips it (`trailingSlash: false`, `cleanUrls: true`), and a
+     document at `/games/iron-tide` resolves `fleet.js` to `/games/fleet.js` — a
+     404 that leaves `FleetRules` undefined and kills this game before it can
+     announce itself. So the base is pinned here, from the URL we actually got. -->
+<script>
+  (function pinBase() {
+    var dir = location.pathname.replace(/\/index\.html?$/i, '/');
+    if (dir.slice(-1) !== '/') dir += '/';
+    document.write('<base href="' + dir + '">');
+  })();
+</script>
+<script>
+  // A missing file or a thrown script must not look like a frozen screen: tell
+  // the hub, so the status bar reads "GAME ERROR — …" instead of nothing.
+  window.addEventListener('error', function (e) {
+    var t = e && e.target;
+    var what = (e && e.message) || (t && (t.src || t.href)) || 'unknown error';
+    try {
+      parent.postMessage({
+        channel: 'outrun-arcade',
+        type: 'arcade:state',
+        payload: { status: 'GAME ERROR - ' + String(what).replace(/^.*\//, '').slice(0, 18) },
+      }, '*');
+    } catch (_) { /* standalone */ }
+  }, true);
+</script>
 <script src="../_shared/sdk.js"></script>
 <script src="fleet.js"></script>
 <script src="water.js"></script>

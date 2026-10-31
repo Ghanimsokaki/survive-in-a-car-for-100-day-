@@ -45,6 +45,22 @@ Whole folder limit: **18 MB**. Keep it small — phones load this over 4G.
 
 ## The SDK
 
+**Pin your base.** Your page is served as `/games/<your-game>/` by our server,
+but Vercel's `cleanUrls` + `trailingSlash: false` serve it as `/games/<your-game>`
+— no trailing slash — and then `<script src="game.js">` resolves to
+`/games/game.js` and 404s, which looks like a game that never loads. Put this in
+`<head>` (before your script tags), exactly as `_template/index.html` does:
+
+```html
+<script>
+  (function pinBase() {
+    var dir = location.pathname.replace(/\/index\.html?$/i, '/');
+    if (dir.slice(-1) !== '/') dir += '/';
+    document.write('<base href="' + dir + '">');
+  })();
+</script>
+```
+
 Games run in `<iframe sandbox="allow-scripts">`: **no DOM access to the hub, no
 localStorage, no Supabase session, no network shortcuts.** All you can do is
 talk through `Arcade`:

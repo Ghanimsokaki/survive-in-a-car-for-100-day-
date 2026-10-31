@@ -243,7 +243,7 @@ console.log('\narcade shell');
   arc.launch('test-game');
   check('a community game opens in the frame', arc.playing?.id === 'test-game');
   check('the frame points at the game folder',
-    String(arc.nodes.frame.src).startsWith('./games/test-game/index.html'),
+    String(arc.nodes.frame.src).startsWith('./games/test-game/?g=test-game'),
     String(arc.nodes.frame.src));
 
   await arc.onMessage({ data: { channel: BRIDGE, type: 'arcade:score', payload: { score: 777, day: 4 } } });

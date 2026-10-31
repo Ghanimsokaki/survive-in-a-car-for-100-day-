@@ -134,6 +134,55 @@ console.log('\na broken dock cannot brick the ship');
   check('the canvas loop was still started', Boolean(broken.it));
 }
 
+console.log('\nthe game finds its own files');
+{
+  // The page is served three ways by three hosts, and only two of them keep the
+  // trailing slash. Vercel (`cleanUrls` + `trailingSlash: false`) serves
+  // `/games/iron-tide`, and a relative `fleet.js` then resolves to
+  // `/games/fleet.js` — 404 — which used to kill the game before it could say
+  // `arcade:ready`. The inline `pinBase()` block in index.html is the guard.
+  const html = read('games/iron-tide/index.html');
+  const pin = html.match(/<script>\s*\(function pinBase\(\)[\s\S]*?<\/script>/);
+  check('index.html pins its base before any script', Boolean(pin) && html.indexOf('pinBase') < html.indexOf('sdk.js'),
+    pin ? 'found' : 'missing');
+
+  const run = (pathname) => {
+    let written = '';
+    const sandbox = {
+      location: { pathname },
+      document: { write: (s) => { written += s; } },
+      console,
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(pin[0].replace(/^<script>|,<\/script>$/g, '').replace(/<\/script>$/, ''), sandbox);
+    return (written.match(/href="([^"]+)"/) || [])[1] || '';
+  };
+
+  const cases = {
+    '/games/iron-tide/': '/games/iron-tide/',
+    '/games/iron-tide': '/games/iron-tide/',          // Vercel's cleaned URL
+    '/games/iron-tide/index.html': '/games/iron-tide/',
+    '/arcade/games/iron-tide': '/arcade/games/iron-tide/',   // a sub-path deploy
+  };
+  let allRight = true;
+  for (const [given, want] of Object.entries(cases)) {
+    const got = run(given);
+    if (got !== want) { allRight = false; console.log(`  FAIL ${given} → ${got} (wanted ${want})`); }
+  }
+  check('…and every URL shape resolves to the game folder', allRight);
+
+  // …so the real question: does `fleet.js` land on the file that exists?
+  const resolved = new URL('fleet.js', `https://x.test${run('/games/iron-tide')}`).pathname;
+  check('a relative script resolves inside the game folder', resolved === '/games/iron-tide/fleet.js', resolved);
+  const sdk = new URL('../_shared/sdk.js', `https://x.test${run('/games/iron-tide')}`).pathname;
+  check('…and the shared SDK still resolves', sdk === '/games/_shared/sdk.js', sdk);
+
+  check('a missing file is reported to the hub, not swallowed',
+    /addEventListener\('error'/.test(html) && html.includes("type: 'arcade:state'"));
+  const template = read('games/_template/index.html');
+  check('the template every contributor copies pins it too', template.includes('pinBase'));
+}
+
 console.log('\nthe boot order is written down, not just observed');
 {
   const src = read('games/iron-tide/game.js');
