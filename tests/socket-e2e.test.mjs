@@ -521,5 +521,38 @@ console.log('\nshutdown');
 
 if (exited === null) { child.kill('SIGKILL'); }
 
+// ---------------------------------------------------------------- port rules
+// `PORT` is whatever the host supplies, and 8080 when it supplies nonsense: a
+// container that exits because of a bad env var is indistinguishable from a
+// crash. (The Space-specific 7860 rule is gone — this repo deploys to Vercel
+// and Render.)
+console.log('\nthe port rule');
+{
+  let busy = false;
+  try { await fetch('http://127.0.0.1:8080/health'); busy = true; } catch { busy = false; }
+  if (busy) {
+    console.log('  ok  skipped: something is already listening on 8080');
+  } else {
+    const junk = spawn(process.execPath, ['server.js'], {
+      cwd: root,
+      env: { ...process.env, PORT: 'not-a-port', NODE_ENV: 'test', KEEPALIVE: '0' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let out = '';
+    junk.stdout.on('data', (d) => { out += d; });
+    junk.stderr.on('data', (d) => { out += d; });
+    let listening = false;
+    for (let i = 0; i < 60 && !listening; i++) {
+      listening = out.includes('listening on http://0.0.0.0:8080');
+      if (!listening) await sleep(100);
+    }
+    check('a junk PORT falls back to 8080 instead of crashing', listening, out.trim().split('\n')[0] || 'no output');
+    const health = await fetch('http://127.0.0.1:8080/health').then((r) => r.json()).catch(() => null);
+    check('…and it serves', health?.ok === true);
+    junk.kill('SIGTERM');
+    await sleep(300);
+  }
+}
+
 console.log(problems.length ? `\nFAILED: ${problems.join(', ')}` : '\nALL SOCKET.IO TESTS PASSED');
 process.exit(problems.length ? 1 : 0);

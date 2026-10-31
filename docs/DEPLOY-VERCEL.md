@@ -70,7 +70,7 @@ replaced with an error message instead of being served.
 ## 6. The realtime server (rooms of 1–8)
 
 Vercel serves the front-end; `server.js` is the room host. Deploy it anywhere that keeps a process alive:
-Render, Railway, Fly, a VPS, Docker — anything with a port. There are no build steps and no native modules.
+Render, Railway, Fly, a VPS — anything with a port. There are no build steps and no native modules.
 
 ```bash
 npm install

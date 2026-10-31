@@ -30,8 +30,8 @@ console.log('\npackage.json is the server’s front door');
 console.log('\nserver.js — port, host, socket.io');
 {
   const src = read('server.js');
-  check('the port is resolved by lib/port.mjs', /const PORT = resolvePort\(/.test(src),
-    (src.match(/const PORT = .*/) || [''])[0]);
+  check('the port defaults to 8080', /const PORT = /.test(src) && src.includes('8080'),
+    (src.match(/const PORT = .{0,24}/) || [''])[0]);
   check('it binds every interface', /const HOST = '0\.0\.0\.0'/.test(src),
     (src.match(/const HOST = .*/) || [''])[0]);
   check('it listens on that host and port', /server\.listen\(PORT,\s*HOST/.test(src));
@@ -73,7 +73,7 @@ console.log('\nthe front-end is Gemby Games');
 console.log('\ndocs match reality');
 {
   const readme = read('README.md');
-  check('the README leads with the brand', /^---[\s\S]*?---\n\n# GEMBY GAMES/.test(readme));
+  check('the README opens with the brand', readme.startsWith('# GEMBY GAMES'));
   check('…and names both games', readme.includes('100 Days Outrun') && readme.includes('Iron Tide'));
   check('the port in the docs is 8080', readme.includes('PORT || 8080') && !readme.includes('PORT || 3000'));
   check('CORS is documented as open', /CORS is open/.test(readme));

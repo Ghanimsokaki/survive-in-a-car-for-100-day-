@@ -8,7 +8,6 @@
  * Fly, a VPS or any container host that keeps a socket open.
  *
  *   npm install && npm start        →  http://0.0.0.0:8080
- *   docker build . && docker run -p 7860:7860 .   →  Hugging Face Spaces layout
  *
  * On Render the service keeps itself awake: every ten minutes the process GETs
  * its own public URL (`RENDER_EXTERNAL_URL`, which Render sets for you) with
@@ -49,15 +48,20 @@ import {
 import { createCorsPolicy, socketIoCors } from './lib/cors-policy.mjs';
 import { publicConfig } from './lib/supabase-env.mjs';
 import { startKeepAlive } from './lib/keepalive.mjs';
-import { resolvePort, isHuggingFaceSpace, SPACES_PORT } from './lib/port.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
- * Port: the host's PORT when it gives one (Render does), 7860 inside a Hugging
- * Face Space (which routes nothing else and does not set PORT), 8080 otherwise.
+ * Port: whatever the host gives us in `PORT` (Render does), 8080 otherwise.
+ * A junk or out-of-range value must never stop the boot — a container that
+ * exits on a bad env var is indistinguishable from a crash.
  */
-const PORT = resolvePort(process.env);
+const PORT = (() => {
+  const raw = process.env.PORT;
+  if (raw === undefined || raw === '') return 8080;
+  const n = Number(raw);
+  return Number.isInteger(n) && n > 0 && n < 65536 ? n : 8080;
+})();
 /** Bind every interface so the host's proxy can route player traffic in. */
 const HOST = '0.0.0.0';
 
@@ -178,7 +182,7 @@ const SITE = existsSync(path.join(DIST, 'index.html')) ? DIST : PUBLIC;
 // contributor only has to add a folder (see games/README.md). It is mounted
 // BEFORE the site so it answers `/games` itself, and it serves the repo's copy
 // rather than `dist/games` — one source of truth, and `/games/*` works for a
-// headless `node server.js` on Render, in Docker and on the dev preview, instead
+// headless `node server.js` on Render and on the dev preview, instead
 // of a 404 in the middle of the hub's iframe (which is exactly what a
 // never-ending "loading" ship looks like from the outside). Vercel never runs
 // this file: it serves the built `dist/` (which includes `dist/games`).
@@ -449,9 +453,6 @@ server.listen(PORT, HOST, () => {
   console.log(`  → rooms: 1–${MAX_PLAYERS} players · telemetry up to 15 Hz`);
   console.log(`  → CORS: ${corsPolicy.open ? 'OPEN — any front-end' : `${corsPolicy.mode}: ${corsPolicy.origins.join(', ')}`}`);
   console.log(`  → static: ${path.relative(__dirname, SITE) || '.'}`);
-  if (isHuggingFaceSpace(process.env)) {
-    console.log(`  → Hugging Face Space: bound to ${SPACES_PORT} (the only port the Space routes to)`);
-  }
 
   /* ---------------------------------------------------------- keep-alive ---
    * Free hosts sleep after ~15 idle minutes; a 10-minute GET to our own public

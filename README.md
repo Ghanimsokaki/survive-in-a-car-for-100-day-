@@ -1,13 +1,3 @@
----
-title: Gemby Games
-emoji: 🚗
-colorFrom: yellow
-colorTo: gray
-sdk: docker
-app_port: 7860
-pinned: false
----
-
 # GEMBY GAMES — 100 Days Outrun & Iron Tide
 
 **Gemby Games** is a **3D multiplayer arcade for phones**, and the shelf carries two games: the flagship
@@ -27,9 +17,7 @@ real-time rooms of 1–8, and a game that runs on plain Node or on **Vercel**.
 npm install        # express + socket.io (the game itself needs nothing)
 npm start          # http://localhost:8080 — the Socket.IO room server
 npm run relay      # http://localhost:8000 — zero-dependency static + WebSocket relay
-npm test           # 25 headless suites (simulation, accounts, UI flows, the live server)
-
-docker build -t gemby-games . && docker run -p 7860:7860 gemby-games   # Hugging Face Spaces layout
+npm test           # 28 headless suites (simulation, accounts, P2P rooms, UI flows, the live server)
 ```
 
 No build step. `public/vendor/three.module.js` is vendored, so the game boots even offline; `npm run relay`
@@ -606,31 +594,6 @@ Express or Socket.IO, so they are tested directly; `lib/cors-policy.mjs` holds t
 `public/js/sio.js` is the browser half — it loads the client from the server, joins or creates the room,
 re-joins after a reconnect and hands envelopes to the game exactly like every other lane.
 
-### Docker & Hugging Face Spaces
-
-The repository root carries a `Dockerfile` for Hugging Face Spaces:
-
-```dockerfile
-FROM node:18
-WORKDIR /app
-COPY package*.json ./
-RUN npm install
-COPY . .
-EXPOSE 7860
-CMD ["node", "server.js"]
-```
-
-A Space routes traffic to exactly **7860** and — unlike Render, Railway or Fly — does **not** set `PORT` for a
-Docker space. So the server resolves its port in this order: `PORT` if the host gives one, **7860 inside a
-Space** (detected from `SPACE_ID` / `SPACE_HOST` / `SPACE_REPO_NAME`), 8080 otherwise. The same image therefore
-works unchanged on a Space, on Render, and on a laptop.
-
-`EXPOSE 7860` is documentation for the proxy; the bind comes from that rule, which is why the container is not
-left listening on 8080 with every request timing out. `.dockerignore` keeps `node_modules`, `dist` and `.env`
-out of the image, so `npm install` inside the build is the only source of dependencies.
-
-Full walkthrough: [`docs/DEPLOY-HF.md`](docs/DEPLOY-HF.md).
-
 ### Staying awake on Render
 
 Free containers sleep after ~15 idle minutes. `server.js` keeps itself awake: on boot it starts a single
@@ -697,9 +660,8 @@ polling relay if Supabase is not configured); for 15 Hz Socket.IO rooms run `npm
 socket open — Render, Railway, Fly, a VPS — and point the game at it with `?relay=https://your-server`, or set
 `window.__OUTRUN_RELAY__` from the deployment's own config.
 
-The room server has its own walkthroughs: [`docs/DEPLOY-RENDER.md`](docs/DEPLOY-RENDER.md) (ports, CORS, the
-self-ping, how to confirm it from a phone) with `render.yaml` as a one-click blueprint, and
-[`docs/DEPLOY-HF.md`](docs/DEPLOY-HF.md) for Hugging Face Spaces — the root `Dockerfile` builds there as-is.
+The room server has its own walkthrough: [`docs/DEPLOY-RENDER.md`](docs/DEPLOY-RENDER.md) (ports, CORS, the
+self-ping, how to confirm it from a phone), with `render.yaml` as a one-click blueprint.
 
 ## 🗂 Project layout
 
@@ -756,7 +718,7 @@ docs/DEPLOY-RENDER.md the room server on Render: ports, CORS, staying awake
 
 ## 🧪 Tests
 
-`npm test` copies the browser modules into a shim lane and runs twenty-three suites with no browser:
+`npm test` copies the browser modules into a shim lane and runs twenty-eight suites with no browser:
 (`tests/run-all.mjs` is the list; `node tests/build.mjs` must run first after any edit).
 
 * **simulation** — driving, fuel, anchors vs. tornado drift, bosses, scavenging, every recipe, melee,
@@ -795,6 +757,14 @@ docs/DEPLOY-RENDER.md the room server on Render: ports, CORS, staying awake
   client, CORS echo/refusal/preflight, then real clients over a WebSocket — create, join, telemetry,
   throttling, chat, refusal of impostors, the eight-player cap, session recovery after the transport is
   killed, ghost-seat reclaiming, SIGTERM shutdown.
+* **iron tide boot** — the ship, booted headlessly: it announces `arcade:ready` *before* it builds the dock
+  (so a broken dock cannot black out the canvas), fills the dock and the wallet, sails a sortie, fires,
+  ends the run and reports the score — in a few milliseconds.
+* **p2p protocol / rooms / lane** — the WebRTC protocol on its own (validation, clamping, host election),
+  then a real `P2PRoom` with a fake `RTCPeerConnection`: election, offer/answer/ICE, star relaying,
+  host-stamped authorship, junk dropped, a host leaving; then two real `Net` instances over a real socket,
+  proving the lane glue — signalling on its own Supabase topic, telemetry browser-to-browser, a quitting
+  host, a dead topic and `?relay=`.
 * **loot + inventory + recipes** — 1000 generated recipes unique and browsable, drops only bank when you
   stand on them, magnet/expiry behaviour, stack caps, hotbar pinning, medkit/fuel/repair use, 24-per-page
   workbench paging + search, and every one of the 1,015 recipes crafting without an error.

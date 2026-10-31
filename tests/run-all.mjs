@@ -41,7 +41,6 @@ const suites = [
   ['socket-e2e.test.mjs', 'SOCKET.IO SERVER — LIVE ROOMS'],
   ['keepalive.test.mjs', 'RENDER KEEP-ALIVE'],
   ['brand.test.mjs', 'GEMBY BRAND + SERVER CONTRACT'],
-  ['docker.test.mjs', 'DOCKERFILE + HUGGING FACE SPACES'],
 ];
 
 await run(process.execPath, ['build.mjs']);
