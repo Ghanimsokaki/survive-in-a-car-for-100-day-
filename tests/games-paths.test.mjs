@@ -15,16 +15,7 @@
  *   · the game pins its own `<base>`, so every file it loads still resolves
  *     even when the host has stripped the slash.
  */
-import { createServer } from 'node:http';
-import { readFile, stat } from 'node:fs/promises';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const here = path.dirname(fileURLToPath(import.meta.url));
-const root = path.join(here, '..');
-// Serve the shipped sources (Vercel's `dist/` is a copy of exactly these), so
-// this suite never depends on a build having run first.
-const SITE = { games: path.join(root, 'games'), public: path.join(root, 'public') };
+import { startVercelLike } from './vercel-like.mjs';
 
 const problems = [];
 const check = (label, cond, extra = '') => {
@@ -32,57 +23,9 @@ const check = (label, cond, extra = '') => {
   else { console.log(`  FAIL ${label}${extra ? ` — ${extra}` : ''}`); problems.push(label); }
 };
 
-// --------------------------------------------------- a host with Vercel's rules
-const TYPES = {
-  '.html': 'text/html; charset=utf-8', '.js': 'application/javascript', '.json': 'application/json',
-  '.css': 'text/css', '.svg': 'image/svg+xml',
-};
-
-/** Resolves a URL path the way Vercel does: clean URLs, no trailing slash. */
-async function resolveVercel(pathname) {
-  let p = pathname;
-  if (p === '/') return { file: path.join(SITE.public, 'index.html') };
-  if (p.endsWith('/index.html')) return { redirect: p.slice(0, -'index.html'.length) };
-  if (p.endsWith('.html')) return { redirect: p.slice(0, -'.html'.length) };
-  if (p.endsWith('/')) return { redirect: p.slice(0, -1) };
-  const file = p.startsWith('/games/')
-    ? path.join(SITE.games, p.replace(/^\/games\//, ''))
-    : path.join(SITE.public, p);
-  try {
-    const info = await stat(file);
-    if (info.isDirectory()) {
-      const index = path.join(file, 'index.html');
-      await stat(index);
-      return { file: index };
-    }
-    return { file };
-  } catch {
-    return { status: 404 };
-  }
-}
-
-const server = createServer(async (req, res) => {
-  const { pathname } = new URL(req.url, 'http://x');
-  const found = await resolveVercel(pathname);
-  if (found.redirect !== undefined) { res.writeHead(308, { location: found.redirect || '/' }); res.end(); return; }
-  if (found.status === 404) { res.writeHead(404, { 'content-type': 'text/plain' }); res.end('Not Found'); return; }
-  const body = await readFile(found.file);
-  res.writeHead(200, { 'content-type': TYPES[path.extname(found.file)] || 'application/octet-stream' });
-  res.end(body);
-});
-await new Promise((r) => server.listen(0, '127.0.0.1', r));
-const base = `http://127.0.0.1:${server.address().port}`;
-
-/** Follows redirects, reporting the URL the browser would end up at. */
-async function land(url) {
-  let current = url;
-  for (let hop = 0; hop < 5; hop += 1) {
-    const res = await fetch(current, { redirect: 'manual' });
-    if (res.status >= 300 && res.status < 400) { current = new URL(res.headers.get('location'), current).href; continue; }
-    return { url: current, status: res.status, res };
-  }
-  return { url: current, status: 0 };
-}
+const host = await startVercelLike();
+const base = host.url;
+const land = (u) => host.land(u);
 
 console.log('\nwhat the hub asks for');
 {
@@ -105,7 +48,7 @@ const shipUrl = `${base}/games/iron-tide/`;
   check('…and Vercel strips the slash, as it does in production',
     landed.url === `${base}/games/iron-tide`, landed.url.replace(base, '') || '/');
 
-  const html = await landed.res.text();
+  const html = landed.text;
   check('the ship is what came back', html.includes('IRON TIDE'));
   check('…with its base pinned', html.includes('pinBase'));
   check('…before any of its own scripts',
@@ -136,6 +79,6 @@ console.log('\nthe hub itself');
   check('…and lists the ship with an entry', json.games.some((g) => g.id === 'iron-tide' && g.entry === 'index.html'));
 }
 
-server.close();
+await host.close();
 console.log(problems.length ? `\nFAILED: ${problems.join(', ')}` : '\nGAMES RESOLVE CORRECTLY UNDER VERCEL URL RULES');
 process.exit(problems.length ? 1 : 0);

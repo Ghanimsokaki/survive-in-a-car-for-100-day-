@@ -17,7 +17,7 @@ real-time rooms of 1–8, and a game that runs on plain Node or on **Vercel**.
 npm install        # express + socket.io (the game itself needs nothing)
 npm start          # http://localhost:8080 — the Socket.IO room server
 npm run relay      # http://localhost:8000 — zero-dependency static + WebSocket relay
-npm test           # 29 headless suites (simulation, accounts, P2P rooms, UI flows, the live server)
+npm test           # 30 headless suites (simulation, accounts, P2P rooms, UI flows, the live server)
 ```
 
 No build step. `public/vendor/three.module.js` is vendored, so the game boots even offline; `npm run relay`
@@ -723,7 +723,7 @@ docs/DEPLOY-RENDER.md the room server on Render: ports, CORS, staying awake
 
 ## 🧪 Tests
 
-`npm test` copies the browser modules into a shim lane and runs twenty-nine suites with no browser:
+`npm test` copies the browser modules into a shim lane and runs thirty suites with no browser:
 (`tests/run-all.mjs` is the list; `node tests/build.mjs` must run first after any edit).
 
 * **simulation** — driving, fuel, anchors vs. tornado drift, bosses, scavenging, every recipe, melee,
@@ -742,6 +742,11 @@ docs/DEPLOY-RENDER.md the room server on Render: ports, CORS, staying awake
 * **games under Vercel's URL rules** — a static server that applies `cleanUrls` + `trailingSlash: false`
   (`/games/iron-tide/index.html` → `/games/iron-tide`, no slash) and proves the ship still loads its own
   files there — the trailing slash that was missing was the whole "the game did not start" bug.
+* **games under Vercel's URL rules + full page load** — a static server that applies `cleanUrls` +
+  `trailingSlash: false`, then a browser-like loader: it fetches the game page over HTTP, runs its inline
+  `<base>` pin, fetches and executes every `<script src>` in order, and asserts `arcade:ready` reached the
+  parent — with the dock built and the wallet painted, inside a storage-locked (sandboxed) origin. It also
+  removes the pin and proves the whole game dies, so the regression cannot come back quietly.
 * **fleet builder + auto landscape** — Iron Tide's hulls, modules, jets, slot limits, dock purchases, enemy
   scaling and payouts, plus a full booted game: sail, fire, win, lose, return to dock; and the orientation
   helper's idempotence, listeners and landscape state.
