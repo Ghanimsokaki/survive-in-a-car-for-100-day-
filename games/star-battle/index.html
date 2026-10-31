@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+<title>Star Battle</title>
+<style>
+  :root{--ink:#03060e;--hud:#7fe4ff;--gold:#ffd578;--red:#ff6b6b;--line:rgba(127,228,255,.25)}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--ink);overflow:hidden;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#dff3ff;
+    -webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+  canvas{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none}
+
+  /* ------------------------------------------------------------- overlays */
+  .screen{position:fixed;inset:0;display:flex;flex-direction:column;pointer-events:none}
+  .screen.hidden{display:none}
+  .scrim{position:fixed;inset:0;background:radial-gradient(circle at 50% 40%,rgba(8,20,38,.55),rgba(2,4,10,.92));
+    pointer-events:none}
+
+  /* title / hangar */
+  #title{justify-content:center;align-items:center;pointer-events:auto;padding:18px}
+  .card{width:min(560px,94vw);background:linear-gradient(180deg,rgba(10,22,38,.92),rgba(5,10,20,.95));
+    border:1px solid var(--line);border-radius:14px;padding:18px 20px;
+    box-shadow:0 0 60px rgba(60,180,255,.12) inset}
+  .kicker{font-size:9px;letter-spacing:4px;color:#5d90ad;margin:0 0 6px}
+  h1{margin:0;font-size:26px;letter-spacing:8px;color:var(--hud);font-weight:800;
+    text-shadow:0 0 24px rgba(90,210,255,.5)}
+  .sub{margin:6px 0 14px;font-size:9.5px;letter-spacing:1.6px;line-height:1.7;color:#8fb0c6}
+  .ship-row{display:flex;gap:12px;align-items:center;padding:10px;border-radius:10px;
+    background:rgba(8,18,30,.8);border:1px solid rgba(255,255,255,.06);margin-bottom:10px}
+  .ship-row .badge{width:44px;height:44px;flex:0 0 44px;border-radius:8px;display:grid;place-items:center;
+    background:#0b2135;border:1px solid rgba(127,228,255,.3);font-size:16px}
+  .ship-row b{display:block;font-size:11px;letter-spacing:2.4px;color:#e8f8ff}
+  .ship-row em{display:block;font-style:normal;font-size:8.5px;letter-spacing:1.4px;color:#6f93a8;margin-top:2px}
+  .enemy b{color:#ffd0c8}
+  .enemy .badge{background:#2a1016;border-color:rgba(255,120,110,.3)}
+  .keys{font-size:8.5px;letter-spacing:1.2px;line-height:1.9;color:#6d8ea3;margin:8px 0 4px}
+  .keys kbd{background:#0d1e2e;border:1px solid rgba(255,255,255,.12);border-radius:4px;
+    padding:1px 5px;font:inherit;color:#bfe6f8}
+  .big{width:100%;font:inherit;font-size:13px;letter-spacing:5px;font-weight:800;padding:14px;
+    border-radius:10px;background:linear-gradient(180deg,#38c8ff,#1d86c8);color:#02121c;border:0;
+    cursor:pointer;margin-top:10px;box-shadow:0 6px 24px rgba(56,200,255,.25)}
+  .big:active{transform:translateY(1px)}
+  .best{font-size:9px;letter-spacing:2px;color:#ffd578;text-align:center;margin-top:8px}
+
+  /* battle HUD */
+  #hud{justify-content:space-between}
+  .top{display:flex;gap:10px;padding:10px 12px;align-items:flex-start}
+  .bars{flex:1;max-width:300px;display:flex;flex-direction:column;gap:5px}
+  .bar span{display:block;font-size:7px;letter-spacing:2px;color:#7aa6bd;margin-bottom:2px}
+  .bar i{display:block;height:7px;border-radius:4px;background:#0d1c28;overflow:hidden;
+    border:1px solid rgba(255,255,255,.06)}
+  .bar i u{display:block;height:100%;width:100%;transition:width .12s linear}
+  #shieldBar u{background:linear-gradient(90deg,#59c9ff,#2b7fd0)}
+  #hullBar u{background:linear-gradient(90deg,#6dffa8,#1f9b5e)}
+  .bar.low #hullBar u,#hullBar.low u{background:linear-gradient(90deg,#ff8a6b,#c23c3c)}
+  .readout{text-align:right;font-size:9px;letter-spacing:2px;color:#9fc9dd;line-height:1.8}
+  .readout b{display:block;font-size:15px;letter-spacing:2px;color:#fff}
+  .warn{color:#ff9aa4 !important}
+  .bottom{display:flex;align-items:flex-end;gap:10px;padding:12px}
+  .chip{font-size:8.5px;letter-spacing:1.6px;padding:8px 10px;border-radius:8px;
+    background:rgba(6,16,26,.8);border:1px solid rgba(255,255,255,.1);color:#9fbed0}
+  .chip b{color:#fff}
+  .actions{display:flex;gap:8px;flex:1;justify-content:flex-end;flex-wrap:wrap}
+  .hbtn{pointer-events:auto;font:inherit;font-size:9.5px;letter-spacing:2px;font-weight:700;
+    padding:12px 14px;border-radius:10px;background:rgba(8,20,32,.9);
+    border:1px solid var(--line);color:#d6f1ff;cursor:pointer;min-width:74px}
+  .hbtn.ready{border-color:#6dffa8;color:#baffd6;box-shadow:0 0 18px rgba(109,255,168,.22)}
+  .hbtn:disabled{opacity:.4}
+  .hbtn.fire{border-color:rgba(127,228,255,.6);color:#d8f4ff}
+  .banner{position:fixed;left:0;right:0;top:38%;text-align:center;font-size:15px;letter-spacing:7px;
+    color:var(--hud);text-shadow:0 0 28px rgba(90,210,255,.6);opacity:0;transition:opacity .25s;
+    pointer-events:none}
+  .banner.show{opacity:1}
+
+  /* result */
+  #result{justify-content:center;align-items:center;pointer-events:auto;background:rgba(2,5,11,.9)}
+  #result .card{text-align:center}
+  #result h2{margin:0 0 6px;font-size:17px;letter-spacing:5px;color:#ffd578}
+  #result p{margin:0 0 12px;font-size:9px;letter-spacing:1.6px;color:#8fb0c6;line-height:1.8}
+  .stat-row{display:flex;gap:8px;justify-content:center;margin-bottom:14px;flex-wrap:wrap}
+  .stat{min-width:88px;padding:8px 10px;border-radius:9px;background:rgba(8,18,30,.9);
+    border:1px solid rgba(255,255,255,.07)}
+  .stat span{display:block;font-size:7px;letter-spacing:1.8px;color:#6d8ea3}
+  .stat b{font-size:16px;letter-spacing:1px;color:#eaf8ff}
+  .ghost{width:100%;font:inherit;font-size:9.5px;letter-spacing:3px;padding:11px;border-radius:9px;
+    margin-top:8px;background:#0c1c2a;border:1px solid var(--line);color:#a8cadd;cursor:pointer}
+  .hidden{display:none !important}
+  @media (max-width:420px){
+    h1{font-size:20px;letter-spacing:5px}
+    .card{padding:14px}
+    .hbtn{padding:11px 10px;min-width:64px;font-size:9px}
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<!-- ======================= TITLE / HANGAR ======================= -->
+<div id="title" class="screen">
+  <div class="scrim"></div>
+  <div class="card">
+    <p class="kicker">STARFLEET — SECTOR 001</p>
+    <h1>STAR BATTLE</h1>
+    <p class="sub">One starship against the dark. Hold the line as long as you can.</p>
+
+    <div class="ship-row">
+      <span class="badge">◈</span>
+      <span>
+        <b>U.S.S. ENTERPRISE</b>
+        <em>NCC-1701-E · PHASERS · QUANTUM TORPEDOES · EVASIVE PATTERN</em>
+      </span>
+    </div>
+    <div class="ship-row enemy">
+      <span class="badge">✦</span>
+      <span>
+        <b>NARADA · VENGEANCE</b>
+        <em>HOSTILE CONTACTS — THEY COME IN WAVES, AND THEY GET WORSE</em>
+      </span>
+    </div>
+
+    <p class="keys">
+      <kbd>W</kbd>/<kbd>S</kbd> thrust · <kbd>A</kbd>/<kbd>D</kbd> turn · <kbd>SPACE</kbd> phasers ·
+      <kbd>SHIFT</kbd> torpedo · <kbd>E</kbd> evasive<br />
+      On a phone: left half steers, right half fires, and the buttons do the rest.
+    </p>
+    <button id="launchBtn" class="big" type="button">ENGAGE ▸</button>
+    <p class="best" id="bestLine">BEST SCORE — 0</p>
+  </div>
+</div>
+
+<!-- ============================ HUD ============================ -->
+<div id="hud" class="screen hidden">
+  <div class="top">
+    <div class="bars">
+      <div class="bar"><span>SHIELDS</span><i><u id="shieldBar" style="width:100%"></u></i></div>
+      <div class="bar"><span>HULL</span><i><u id="hullBar" style="width:100%"></u></i></div>
+    </div>
+    <div class="readout">
+      <span>WAVE</span><b id="waveNum">1</b>
+      <span>SCORE</span><b id="scoreNum">0</b>
+    </div>
+  </div>
+  <div class="banner" id="banner"></div>
+  <div class="bottom">
+    <div class="chip" id="torpedoChip">TORPEDOES <b>4</b></div>
+    <div class="actions">
+      <button id="evadeBtn" class="hbtn" type="button">EVADE</button>
+      <button id="torpBtn" class="hbtn" type="button">TORPEDO</button>
+      <button id="fireBtn" class="hbtn fire ready" type="button">FIRE</button>
+    </div>
+  </div>
+</div>
+
+<!-- =========================== RESULT =========================== -->
+<div id="result" class="screen hidden">
+  <div class="card">
+    <h2 id="resultTitle">SHIP LOST</h2>
+    <p id="resultText">The Enterprise is gone. Starfleet will remember the delay you bought.</p>
+    <div class="stat-row">
+      <div class="stat"><span>SCORE</span><b id="resultScore">0</b></div>
+      <div class="stat"><span>WAVE</span><b id="resultWave">1</b></div>
+      <div class="stat"><span>KILLS</span><b id="resultKills">0</b></div>
+      <div class="stat"><span>TIME</span><b id="resultTime">0s</b></div>
+    </div>
+    <button id="againBtn" class="big" type="button">ENGAGE AGAIN</button>
+    <button id="exitBtn" class="ghost" type="button">LEAVE THE SECTOR</button>
+  </div>
+</div>
+
+<!-- Where am I? The scripts below are named relatively, and hosts disagree about
+     the trailing slash (Vercel's cleanUrls strips it, Express keeps it). Pinning
+     the base from the URL we actually got makes both work. Copy this block into
+     any game page. -->
+<script>
+  (function pinBase() {
+    var dir = location.pathname.replace(/\/index\.html?$/i, '/');
+    if (dir.slice(-1) !== '/') dir += '/';
+    document.write('<base href="' + dir + '">');
+  })();
+</script>
+<script>
+  // A missing file or a thrown script must not look like a frozen screen.
+  window.addEventListener('error', function (e) {
+    var t = e && e.target;
+    var what = (e && e.message) || (t && (t.src || t.href)) || 'unknown error';
+    try {
+      parent.postMessage({
+        channel: 'outrun-arcade',
+        type: 'arcade:state',
+        payload: { status: 'GAME ERROR - ' + String(what).replace(/^.*\//, '').slice(0, 18) },
+      }, '*');
+    } catch (_) { /* standalone */ }
+  }, true);
+</script>
+<script src="../_shared/sdk.js"></script>
+<script src="ships.js"></script>
+<script src="game.js"></script>
+</body>
+</html>

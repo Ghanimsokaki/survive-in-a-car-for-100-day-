@@ -1,0 +1,13 @@
+{
+  "id": "star-battle",
+  "title": "Star Battle",
+  "author": "ghanimz",
+  "blurb": "Fly the Enterprise-E against the Narada and the Vengeance: phasers, quantum torpedoes and evasive patterns, wave after wave.",
+  "tags": ["space", "shooter", "pve", "arcade"],
+  "version": "1.0.0",
+  "entry": "index.html",
+  "icon": "icon.svg",
+  "accent": "#38c8ff",
+  "players": "1",
+  "featured": true
+}

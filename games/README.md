@@ -3,9 +3,10 @@
 Every game in the arcade is a folder in this directory. Adding one is a **pull
 request** — no server, no database, no upload form.
 
-The shelf currently shows **two games**: the built-in *100 Days Outrun* (one
-game with five modes, shipped in `public/`) and **`iron-tide/`** (the ship
-builder). Folders whose name starts with `_` are developer spaces and are never
+The shelf currently shows **three games**: the built-in *100 Days Outrun* (one
+game with five modes, shipped in `public/`), **`iron-tide/`** (the ship builder)
+and **`star-battle/`** (the starship duel — the Enterprise-E against the Narada
+and the Vengeance). Folders whose name starts with `_` are developer spaces and are never
 listed, bundled or scanned: `_template/` (starter), `_shared/` (the SDK) and
 `_parked/` (the five older sample games, kept as reference).
 
