@@ -988,6 +988,18 @@ body.touch{-webkit-user-select:none;user-select:none;overscroll-behavior:none}
 .admin-row button.prime{background:var(--cyan,#6be0ff);color:#04202b;border-color:var(--cyan,#6be0ff);font-weight:700}
 .admin-row button.prime:hover{filter:brightness(1.12)}
 .admin-row button.on{background:var(--amber);color:#180e02;border-color:var(--amber)}
+
+/* owner analytics: players and games, as a table the eye can scan */
+.admin-sec h3 .admin-mini{font:inherit;font-size:7px;letter-spacing:1.4px;padding:4px 7px;border-radius:6px;
+  background:#182231;border:1px solid rgba(255,255,255,.14);color:#b9c6d8;cursor:pointer}
+.admin-mini:active{transform:translateY(1px)}
+.admin-games{display:flex;flex-direction:column;gap:6px;margin-top:10px}
+.admin-game{display:grid;grid-template-columns:120px 1fr;gap:6px 10px;align-items:center;
+  padding:7px 9px;border-radius:8px;background:#0e141d;border:1px solid rgba(255,255,255,.06)}
+.admin-game b{font-size:8.5px;letter-spacing:1.4px;color:#e8f1ff;text-transform:uppercase}
+.admin-game span{font-size:7px;letter-spacing:1.1px;color:#8b98ab;grid-column:2}
+.admin-game .adm-bar{grid-column:1;height:5px;border-radius:4px;background:#182231;overflow:hidden}
+.admin-game .adm-bar i{display:block;height:100%;background:linear-gradient(90deg,#ffb347,#ffd58a)}
 .admin-sec h3 small{font-size:7.5px;letter-spacing:1.2px;color:#5f6a7b;margin-left:6px;font-weight:400}
 
 /* ---------------------------------------------------------------------------
@@ -1572,3 +1584,12 @@ body.run-live .settings-fab{display:block}
 .err-bar button:hover{background:rgba(255,255,255,.18)}
 #linkRow.link-ok{color:#6dffa8}
 #linkRow.link-warn{color:#ffce7a}
+
+/* runtime error strip: one line, dismissible, under everything else */
+#runtimeError{position:fixed;left:8px;right:8px;bottom:calc(8px + env(safe-area-inset-bottom));z-index:90;
+  display:flex;gap:8px;align-items:center;padding:9px 11px;border-radius:10px;
+  background:rgba(40,8,12,.94);border:1px solid rgba(255,110,110,.55);color:#ffd9d9;
+  font:600 9px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:1.1px}
+#runtimeError span{flex:1}
+#runtimeError button{font:inherit;padding:5px 8px;border-radius:7px;background:#3a1116;
+  border:1px solid rgba(255,120,120,.45);color:#ffd9d9;cursor:pointer}

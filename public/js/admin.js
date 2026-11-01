@@ -16,6 +16,7 @@ import { ITEMS, itemName } from './items.js';
 
 const ITEM_IDS = Object.keys(ITEMS).filter((id) => ITEMS[id].kind !== 'material');
 import { WEATHERS } from './game.js';
+import { summarizePlays } from './arcade-stats.js';
 
 export const ADMIN_USERNAME = 'ghanimz';
 
@@ -203,6 +204,15 @@ export class AdminPanel {
           </section>
 
           <section class="admin-sec wide">
+            <h3>ANALYTICS · PLAYERS + GAMES <button data-act="analytics" type="button" class="admin-mini">REFRESH</button></h3>
+            <div class="admin-stats" id="admAnalytics">
+              <p class="admin-note">Reading the run log…</p>
+            </div>
+            <div id="admGames" class="admin-games"></div>
+            <p class="admin-note" id="admAnalyticsNote">Every finished run, every game, from the shared run log.</p>
+          </section>
+
+          <section class="admin-sec wide">
             <h3>PLAYERS IN ROOM</h3>
             <div class="admin-players" id="admPlayers"><p class="admin-note">Nobody else in this room.</p></div>
           </section>
@@ -317,6 +327,7 @@ export class AdminPanel {
     this.el.classList.remove('hidden');
     this.el.classList.add('show');
     this.refresh();
+    this.loadAnalytics();
     this.game.paused = true;
     this.game.hud?.prompt?.('');
     return true;
@@ -429,9 +440,72 @@ export class AdminPanel {
       case 'clearHostiles': g.clearHostiles(); break;
       case 'clearStorms': g.clearStorms(); break;
       case 'ban': this.banFromForm(); break;
+      case 'analytics': this.loadAnalytics({ force: true }); break;
       default: break;
     }
     this.refresh();
+  }
+
+  /**
+   * The owner's view of the arcade: how many runs, how many people, and which
+   * games they are actually playing. `game_runs` is world-readable by design,
+   * so this is one select; everything after it is arithmetic.
+   */
+  async loadAnalytics({ force = false } = {}) {
+    if (!this.el) return null;
+    const host = this.el.querySelector('#admAnalytics');
+    const table = this.el.querySelector('#admGames');
+    const note = this.el.querySelector('#admAnalyticsNote');
+    if (!host || !table) return null;
+    if (this.analyticsBusy) return null;
+    if (!force && this.analyticsAt && Date.now() - this.analyticsAt < 60000) return this.analytics;
+    const sb = this.account?.sb;
+    if (!sb?.select) {
+      host.innerHTML = '<div class="adm-stat"><span>RUN LOG</span><b>OFFLINE</b></div>';
+      table.innerHTML = '';
+      if (note) note.textContent = 'Connect Supabase to read the shared run log. Local runs still count on this device.';
+      return null;
+    }
+    this.analyticsBusy = true;
+    try {
+      const rows = await sb.select('game_runs',
+        'select=game_id,score,seconds,won,created_at,user_id&order=created_at.desc&limit=500');
+      const summary = summarizePlays(rows || [], Date.now());
+      this.analytics = summary;
+      this.analyticsAt = Date.now();
+      const ago = (at) => {
+        if (!at) return '—';
+        const mins = Math.max(0, Math.round((Date.now() - at) / 60000));
+        if (mins < 60) return `${mins}m`;
+        if (mins < 1440) return `${Math.round(mins / 60)}h`;
+        return `${Math.round(mins / 1440)}d`;
+      };
+      host.innerHTML = [
+        ['RUNS', String(summary.total)],
+        ['LAST 24H', String(summary.today)],
+        ['PLAYERS', String(summary.players)],
+        ['GUEST RUNS', String(summary.guests)],
+        ['GAMES PLAYED', String(summary.games.length)],
+        ['BEST SCORE', String(summary.best)],
+      ].map(([k, v]) => `<div class="adm-stat"><span>${k}</span><b>${v}</b></div>`).join('');
+      const max = Math.max(1, ...summary.games.map((g) => g.plays));
+      table.innerHTML = summary.games.length
+        ? summary.games.map((g) => `
+          <div class="adm-game">
+            <b>${g.id}</b>
+            <span class="adm-bar"><i style="width:${Math.round((g.plays / max) * 100)}%"></i></span>
+            <span>${g.plays} RUN${g.plays === 1 ? '' : 'S'} · ${g.players} PLAYER${g.players === 1 ? '' : 'S'} · BEST ${g.best} · AVG ${g.avg} · ${ago(g.last)} AGO</span>
+          </div>`).join('')
+        : '<p class="admin-note">No runs in the log yet.</p>';
+      if (note) note.textContent = `Read ${summary.total} run${summary.total === 1 ? '' : 's'} just now · refreshes once a minute.`;
+      return summary;
+    } catch (err) {
+      if (host) host.innerHTML = `<div class="adm-stat"><span>RUN LOG</span><b>ERROR</b></div>`;
+      if (note) note.textContent = `Could not read game_runs — ${err?.message || 'unknown'}. Has the Supabase schema been applied?`;
+      return null;
+    } finally {
+      this.analyticsBusy = false;
+    }
   }
 
   /** Compass bearings relative to wherever the rig is pointing. */

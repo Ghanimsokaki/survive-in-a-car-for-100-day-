@@ -1049,10 +1049,56 @@ async function boot() {
   document.documentElement.classList.add('booted');
 }
 
+
+/* ------------------------------------------------------------ error boundary
+ * A thrown listener or a rejected promise used to be a console line the player
+ * never saw and a game that had quietly stopped. Catch both, keep the page
+ * alive, tell the player once, and keep the last few where the owner console
+ * can read them — that is how "cannot read properties of undefined" becomes a
+ * bug report with a stack instead of a frozen screen.
+ */
+const errorLog = [];
+globalThis.__outrunErrors = errorLog;
+let errorBarAt = 0;
+
+function noteRuntimeError(kind, err) {
+  const message = String(err?.message || err?.reason?.message || err || 'unknown error');
+  const stack = String(err?.stack || err?.reason?.stack || '').split('\n').slice(0, 5).join('\n');
+  const entry = { kind, message, stack, at: Date.now() };
+  errorLog.unshift(entry);
+  if (errorLog.length > 12) errorLog.pop();
+  try { sessionStorage.setItem('outrun-errors', JSON.stringify(errorLog.slice(0, 6))); } catch { /* opaque */ }
+  try { console.warn(`[runtime] ${kind}: ${message}`, stack); } catch { /* no console */ }
+  if (Date.now() - errorBarAt < 15000) return entry;
+  errorBarAt = Date.now();
+  try {
+    let bar = document.getElementById('runtimeError');
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.id = 'runtimeError';
+      document.body.appendChild(bar);
+    }
+    bar.innerHTML = `<span>⚠ ${String(message).slice(0, 96)}</span>`
+      + '<button type="button" data-err-close>HIDE</button>';
+    bar.querySelector('[data-err-close]')?.addEventListener('click', () => bar.remove());
+  } catch { /* no DOM: the log is the point */ }
+  return entry;
+}
+
+try {
+  addEventListener('error', (e) => {
+    // a missing <img>/<script> is not a runtime failure worth interrupting for
+    if (e?.target && e.target !== window && !e.message) return;
+    noteRuntimeError('error', e?.error || e?.message);
+  }, true);
+  addEventListener('unhandledrejection', (e) => noteRuntimeError('promise', e));
+} catch { /* an ancient browser: the game loop has its own guard */ }
+
 boot();
 
 window.__outrun = {
   state, account, startRun,
+  get errors() { return errorLog; },
   get game() { return game; },
   get admin() { return admin; },
   get arcade() { return arcade; },

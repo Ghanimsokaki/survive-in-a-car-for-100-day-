@@ -140,7 +140,23 @@ A sector you can fly, three Enterprises, and the dark.
   survey two landmarks, report in. Objectives pay score and repair the hull; the run log on the title card
   keeps the last six.
 * **Two more Enterprises fly with you** — `ENTERPRISE-D` and `ENTERPRISE-F` hold a firing lane beside you,
-  shoot what comes close, and count as your wing on the result card.
+  shoot what comes close, and count as your wing on the result card. When the hub knows who else is in the
+  room, the wing flies *those players* instead, with their names tagged over the hull — the names arrive with
+  `arcade:init`, because a sandboxed frame cannot open a socket of its own.
+* **A hangar, not a fixed ship** — the title card's hull panel opens the shipyard. Three starter hulls
+  (**Enterprise-E** 460/520/216, **Saber** 300/380/272, **Akira** 620/600/178) and eight upgrade lines:
+  impulse power, thrusters, shields, hull plating, warp core, torpedo bay, photon laser and crew quarters.
+  Requisition is earned in the sector — every kill, every cleared wave, every completed objective — and a
+  purchase folds into the run in progress, so hull plating bought at half health is hull you can use.
+* **A crew you hire, and stations you can hand over** — you start with a helmsman and a tactical officer in a
+  three-berth hull, and can hire engineering (faster shield regeneration), medical (hull repair) and science
+  (the warp core spools twice as fast). Touch a station in the ship interior to give it to the crew: the
+  helmsman will fly at the nearest contact and hold a firing range, the tactical officer fires when you do
+  not, and touching the stick takes the helm straight back.
+* **Ship interior** — `MAIN ENGINEERING` is a cutaway of the ship you are flying: saucer forward, engineering
+  hull aft, nacelles glowing with your throttle, the warp core pulsing with that upgrade level, and a dot for
+  every station that has somebody at it (or `VACANT`). It is drawn on its own canvas at 20 fps, so it costs the
+  fight behind it almost nothing.
 * **Controls** — drag the left side for the stick, **hold FIRE** on the right (a pointer-down, not a click:
   the old code fired on release, which is why it felt dead on a phone), **TORPEDO** for a quantum spread,
   **WARP** to throw the ship 1,200 units along the helm toward the live objective and then spool for
@@ -857,7 +873,15 @@ disabled and only the real `ghanimz` account — server-verified — can open it
 What it does: set the day, scrub time of day, force weather and biome, teleport to a pit-stop or the next
 house, heal/refuel the rig, god mode, +50 of every material, unlock workbench tier 4, spawn hollows,
 raider rigs, boss rigs and Cat 1/3/5 tornadoes, clear hostiles or storms, and inspect live stats
-(fps, entities, position, relay mode). The **players in room** list lets you teleport to, kick or ban
+(fps, entities, position, relay mode).
+
+**Analytics — players and games.** The console opens with a read of the shared `game_runs` log: total
+runs, runs in the last 24 hours, distinct signed-in players, guest runs, games played and the best score
+in the log, plus a per-game table (runs, players, best, average, how long ago) sorted by how much it is
+actually being played. It is one `select … limit 500` a minute, folded by `summarizePlays()` in
+`public/js/arcade-stats.js` — a pure function, so the numbers are testable without a database.
+`window.__outrunErrors` and the owner console's runtime log keep the last few client failures with their
+stacks: a `cannot read properties of undefined` becomes a bug report instead of a frozen screen. The **players in room** list lets you teleport to, kick or ban
 anyone connected; the **ban list** is stored in Supabase and can be lifted again.
 
 It is gated twice:
