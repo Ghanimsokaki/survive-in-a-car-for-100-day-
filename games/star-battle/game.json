@@ -2,7 +2,7 @@
   "id": "star-battle",
   "title": "Star Battle",
   "author": "ghanimz",
-  "blurb": "3D open sector: pick a starter hull, refit thrusters shields torpedoes warp and lasers, hire a crew and watch them run the ship.",
+  "blurb": "3D open sector: pick a starter hull, refit her, hire a crew, then step inside to watch them run the warp core.",
   "tags": [
     "space",
     "3d",
@@ -11,7 +11,7 @@
     "crew",
     "hangar"
   ],
-  "version": "2.1.0",
+  "version": "2.2.0",
   "entry": "index.html",
   "icon": "icon.svg",
   "accent": "#38c8ff",

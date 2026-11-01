@@ -1464,6 +1464,40 @@
     claimQuests();
   }
 
+  /**
+   * The room's labels, drawn over the WebGL view: where you are, what the core
+   * is doing, and who is standing at which console (a name over a 3D figure
+   * would need a projection this panel does not have).
+   */
+  function drawInteriorLabels(g) {
+    const W = 640, H = 360;
+    g.setTransform(2, 0, 0, 2, 0, 0);
+    g.clearRect(0, 0, W, H);
+    const st = statsNow();
+    g.textAlign = 'left';
+    g.font = '600 8px ui-monospace,monospace';
+    g.fillStyle = 'rgba(127,228,255,.75)';
+    g.fillText('MAIN ENGINEERING · DECK 12', 12, 18);
+    g.fillStyle = 'rgba(255,213,120,.85)';
+    g.fillText(`WARP CORE MK ${R.levelOf(hangar, 'warp') + 1}`, 12, 30);
+    g.textAlign = 'right';
+    g.fillStyle = 'rgba(127,228,255,.7)';
+    g.fillText(`${hangar.crew.length} OF ${st.berths} STATIONS CREWED`, W - 12, 18);
+    const palette = (window.StarInterior && window.StarInterior.ROLE_COLOUR) || {};
+    let y = H - 12 - (INTERIOR_ROLES.length - 1) * 11;
+    g.textAlign = 'left';
+    for (const role of INTERIOR_ROLES) {
+      const member = hangar.crew.find((m) => m.role === role);
+      const colour = palette[role] || [0.7, 0.85, 1];
+      g.fillStyle = `rgba(${Math.round(colour[0] * 255)},${Math.round(colour[1] * 255)},`
+        + `${Math.round(colour[2] * 255)},.95)`;
+      g.fillRect(12, y - 5, 5, 5);
+      g.fillStyle = member ? 'rgba(226,245,255,.92)' : 'rgba(120,150,170,.7)';
+      g.fillText(`${role.toUpperCase()} · ${member ? member.name : 'VACANT'}`, 22, y);
+      y += 11;
+    }
+  }
+
   /* ============================================================ THE HANGAR
    * Pick a hull, bolt things onto it, and hire the people who run it. Every
    * number in here comes from `ships.js` (`shipStats`), so the panel and the
@@ -1476,6 +1510,8 @@
   let interiorOpen = false;
   let interiorCtx = null;
   let interiorDrawnAt = -1;
+  let interiorGL = null;            // the 3D room (interior3d.js), when we can draw it
+  let interiorGLTried = false;
   let interiorWasPaused = false;
 
   function note(text, kind = '') {
@@ -1657,8 +1693,43 @@
       c.height = 720;
       try { interiorCtx = c.getContext('2d'); } catch { interiorCtx = null; }
     }
+    initInterior3D();
     paintInteriorPanel();
-    drawInterior();
+    // with the room up the 2D pass is labels only — otherwise it would paint a
+    // schematic over the WebGL canvas until the loop's next redraw
+    drawInterior(Boolean(interiorGL));
+  }
+
+  const INTERIOR_ROLES = ['helm', 'tactical', 'engineering', 'medical', 'science'];
+
+  /**
+   * The room, in 3D. `interior3d.js` builds it out of `gl.js` primitives, so it
+   * costs one more context and no new models; the schematic stays as the
+   * fallback for a device that cannot give us one.
+   */
+  function initInterior3D() {
+    if (interiorGL || interiorGLTried) return Boolean(interiorGL);
+    interiorGLTried = true;
+    const host = $('c4');
+    const SI = window.StarInterior;
+    if (!host || !SI || !window.StarGL) return false;
+    try { interiorGL = SI.create(host); } catch { interiorGL = null; }
+    const view = host.parentNode;
+    if (view && view.classList) view.classList.toggle('gl', Boolean(interiorGL));
+    try { if (host.style) host.style.display = interiorGL ? 'block' : 'none'; } catch { /* detached */ }
+    return Boolean(interiorGL);
+  }
+
+  /** What the room needs to know about the ship, once a frame. */
+  function interiorState() {
+    const st = statsNow();
+    return {
+      crew: hangar.crew,
+      stats: st,
+      core: R.levelOf(hangar, 'warp') + 1,
+      hull: screen === 'battle' ? player().hull / Math.max(1, player().hullMax) : 1,
+      time: now,
+    };
   }
 
   function closeInterior() {
@@ -1722,9 +1793,10 @@
   }
 
   /** The cutaway. Cheap 2D, drawn only while the panel is open. */
-  function drawInterior() {
+  function drawInterior(withRoom = false) {
     const g = interiorCtx;
     if (!g) return;
+    if (withRoom) { drawInteriorLabels(g); return; }
     const st = statsNow();
     const s = player();
     const W = 640, H = 360;
@@ -2827,7 +2899,24 @@
     // plenty and leaves the rest of the frame budget to the fight behind it
     if (interiorOpen && now - interiorDrawnAt > 0.05) {
       interiorDrawnAt = now;
-      try { drawInterior(); } catch { interiorOpen = false; }
+      let drew = false;
+      if (interiorGL) {
+        const host = $('c4');
+        const w = (host && host.clientWidth) || 640;
+        const h = (host && host.clientHeight) || 360;
+        try {
+          interiorGL.frame(w, h, Math.min(window.devicePixelRatio || 1, 2), interiorState());
+          drew = true;
+        } catch (error) {
+          // a bad room frame must never cost the panel: drop to the schematic
+          interiorGL = null;
+          try { console.warn('star battle: interior 3D failed —', error && error.message); } catch { /* quiet */ }
+          const view = host && host.parentNode;
+          if (view && view.classList) view.classList.remove('gl');
+          if (host && host.style) host.style.display = 'none';
+        }
+      }
+      try { drawInterior(drew); } catch { interiorOpen = false; }
     }
 
     hudTimer += dt;
@@ -2979,6 +3068,18 @@
   const hangarCard = $('hangarCard');
   if (hangarCard) hangarCard.addEventListener('click', onHangarClick);
 
+  // tap the room to swing the camera round the compartment
+  const intRoom = $('c4');
+  if (intRoom && intRoom.addEventListener) {
+    intRoom.addEventListener('pointerdown', (event) => {
+      if (!interiorGL) return;
+      const rect = intRoom.getBoundingClientRect ? intRoom.getBoundingClientRect() : { width: 640, left: 0 };
+      const right = (event.clientX - (rect.left || 0)) > (rect.width || 640) / 2;
+      interiorGL.orbit = (interiorGL.orbit || 0) + (right ? 0.5 : -0.5);
+      interiorDrawnAt = -1;                 // redraw this frame, not the next
+    });
+  }
+
   const intStations = $('intStations');
   if (intStations) {
     intStations.addEventListener('click', (event) => {
@@ -3118,6 +3219,8 @@
     get stats() { return statsNow(); },
     hangarPanel: openHangar,
     interior: openInterior,
+    closeInterior,
+    get interior3D() { return Boolean(interiorGL); },
     // the debug helpers go through the same door as the buttons, or the test
     // would be exercising a different game than the player is
     buy: (id) => {
