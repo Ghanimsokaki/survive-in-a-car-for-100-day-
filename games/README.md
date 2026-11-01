@@ -8,7 +8,9 @@ game with five modes, shipped in `public/`), **`iron-tide/`** (the ship builder)
 and **`star-battle/`** (the starship duel — the Enterprise-E against the Narada
 and the Vengeance). Both community games are **3D**: `star-battle/gl.js` draws the
 baked hull mesh, and `iron-tide/sea3d.js` draws an ocean displaced by the same wave
-field the physics uses. Each is one self-contained WebGL script with no three.js
+field the physics uses. `star-battle/interior3d.js` is the same trick one level
+down: the hangar's ship interior — decks, warp core, a figure for every crewed
+station — built from `gl.js` solids, so a 3D view costs one script and no model. Each is one self-contained WebGL script with no three.js
 and no loader — the pattern to copy if your game wants a third dimension. Folders whose name starts with `_` are developer spaces and are never
 listed, bundled or scanned: `_template/` (starter), `_shared/` (the SDK) and
 `_parked/` (the five older sample games, kept as reference).

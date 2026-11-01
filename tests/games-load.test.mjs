@@ -75,7 +75,8 @@ console.log('\nstar battle, loaded the way Vercel serves it');
   check('nothing threw while loading', page.errors.length === 0, page.errors.join(' · ') || 'clean');
   check('the SDK, the rules, the ship art, the 3D renderer and the game all ran, in order',
     page.executed.join(',') === '/games/_shared/sdk.js,/games/star-battle/ships.js,'
-      + '/games/star-battle/art.js,/games/star-battle/gl.js,/games/star-battle/game.js',
+      + '/games/star-battle/art.js,/games/star-battle/gl.js,'
+      + '/games/star-battle/interior3d.js,/games/star-battle/game.js',
     page.executed.join(', '));
 
   const ready = page.posted.find((m) => m?.type === 'arcade:ready');

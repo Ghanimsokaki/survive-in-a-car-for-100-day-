@@ -163,10 +163,14 @@ A sector you can fly, three Enterprises, and the dark.
   (the warp core spools twice as fast). Touch a station in the ship interior to give it to the crew: the
   helmsman will fly at the nearest contact and hold a firing range, the tactical officer fires when you do
   not, and touching the stick takes the helm straight back.
-* **Ship interior** — `MAIN ENGINEERING` is a cutaway of the ship you are flying: saucer forward, engineering
-  hull aft, nacelles glowing with your throttle, the warp core pulsing with that upgrade level, and a dot for
-  every station that has somebody at it (or `VACANT`). It is drawn on its own canvas at 20 fps, so it costs the
-  fight behind it almost nothing.
+* **Ship interior, in 3D** — `MAIN ENGINEERING` is a compartment you look *into*: deck plating with seams,
+  bulkheads broken into bays and lit by strip lighting, ceiling ribs fading into the dark, and the warp core in its
+  cradle with plasma climbing it — faster and brighter with every core upgrade, red-hot when the hull is holed.
+  Every station has a waist-high console, and every berth somebody works has a figure standing at it in their
+  role's colour; a vacant berth is an empty bay with no figure at all, which is the whole point of the panel.
+  `interior3d.js` builds the room from `gl.js` primitives (`gl.solid` — three sizes, real per-axis normals) on its
+  own canvas (`#c4`) at 20 fps, so the fight behind it pays almost nothing; a tap swings the camera, and a device
+  with no WebGL keeps the old 2D cutaway as the fallback.
 * **Controls** — drag the left side for the stick, **hold FIRE** on the right (a pointer-down, not a click:
   the old code fired on release, which is why it felt dead on a phone), **TORPEDO** for a quantum spread,
   **WARP** to throw the ship 1,200 units along the helm toward the live objective and then spool for
@@ -798,7 +802,8 @@ lib/lobby.mjs         rooms, codes, telemetry/chat limits, seat recovery — no 
 lib/cors-policy.mjs   the origin allowlist shared by express and the socket handshake
 lib/keepalive.mjs     the 10-minute self-ping that keeps a free container awake
 games/                community games: <slug>/{game.json,icon.svg,index.html,…,js}
-games/star-battle/gl.js     WebGL renderer for Star Battle (hull mesh, sky, sprites)
+games/star-battle/gl.js     WebGL renderer for Star Battle (hull mesh, sky, sprites, sized solids)
+games/star-battle/interior3d.js  the 3D ship interior: decks, warp core, a figure per crewed station
 games/iron-tide/sea3d.js    WebGL renderer for Iron Tide (ocean, hulls, sky, sprites)
 games/_shared/sdk.js  the postMessage SDK every community game loads
 scripts/scan-games.mjs  validates every game.json and regenerates games/index.json
@@ -815,6 +820,14 @@ docs/DEPLOY-RENDER.md the room server on Render: ports, CORS, staying awake
 
 `npm test` copies the browser modules into a shim lane and runs the suites in `tests/run-all.mjs` with no browser:
 (`tests/run-all.mjs` is the list; `node tests/build.mjs` must run first after any edit).
+
+That lane stubs `WebGLRenderer.render()`, which is exactly why a scene the real three.js refuses used to pass every
+test and fail on a phone. `tests/render-real.test.mjs` closes the hole: it builds the **real**
+`THREE.WebGLRenderer` on a recording WebGL context and drives every mode through the same loop
+`requestAnimationFrame` drives, so the whole JS render pipeline runs — program setup, attribute binding, textures,
+shadow passes — and it audits the scene for the things a GPU rejects (a drawable with no positions or a NaN in
+them, an index past its buffer, a >65k mesh in a 16-bit index, a textured material with no UVs, a hole in a
+material array). FUEL RUN is the first case in it, because that is the run the report named.
 
 * **simulation** — driving, fuel, anchors vs. tornado drift, bosses, scavenging, every recipe, melee,
   peers, days 1→100, death/respawn/win, 8k-frame input fuzz.

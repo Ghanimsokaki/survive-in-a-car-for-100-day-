@@ -630,13 +630,31 @@ void main() { gl_FragColor = vec4(vColor, 1.0); }`;
        * 'sphere' | 'box' | 'drum'.
        */
       body(shape, x, y, z, size, rotY, rgb, glow = rgb, emissive = 0.4, squash = 1) {
-        const g = geo[shape] || geo.sphere;
+        return api.solid(shape, x, y, z, size, size * squash, size, rotY, rgb, glow, emissive);
+      },
+
+      /**
+       * A body that is not a cube: a corridor rib, a console, a bulkhead.
+       *
+       * `body` takes one size and squashes it, which is all a planet needs. A
+       * room needs slabs — a deck 28 long and half a metre thick — so this takes
+       * the three axes and divides the normal basis by the same numbers. Without
+       * that division a slab is lit as though it were still a cube, which is the
+       * difference between a corridor and a pile of grey blocks.
+       */
+      solid(shape, x, y, z, sx = 1, sy = 1, sz = 1, rotY, rgb, glow = rgb, emissive = 0.4) {
+        const g = geo[shape] || geo.box;
+        // a zero axis would divide the normal basis by zero and paint the part
+        // with NaN; a flattened slab is a caller's typo, not a degenerate body
+        const kx = sx || 1, ky = sy || 1, kz = sz || 1;
         gl.useProgram(solid.prog);
-        pose(model, norm, [x, y, z], rotY, 0, 0, 1);
-        // a body can be an ellipsoid: scale each axis, then fix the normals up
-        model[0] *= size; model[1] *= size; model[2] *= size;
-        model[4] *= size * squash; model[5] *= size * squash; model[6] *= size * squash;
-        model[8] *= size; model[9] *= size; model[10] *= size;
+        pose(model, norm, [x, y, z], rotY || 0, 0, 0, 1);
+        model[0] *= kx; model[1] *= kx; model[2] *= kx;
+        model[4] *= ky; model[5] *= ky; model[6] *= ky;
+        model[8] *= kz; model[9] *= kz; model[10] *= kz;
+        norm[0] /= kx; norm[1] /= kx; norm[2] /= kx;
+        norm[3] /= ky; norm[4] /= ky; norm[5] /= ky;
+        norm[6] /= kz; norm[7] /= kz; norm[8] /= kz;
         gl.uniformMatrix4fv(solid.uni.uProj, false, proj);
         gl.uniformMatrix4fv(solid.uni.uView, false, view);
         gl.uniformMatrix4fv(solid.uni.uModel, false, model);
