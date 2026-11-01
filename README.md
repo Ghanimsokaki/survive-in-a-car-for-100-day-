@@ -119,9 +119,9 @@ Build the ship, then take it to war.
   launch jets, and retreat when the hull bar turns red. Sinking ships and surviving the sortie pays
   credits and salvage, and every run is scored into the arcade leaderboard.
 
-### 🖖 Star Battle (starship duel)
+### 🖖 Star Battle (open-sector starship battle)
 
-One starship, endless waves, on a phone.
+A sector you can fly, three Enterprises, and the dark.
 
 * **The player's side is the Enterprise** — the **U.S.S. Enterprise-E, NCC-1701-E**, with
   **460 hull and 520 shields** that regenerate once the hits stop. Phasers, four quantum torpedoes and an
@@ -130,18 +130,45 @@ One starship, endless waves, on a phone.
   throws torpedo volleys, and **Khan's Vengeance**, a dreadnought with **640 hull and 220 shields** that fires
   phasers on the move. Wave 1 is a lone Narada; after that every wave is bigger, and then the ships themselves
   get tougher (capped, so late waves stay beatable).
-* **Controls** — drag the left side for the stick, tap **FIRE** on the right, **TORPEDO** for a quantum
-  spread, **EVADE** to break a lock; keyboard players get WASD/arrows, `Space` to fire, `Shift` for a
-  torpedo and `E` to evade.
-* **The ships are the real model** — `model.fbx` in the repository root (a futuristic sci-fi starship,
-  149k triangles, with the base-colour, normal, metallic and roughness maps in `starship+3d+model.zip`)
-  is baked into **32-heading turntables** at build time by `npm run bake`. The bake decimates the mesh,
-  reads the model's own textures, lights and shades it, and writes
-  `games/star-battle/art/ships-{player,narada,vengeance}-{high,low}.png` — so the game draws the
-  *actual model* in three liveries, one `drawImage` per ship, with no 6.7 MB download and no WebGL
-  dependency inside the sandboxed iframe. Change the model, re-run `npm run bake`, done.
-* **If the atlas cannot load** (offline, a blocked image, a headless test), `game.js` falls back to the
-  vector art in `drawEnterprise` / `drawNarada` / `drawVengeance` — the game is never a hole in space.
+* **It is 3D now** — the chase camera sits 152 units behind the hull and 74 above the flight plane, the
+  ship is the real model lit in WebGL, and the sector is drawn around you: a star shell 4,000 units out,
+  a 300-unit grid on the flight plane, and the boundary ring you can see coming. `gl.js` is a small,
+  dependency-free WebGL 1 renderer — three programs (ship / solid / additive billboards), a line pass for
+  the grid, and an indexed draw per hull. No three.js inside the sandbox, no loader, no fetch.
+* **An open world, not a wave arena** — every run seeds a sector with six landmarks (two starbases, Risa,
+  Vulcan, a derelict and a debris field) and four objectives: clear three contacts, rescue the derelict,
+  survey two landmarks, report in. Objectives pay score and repair the hull; the run log on the title card
+  keeps the last six.
+* **Two more Enterprises fly with you** — `ENTERPRISE-D` and `ENTERPRISE-F` hold a firing lane beside you,
+  shoot what comes close, and count as your wing on the result card.
+* **Controls** — drag the left side for the stick, **hold FIRE** on the right (a pointer-down, not a click:
+  the old code fired on release, which is why it felt dead on a phone), **TORPEDO** for a quantum spread,
+  **WARP** to throw the ship 1,200 units along the helm toward the live objective and then spool for
+  thirteen seconds, **EVADE** to break a lock. Keyboard: WASD/arrows, `Space`, `Shift`, `Q` to warp, `E` to
+  evade.
+* **The ships are the real model, twice over** — `model.fbx` in the repository root (a futuristic
+  sci-fi starship, 149k triangles, with the base-colour, normal, metallic and roughness maps in
+  `starship+3d+model.zip`) is baked at build time by `npm run bake` into **two** things:
+  * `art/ship-mesh.js` — the hull itself, 14,520 triangles in 16 bytes a vertex (position `int16×3`,
+    normal `int8×3`, albedo `uint8×3` sampled from the model's own base-colour map, roughness `uint8`),
+    quantised, interleaved and base64'd into a **classic script** so it needs no fetch, no loader and no
+    CORS inside the sandboxed frame. That is what the WebGL renderer draws.
+  * `art/ships-{player,narada,vengeance}-{high,low}.png` — 32-heading turntables in three liveries, which
+    are the **fallback** renderer and the sprite path for any device without WebGL.
+  Both come from the same decimation and the same lighting maths, so the 3D hull and the 2D sprite look like
+  the same ship from the same shipyard. Change the model, re-run `npm run bake`, done.
+* **Three renderers, in order** — WebGL (`gl.js` + the baked hull) → the baked turntables on a plain 2D
+  canvas → the vector art in `drawEnterprise` / `drawNarada` / `drawVengeance`. Each step is a fallback for
+  the one above it, and a GL frame that throws once drops to 2D **for the rest of the run** instead of
+  blanking the screen. The 3D canvas is a separate element from the 2D one, because a canvas that has
+  handed out one context can never hand out the other.
+* **The GUI has the exit where it belongs** — the in-game HUD's top-right cluster is `❚❚ pause`, `⤢
+  fullscreen`, `✕ leave`, side by side, and the hub's player bar carries `⟳ restart`, `⤢ fullscreen`,
+  `✕ back` in that order. The game's fullscreen button posts `arcade:fullscreen` to the hub, because a
+  sandboxed iframe cannot request fullscreen for itself.
+* **History** — the hub's Records tab now opens with **RECENT RUNS**: every finished run on this device,
+  newest first, with the game's title, its day/time and the score (`ArcadeStats.history`, capped at 30 and
+  stored next to the boards). Star Battle also keeps its own last six on the title card.
 * **Rendering** — additive engine bloom and warp trails, six-plate rotating shields, phaser beams with a
   hot core and an impact bloom, torpedo trails, shockwave rings, screen shake, a hit-marker bracket, a
   damage vignette that tracks the hull, and an adaptive-quality watchdog: a phone that cannot hold ~45 fps

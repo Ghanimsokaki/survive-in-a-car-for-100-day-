@@ -34,7 +34,13 @@
       "size": 1.2
     }
   },
-  "generatedAt": "2026-10-31T14:48:03.048Z",
+  "mesh": {
+    "file": "ship-mesh.js",
+    "verts": 6210,
+    "tris": 14520,
+    "stride": 16
+  },
+  "generatedAt": "2026-11-01T09:04:22.175Z",
   "triangles": 20297,
   "vertices": 8936
 }

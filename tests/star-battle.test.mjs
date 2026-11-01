@@ -119,6 +119,35 @@ const R = shipsSandbox.window.StarShips;
   check('the RNG is deterministic and in range',
     a1.join() === a2.join() && a1.every((v) => v >= 0 && v < 1) && a1[0] !== a1[1],
     a1[0].toFixed(4));
+  // ---------------------------------------------------------------- the sector
+  const sites = R.sectorSites(7);
+  check('the sector has landmarks to fly to', sites.length >= 5,
+    sites.map((x) => x.kind).join(', '));
+  check('…a starbase, a world, a derelict and a debris field',
+    ['starbase', 'planet', 'derelict', 'field'].every((k) => sites.some((x) => x.kind === k)));
+  check('…all inside the sector boundary, and none on top of the player',
+    sites.every((x) => Math.hypot(x.x, x.y) > 200 && Math.hypot(x.x, x.y) < 2400),
+    sites.map((x) => Math.round(Math.hypot(x.x, x.y))).join(', '));
+  check('a seed is a sector: the same seed lays out the same sky',
+    JSON.stringify(R.sectorSites(7)) === JSON.stringify(sites));
+  const quests = R.makeQuests(7, sites);
+  check('there are objectives, in order', quests.length === 4, quests.map((q) => q.kind).join(', '));
+  check('the first objective is a contact count', quests[0].kind === 'destroy' && quests[0].need === 3);
+  check('a reach objective names a landmark that exists',
+    quests.every((q) => !q.targetId || sites.some((x) => x.id === q.targetId)));
+  check('the live objective is the first unfinished one',
+    R.activeQuest(quests).id === 'q1');
+  R.questEvent(quests[0], { type: 'kill' });
+  R.questEvent(quests[0], { type: 'kill' });
+  check('a kill counts toward the live objective', quests[0].progress === 2);
+  R.questEvent(quests[0], { type: 'kill' });
+  check('…and the objective closes when it is met', quests[0].done === true);
+  check('the next objective takes over', R.activeQuest(quests).id === 'q2');
+  check('progress never passes the target', (() => {
+    R.questEvent(quests[0], { type: 'kill' });
+    return quests[0].progress === 3;
+  })());
+
   const ring = R.spawnPoint(Math.PI / 2, 900);
   check('waves spawn on the ring, not on top of the player',
     Math.abs(Math.hypot(ring.x, ring.y) - 900) < 1e-9);
@@ -350,6 +379,67 @@ console.log('\nhundreds of ticks, with the frame loop drawing each one');
     `${Math.round(it.run.ship.x)}, ${Math.round(it.run.ship.y)}`);
 }
 
+/* ------------------------------------------------------------ open world */
+console.log('\nan open sector, a wing, and a warp drive');
+{
+  it.start();
+  check('a new run seeds a sector', it.sites.length >= 5, `${it.sites.length} landmarks`);
+  check('…with objectives to fly', it.quests.length === 4, it.quests.map((q) => q.title).join(' · '));
+  check('…and two more Enterprises on your wing', it.allies.length === 2,
+    it.allies.map((a) => a.registry).join(', '));
+  check('the wing is friendly, the contacts are not',
+    it.allies.every((a) => a.ally === true) && it.enemies.every((e) => !e.ally));
+
+  // warp: a long jump along the helm, with a spool afterwards
+  const before = { x: it.run.ship.x, y: it.run.ship.y };
+  const launched = it.warp();
+  check('WARP launches', launched === true && it.warpState.active > 0);
+  check('…and starts a cooldown you cannot skip', it.warpState.cooldown > 0, `${it.warpState.cooldown.toFixed(0)}s`);
+  for (let i = 0; i < 45; i++) it.tick(1 / 60);
+  const jumped = Math.hypot(it.run.ship.x - before.x, it.run.ship.y - before.y);
+  check('…and moves the ship a long way', jumped > 400, `${Math.round(jumped)} units`);
+  check('a second warp is refused while spooling', it.warp() === false);
+  for (let i = 0; i < 60 * 16; i++) it.tick(1 / 60);
+  check('the spool clears', it.warpState.cooldown === 0);
+
+  // kills feed the live objective
+  it.start();
+  it.spawnWave();
+  const live = it.quests[0];
+  const at = live.progress;
+  for (const enemy of [...it.enemies]) {
+    enemy.shields = 0;
+    enemy.hull = 1;
+    enemy.x = 200;
+    enemy.y = 0;
+    it.run.ship.phaserHeat = 0;
+    it.aimAt(200, 0);
+    it.fire();
+  }
+  check('kills advance the objective', it.quests[0].progress > at,
+    `${it.quests[0].progress}/${it.quests[0].need}`);
+
+  // flying to a landmark logs it
+  it.start();
+  const site = it.sites[0];
+  it.run.ship.x = site.x;
+  it.run.ship.y = site.y;
+  it.tick(1 / 60);
+  check('reaching a landmark is noticed', site.visited === true, site.name);
+
+  // the wing fights: put a wing ship on a contact's bow and give it time
+  it.start();
+  it.spawnWave();                       // a real wave, so the timer cannot wipe it
+  const contact = it.enemies[0];
+  it.allies[0].x = contact.x + 40;
+  it.allies[0].y = contact.y;
+  const hullBefore = contact.hull;
+  for (let i = 0; i < 300; i++) it.tick(1 / 60);
+  check('the wing shoots at what is next to it', contact.hull < hullBefore,
+    `${Math.round(hullBefore)} → ${Math.round(contact.hull)}`);
+  it.title();
+}
+
 /* ------------------------------------------------------ no hiding, no stall */
 console.log('\nyou cannot simply run: the sector holds and the enemy chases');
 {
@@ -397,6 +487,8 @@ console.log('\nlosing the ship ends the run, and the arcade hears about it');
   check('…and it is a number the hub can store',
     Number.isFinite(scores[scores.length - 1]?.payload?.score));
   check('the result card shows the wave and the clock', it.run.wave >= 2);
+  check('the run is written to the local history',
+    it.history.length >= 1 && it.history[0].score >= 0, JSON.stringify(it.history[0] || {}));
   it.title();
   check('you can go back to the title card', it.screen === 'title');
   check('the best score survived a throwing localStorage', typeof it.best === 'number');
@@ -466,6 +558,18 @@ console.log('\nthe game is a folder the hub can serve');
   check('the icon ships with it', read('games/star-battle/icon.svg').includes('<svg'));
   check('one dispatcher decides how every ship is drawn',
     /function drawShip\(id,/.test(game) && /ART\.drawShip\(/.test(game));
+  check('the 3D renderer ships with the game', /window\.StarGL/.test(read('games/star-battle/gl.js')) &&
+    /function render3D\(/.test(game) && html.includes('gl.js'));
+  const mesh = read('games/star-battle/art/ship-mesh.js');
+  const meshMeta = /verts: (\d+), tris: (\d+), stride: (\d+)/.exec(mesh);
+  check('…and the model is baked into it', Boolean(meshMeta) &&
+    Number(meshMeta[1]) > 2000 && Number(meshMeta[2]) > 5000 && Number(meshMeta[3]) === 16,
+    meshMeta ? `${meshMeta[1]} verts · ${meshMeta[2]} tris` : 'no mesh');
+  check('…as a plain script, so no fetch or CORS can stop it',
+    /window\.STAR_MESH\s*=/.test(mesh) && mesh.length > 100000);
+  check('the game asks for the mesh after it has said hello',
+    game.indexOf('sdk.ready()') < game.lastIndexOf('initGL();'),
+    'ready → mesh');
   check('the vector art is still there as the offline fallback',
     /function drawEnterprise\(/.test(game) && /function drawNarada\(/.test(game) &&
     /function drawVengeance\(/.test(game));
@@ -484,6 +588,12 @@ console.log('\nthe game is a folder the hub can serve');
       check(`${id} ${tier} atlas is a real image`, size > 20000 && size < 2_000_000, `${Math.round(size / 1024)} KB`);
     }
   }
+  check('the exit sits right beside the fullscreen button', (() => {
+    const hud = html.slice(html.indexOf('<div class="topright">'), html.indexOf('</div>', html.indexOf('exitHudBtn')));
+    return /id="fsBtn"/.test(hud) && /id="exitHudBtn"/.test(hud)
+      && Math.abs(hud.indexOf('fsBtn') - hud.indexOf('exitHudBtn')) < 260;
+  })());
+  check('fire is a hold, not a click', /function holdToFire\(/.test(game) && /pointerdown/.test(game));
   check('the canvas is phone-sized, not a desktop window',
     /viewport/.test(html) && /touch-action/.test(html));
 }

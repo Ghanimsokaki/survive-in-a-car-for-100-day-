@@ -1230,7 +1230,14 @@
   function frame(now) {
     const dt = Math.min(0.05, (now - last) / 1000);
     last = now;
-    sdk.fit(canvas, 2);
+    const fit = sdk.fit(canvas, 2);
+    // The backing store is `dpr` times the CSS size, and everything below draws
+    // in CSS pixels — so the context has to be scaled to match. Without this
+    // the whole sea renders into the top-left quarter of a phone's screen.
+    try {
+      const dpr = (fit && fit.dpr) || Math.min(window.devicePixelRatio || 1, 2);
+      if (typeof ctx.setTransform === 'function') ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    } catch { /* an older context draws at 1× */ }
     if (screen === 'battle' && session) {
       updateBattle(dt);
       drawBattle();

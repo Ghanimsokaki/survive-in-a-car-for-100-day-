@@ -1,17 +1,26 @@
-/* STAR BATTLE — one starship, endless waves.
+/* STAR BATTLE — an open sector, a wing of Enterprises, and the dark.
  *
- * The player flies the Enterprise-E (`NCC-1701-E`) against Nero's **Narada** and
- * Khan's **Vengeance**. Top-down, 2D canvas, no dependencies — the whole game is
- * this file plus `ships.js` (the balance) and the hub SDK.
+ * You fly the Enterprise-E (`NCC-1701-E`) with two more Enterprises on your
+ * wing against Nero's **Narada** and Khan's **Vengeance**, in a sector you can
+ * actually fly around: a starbase, two worlds, a debris field and a derelict,
+ * with objectives that send you between them.
  *
- * The ships are drawn as vector art (`drawEnterprise`, `drawNarada`,
- * `drawVengeance`). If you drop real models in, those three functions are the
- * only things to change: the rules, the waves and the fight do not care how a
- * ship is painted.
+ * There are two renderers, and the game picks one at boot:
  *
- * Everything is in memory: the hub runs this in a sandboxed iframe with an
- * opaque origin, so localStorage throws. Best score goes through the arcade
- * SDK instead.
+ *   1. `gl.js` — WebGL, the real hull from `art/ship-mesh.js` (baked from
+ *      `model.fbx` by `npm run bake`), a chase camera, a star shell, the sector
+ *      grid and additive beam/spark billboards. This is what a phone sees.
+ *   2. canvas-2D — the baked turntables from `art.js`, top-down. Used when a
+ *      device has no WebGL, when the mesh has not landed yet, and by the test
+ *      suite, which runs this file in a DOM with no GL at all.
+ *
+ * Both read the same simulation, so the fight is identical either way. The
+ * vector art (`drawEnterprise`, `drawNarada`, `drawVengeance`) is the last-resort
+ * fallback when the atlases have not decoded either.
+ *
+ * Everything else is in memory: the hub runs this in a sandboxed iframe with an
+ * opaque origin, so localStorage throws. Best score and the run history go
+ * through the arcade SDK; the local copies are a guarded nicety.
  */
 (() => {
   'use strict';
@@ -30,8 +39,12 @@
     },
   };
 
-  const canvas = document.getElementById('c');
+  const canvas = document.getElementById('c');          // canvas-2D (fallback)
   const ctx = canvas.getContext('2d');
+  /* A second canvas for the 3D view. It has to be its own element: a canvas
+   * that has handed out one kind of context can never hand out another, so the
+   * 2D fallback would be impossible on the same bitmap. */
+  const glCanvas = document.getElementById('c3');
   const $ = (id) => document.getElementById(id);
 
   const TAU = Math.PI * 2;
@@ -67,9 +80,31 @@
   const perf = { frames: 0, dropped: 0, dpr: 2, ui: 'high' };
   let board = null;            // Supabase leaderboard from the hub, when sent
 
+  /* --------------------------------------------------------------- the 3D
+   * `glReady` is the switch between the two renderers. It only ever turns on
+   * once the hull has been uploaded, so a device that cannot do WebGL simply
+   * never gets here and keeps the 2D path.
+   */
+  const GL = window.StarGL || null;
+  let gl = null;               // the WebGL renderer (gl.js)
+  let glReady = false;
+  let meshAsked = false;
+  let overlay = null;          // 2D canvas stacked over the 3D one
+  let overlayCtx = null;
+  const ALT = 26;              // the flight plane, a little above the grid
+
+  /* ------------------------------------------------------------ the sector */
+  let sites = [];              // landmarks: starbase, worlds, derelict, field
+  let allies = [];             // the wing: two more Enterprises
+  let quests = [];             // objectives, in order
+  let history = [];            // this device's last runs
+  const HISTORY_KEY = 'star-battle-history';
+  const WARP_COOLDOWN = 13;
+  const warp = { cooldown: 0, active: 0, dx: 1, dy: 0, jumps: 0 };
+
   /* ------------------------------------------------------------------ input */
   const input = {
-    turn: 0, thrust: 0, fire: false, torpedo: false, evade: false,
+    turn: 0, thrust: 0, fire: false, torpedo: false, evade: false, warp: false,
     keys: Object.create(null),
     stick: { active: false, id: -1, ox: 0, oy: 0, x: 0, y: 0 },
   };
@@ -586,6 +621,8 @@
     shots = [];
     beams = [];
     sparks = [];
+    run.questScore = 0;
+    buildSector(run.seed);
     waveTimer = 0.6;
     shake = 0;
     cam = { x: 0, y: 0 };
@@ -601,8 +638,21 @@
     const dmg = $('damageFx');
     if (dmg) dmg.style.opacity = '0';
     paintHud(true);
-    banner('RED ALERT', 1.2);
+    // point the bow at the closest landmark: an open sector that opens onto
+    // something is a sector, not a void with a HUD on it
+    if (sites.length) {
+      let near = sites[0];
+      let nearDist = Infinity;
+      for (const site of sites) {
+        const d = Math.hypot(site.x, site.y);
+        if (d < nearDist) { nearDist = d; near = site; }
+      }
+      run.ship.facing = R.bearing(0, 0, near.x, near.y);
+      cam = { x: 0, y: 0 };
+    }
+    banner('RED ALERT', 1.2, `${allies.length} ENTERPRISES ON YOUR WING`);
     beep(180, 0.2, 0.06);
+    initGL();
   }
 
   function playerHit(amount, x, y) {
@@ -627,15 +677,19 @@
     screen = 'over';
     run.screen = 'over';
     $('hud').classList.add('hidden');
-    const score = R.scoreOf({
-      kills: run.kills, wave: run.wave, seconds: run.seconds, hull: player().hull,
-    });
+    const score = scoreNow();
     const isBest = score > best;
     $('result').classList.remove('hidden');
     $('resultScore').textContent = String(score);
     $('resultWave').textContent = String(run.wave);
     $('resultKills').textContent = String(run.kills);
     $('resultTime').textContent = `${Math.round(run.seconds)}s`;
+    const setStat = (id, value) => { const el = $(id); if (el) el.textContent = String(value); };
+    const flown = quests.filter((q) => q.done).length;
+    setStat('resultQuests', `${flown}/${quests.length || 4}`);
+    setStat('resultWarps', warp.jumps);
+    setStat('resultWing', allies.filter((a) => a.hull > 0).length);
+    setStat('resultBest', Math.max(best, score));
     const title = $('resultTitle');
     if (title) title.textContent = isBest ? 'NEW BEST RUN' : 'SHIP LOST';
     const text = $('resultText');
@@ -646,6 +700,10 @@
     }
     saveBest(score);
     paintBest(isBest);
+    pushHistory({
+      score, wave: run.wave, kills: run.kills, jumps: warp.jumps,
+      objectives: quests.filter((q) => q.done).length, at: Date.now(),
+    });
     sdk.score({ score, day: run.wave, seconds: Math.round(run.seconds), meta: `${run.kills} kills` });
     beep(90, 0.5, 0.07);
     burst(player().x, player().y, 60, 'rgba(255,180,120,.9)', 260);
@@ -752,6 +810,8 @@
       flash(0.22);
       ring(x, y, 'rgba(255,180,120,.85)', 70, 0.6);
       run.kills += 1;
+      for (const quest of quests) R.questEvent(quest, { type: 'kill' });
+      paintQuest();
       burst(x, y, 46, 'rgba(255,170,110,.95)', 240);
       ring(x, y, 'rgba(255,220,160,.9)');
       shake = Math.min(16, shake + 6);
@@ -760,7 +820,7 @@
       if (!enemies.length && screen === 'battle') {
         waveTimer = 2.2;
         banner(`WAVE ${run.wave} CLEARED`, 1.6);
-        sdk.state({ wave: run.wave + 1, score: R.scoreOf({ kills: run.kills, wave: run.wave, seconds: run.seconds }) });
+        sdk.state({ wave: run.wave + 1, score: scoreNow() });
       }
     }
     void ship;
@@ -776,6 +836,7 @@
     s.evade = Math.max(0, s.evade - dt);
     s.phaserHeat = Math.max(0, s.phaserHeat - dt);
     s.sinceHit += dt;
+    warp.cooldown = Math.max(0, warp.cooldown - dt);
 
     const boost = s.evadeBoost > 0 ? spec.evade.boost : 1;
     s.facing += input.turn * spec.turn * (s.evadeBoost > 0 ? 1.25 : 1) * dt;
@@ -788,6 +849,17 @@
     const k = 1 - Math.exp(-3.4 * dt);
     s.vx += (tvx - s.vx) * k;
     s.vy += (tvy - s.vy) * k;
+
+    // a warp overrides the helm: 1,200 units along the bearing, then the helm
+    // gets the ship back and has to live with the momentum
+    if (warp.active > 0) {
+      warp.active = Math.max(0, warp.active - dt);
+      const punch = spec.speed * 9.5;
+      s.vx = warp.dx * punch;
+      s.vy = warp.dy * punch;
+      if (Math.random() < 0.55) burst(s.x, s.y, 2, 'rgba(150,220,255,.8)', 90);
+    }
+
     s.x += s.vx * dt;
     s.y += s.vy * dt;
 
@@ -823,6 +895,7 @@
     if (input.fire) firePhasers();
     if (input.torpedo) { input.torpedo = false; launchTorpedo(); }
     if (input.evade) { input.evade = false; evasive(); }
+    if (input.warp) { input.warp = false; beginWarp(); }
   }
 
   function updateEnemy(enemy, dt) {
@@ -961,7 +1034,9 @@
     run.seconds += dt;
     updatePlayer(dt);
     for (const enemy of [...enemies]) updateEnemy(enemy, dt);
+    for (const ally of allies) updateAlly(ally, dt);
     updateShots(dt);
+    questTick();
 
     if (waveTimer > 0) {
       waveTimer -= dt;
@@ -970,7 +1045,569 @@
 
     if (now - lastStatus > 1) {
       lastStatus = now;
-      sdk.state({ wave: run.wave, score: R.scoreOf({ kills: run.kills, wave: run.wave, seconds: run.seconds }) });
+      sdk.state({ wave: run.wave, score: scoreNow() });
+    }
+  }
+
+  /* =========================================================== THE SECTOR
+   * An open world is only open if it has somewhere to go. `ships.js` seeds the
+   * landmarks and the objectives; this file flies them.
+   */
+  function buildSector(seed) {
+    sites = (R.sectorSites ? R.sectorSites(seed) : []) || [];
+    quests = (R.makeQuests ? R.makeQuests(seed, sites) : []) || [];
+    const rand = R.rng((seed | 0) ^ 0x7a11);
+    for (const site of sites) {
+      site.spin = rand() * TAU;
+      site.rocks = [];
+      site.visited = false;
+      if (site.kind === 'field') {
+        for (let i = 0; i < 18; i++) {
+          const a = rand() * TAU;
+          const d = Math.sqrt(rand()) * site.r;
+          site.rocks.push({
+            x: site.x + Math.cos(a) * d,
+            y: site.y + Math.sin(a) * d,
+            size: 10 + rand() * 30,
+            spin: rand() * TAU,
+            alt: (rand() - 0.5) * 180,
+          });
+        }
+      }
+    }
+    warp.cooldown = 0;
+    warp.active = 0;
+    warp.jumps = 0;
+    allies = [];
+    for (let i = 0; i < 2; i++) allies.push(spawnAlly(i));
+    paintQuest();
+    paintHistory();
+  }
+
+  /** A wing ship: another Enterprise, half a run younger than yours. */
+  function spawnAlly(i) {
+    const spec = R.SHIPS[R.PLAYER_SHIP];
+    const angle = 2.1 + i * 1.5;
+    return {
+      id: R.PLAYER_SHIP,
+      ally: true,
+      name: i ? 'ENTERPRISE-F' : 'ENTERPRISE-D',
+      registry: i ? 'NCC-1701-F' : 'NCC-1701-D',
+      x: Math.cos(angle) * 300,
+      y: Math.sin(angle) * 300,
+      alt: i ? 30 : -24,
+      facing: angle + Math.PI,
+      vx: 0,
+      vy: 0,
+      hull: spec.hull * 0.7,
+      hullMax: spec.hull * 0.7,
+      shields: spec.shields * 0.7,
+      shieldsMax: spec.shields * 0.7,
+      sinceHit: 99,
+      fireAt: 0.7 + i * 0.6,
+      radius: spec.radius,
+      speed: spec.speed,
+      turn: spec.turn,
+    };
+  }
+
+  function updateAlly(ally, dt) {
+    const s = player();
+    const spec = R.SHIPS[R.PLAYER_SHIP];
+    ally.sinceHit += dt;
+    ally.shields = R.regen({ shields: ally.shields, max: ally.shieldsMax, since: ally.sinceHit }, dt, spec);
+
+    let target = null;
+    let bestDist = Infinity;
+    for (const enemy of enemies) {
+      const d = Math.hypot(enemy.x - ally.x, enemy.y - ally.y);
+      if (d < bestDist) { bestDist = d; target = enemy; }
+    }
+    const anchor = target || s;
+    const toAnchor = R.bearing(ally.x, ally.y, anchor.x, anchor.y);
+    // with a contact in reach, close and hold a lane across its bow — a small
+    // offset, because a wing ship that cannot point at what it is shooting at
+    // never fires at all; without a contact, form up on the player
+    const offset = target && bestDist < 240 ? 0.3 : 0;
+    const want = toAnchor + offset;
+    ally.facing += clamp(R.angleDelta(ally.facing, want), -ally.turn * dt, ally.turn * dt);
+    const speed = ally.speed * (target ? (bestDist > 260 ? 1 : 0.6) : 1.1);
+    const k = 1 - Math.exp(-2.4 * dt);
+    ally.vx += (Math.cos(ally.facing) * speed - ally.vx) * k;
+    ally.vy += (Math.sin(ally.facing) * speed - ally.vy) * k;
+    ally.x += ally.vx * dt;
+    ally.y += ally.vy * dt;
+    const home = Math.hypot(ally.x, ally.y);
+    if (home > SECTOR) {
+      ally.x = (ally.x / home) * SECTOR;
+      ally.y = (ally.y / home) * SECTOR;
+    }
+
+    ally.fireAt -= dt;
+    if (!target || ally.fireAt > 0 || bestDist > spec.phaser.range) return;
+    if (!R.inArc(ally.facing, toAnchor, spec.phaser.arc)) return;
+    ally.fireAt = spec.phaser.every + 0.1;
+    beams.push({
+      x1: ally.x, y1: ally.y, x2: target.x, y2: target.y,
+      alt1: ally.alt, alt2: target.alt,
+      life: 0.1, colour: 'rgba(150,225,255,.85)',
+    });
+    hitEnemy(target, spec.phaser.dmg * 0.75, target.x, target.y);
+  }
+
+  /* ----------------------------------------------------------------- warp
+   * The sector is 4,800 units across and the helm tops out at 216 a second, so
+   * a warp is what makes it open rather than enormous. It aims at whichever
+   * objective is live (or the nearest contact), launches you 1,200 units that
+   * way in two thirds of a second, and then spools for thirteen.
+   */
+  function warpTarget() {
+    const s = player();
+    const quest = R.activeQuest ? R.activeQuest(quests) : null;
+    const site = quest && R.questTarget ? R.questTarget(quest, sites) : null;
+    if (site) return site;
+    let best = null;
+    let bestDist = Infinity;
+    for (const enemy of enemies) {
+      const d = Math.hypot(enemy.x - s.x, enemy.y - s.y);
+      if (d < bestDist) { bestDist = d; best = enemy; }
+    }
+    return best;
+  }
+
+  function beginWarp() {
+    const s = player();
+    if (warp.cooldown > 0) {
+      banner('WARP COOLING', 0.8, `${Math.ceil(warp.cooldown)}s TO SPOOL`);
+      beep(150, 0.07, 0.02);
+      return false;
+    }
+    const target = warpTarget();
+    const aim = target ? R.bearing(s.x, s.y, target.x, target.y) : s.facing;
+    s.facing = aim;
+    warp.active = 0.62;
+    warp.dx = Math.cos(aim);
+    warp.dy = Math.sin(aim);
+    warp.cooldown = WARP_COOLDOWN;
+    warp.jumps += 1;
+    ring(s.x, s.y, 'rgba(150,220,255,.85)', 44, 0.55);
+    banner('WARP', 1.0, target && target.name ? target.name : 'HELM TO BEARING');
+    beep(720, 0.2, 0.05);
+    paintHud();
+    return true;
+  }
+
+  /* --------------------------------------------------------------- quests */
+  function scoreNow() {
+    return R.scoreOf({ kills: run.kills, wave: run.wave, seconds: run.seconds, hull: player().hull })
+      + Math.max(0, Math.round(run.questScore || 0));
+  }
+
+  function paintQuest() {
+    const quest = R.activeQuest ? R.activeQuest(quests) : null;
+    const el = $('questTxt');
+    if (!el) return;
+    if (!quest) {
+      el.textContent = 'SECTOR SECURE';
+      return;
+    }
+    const count = quest.need > 1 ? ` ${quest.progress}/${quest.need}` : '';
+    el.textContent = `${quest.title}${count}`;
+    const chip = $('questChip');
+    if (chip) chip.classList.toggle('done', Boolean(quest.done));
+  }
+
+  function claimQuests() {
+    for (const quest of quests) {
+      if (!quest.done || quest.claimed) continue;
+      quest.claimed = true;
+      run.questScore = (run.questScore || 0) + quest.reward;
+      const s = player();
+      s.hull = Math.min(s.hullMax, s.hull + s.hullMax * 0.18);
+      s.shields = s.shieldsMax;
+      s.torpedoes = R.SHIPS[R.PLAYER_SHIP].torpedo.load;
+      banner('OBJECTIVE COMPLETE', 1.8, `${quest.title} · +${quest.reward}`);
+      ring(s.x, s.y, 'rgba(140,255,190,.85)', 60, 0.8);
+      beep(660, 0.18, 0.05);
+      paintHud(true);
+    }
+  }
+
+  /** Distance checks for the "fly there" objectives, once a frame. */
+  function questTick() {
+    if (!sites.length) return;
+    const s = player();
+    for (const site of sites) {
+      const d = Math.hypot(site.x - s.x, site.y - s.y);
+      if (d < site.r + 120 && !site.visited) {
+        site.visited = true;
+        for (const quest of quests) {
+          if (R.questEvent(quest, { type: 'reach', siteId: site.id })) {
+            banner(site.name, 1.2, 'SITE LOGGED');
+          }
+        }
+        beep(600, 0.1, 0.03);
+      } else if (d > site.r + 420) {
+        site.visited = false;
+      }
+    }
+    claimQuests();
+  }
+
+  /* -------------------------------------------------------------- history
+   * The last six runs on this device. A sandboxed frame cannot write storage,
+   * so every call is guarded and the list simply lives for the session.
+   */
+  function loadHistory() {
+    try {
+      const raw = localStorage.getItem(HISTORY_KEY);
+      const list = raw ? JSON.parse(raw) : [];
+      history = Array.isArray(list) ? list.filter((r) => r && Number.isFinite(Number(r.score))).slice(0, 6) : [];
+    } catch { history = []; }
+    paintHistory();
+  }
+
+  function pushHistory(entry) {
+    history = [entry, ...history].slice(0, 6);
+    try { localStorage.setItem(HISTORY_KEY, JSON.stringify(history)); } catch { /* opaque origin */ }
+    paintHistory();
+  }
+
+  function paintHistory() {
+    const host = $('historyList');
+    if (!host || host.innerHTML === undefined) return;
+    if (!history.length) {
+      host.innerHTML = '<li class="empty">NO RUNS LOGGED YET</li>';
+      return;
+    }
+    host.innerHTML = history.slice(0, 6).map((row, i) => {
+      const scale = i === 0 ? ' class="last"' : '';
+      return `<li${scale}><span>W${Number(row.wave) || 1} · ${Number(row.kills) || 0} KILLS</span>`
+        + `<b>${Number(row.score) || 0}</b></li>`;
+    }).join('');
+  }
+
+  /* ================================================================= 3D
+   * One WebGL canvas, one 2D canvas for the markers that are easier as pixels
+   * than as DOM. `initGL` is called at boot and again on the first frame that
+   * has a real canvas — a device that says no is simply never asked twice.
+   */
+  const LIVERY_3D = {
+    enterprise: { tint: [1.06, 1.12, 1.3], glow: [0.34, 0.74, 1.0], exposure: 1.45 },
+    narada: { tint: [1.2, 0.82, 0.7], glow: [1.0, 0.42, 0.18], exposure: 1.5 },
+    vengeance: { tint: [0.9, 0.95, 1.04], glow: [1.0, 0.64, 0.24], exposure: 1.42 },
+  };
+  const wingLivery = { tint: [1.0, 1.12, 1.22], glow: [0.28, 0.9, 0.66], exposure: 1.4 };
+
+  /** Show exactly one renderer: the GL canvas and its marker layer, or the 2D. */
+  function use3D(on) {
+    try {
+      if (glCanvas && glCanvas.style) glCanvas.style.display = on ? 'block' : 'none';
+      if (canvas && canvas.style) canvas.style.display = on ? 'none' : 'block';
+      if (overlay && overlay.style) overlay.style.display = on ? 'block' : 'none';
+      const tag = $('qualityTag');
+      if (tag) tag.textContent = on && gl ? `3D · ${gl.tris} TRIS` : 'RENDER 2D';
+    } catch { /* detached DOM */ }
+  }
+
+  function initGL() {
+    if (!GL || gl || !glCanvas) return glReady;
+    try { gl = GL.create(glCanvas); } catch { gl = null; }
+    if (!gl) { glReady = false; use3D(false); return false; }
+    try {
+      overlay = document.getElementById('c2');
+      if (overlay) overlayCtx = overlay.getContext ? overlay.getContext('2d') : null;
+    } catch { overlay = null; overlayCtx = null; }
+    try {
+      if (window.STAR_MESH && gl.setMesh(window.STAR_MESH)) glReady = true;
+    } catch { glReady = false; }
+    use3D(Boolean(glReady));
+    if (!glReady) askForMesh();
+    return glReady;
+  }
+
+  /**
+   * The hull is a quarter of a megabyte, so it is fetched as a plain script
+   * after `arcade:ready` has already gone out: the title card is interactive
+   * before the model exists, and the 2D renderer covers the gap.
+   */
+  function askForMesh() {
+    if (meshAsked) return;
+    meshAsked = true;
+    try {
+      const tag = document.createElement('script');
+      tag.src = 'art/ship-mesh.js';
+      tag.async = true;
+      tag.onload = () => {
+        try {
+          if (gl && window.STAR_MESH && gl.setMesh(window.STAR_MESH)) {
+            glReady = true;
+            use3D(true);
+          }
+        } catch { glReady = false; }
+      };
+      tag.onerror = () => { glReady = false; };
+      const host = document.head || document.body || document.documentElement;
+      if (host && host.appendChild) host.appendChild(tag);
+      else glReady = false;
+    } catch { glReady = false; }
+  }
+
+  /** CSS colour → linear-ish [r,g,b] in 0…1, cached: sparks are strings. */
+  const colourCache = Object.create(null);
+  function rgbOf(css) {
+    if (Array.isArray(css)) return css;
+    const key = String(css || '');
+    if (colourCache[key]) return colourCache[key];
+    let out = [0.85, 0.92, 1];
+    const m = /rgba?\(([^)]+)\)/.exec(key);
+    if (m) {
+      const parts = m[1].split(',').map((n) => Number(n.trim()));
+      const a = parts.length > 3 && Number.isFinite(parts[3]) ? parts[3] : 1;
+      out = [(parts[0] || 0) / 255 * a, (parts[1] || 0) / 255 * a, (parts[2] || 0) / 255 * a];
+    }
+    colourCache[key] = out;
+    return out;
+  }
+
+  /** The live camera, so the sim, the 2D markers and the GL view agree. */
+  function cameraPose() {
+    const s = player();
+    if (screen === 'battle' || screen === 'over') {
+      const rush = Math.min(70, Math.hypot(s.vx, s.vy) * 0.06);
+      const back = 152 + rush + warp.active * 90;
+      const lift = 74 + warp.active * 26;
+      return {
+        eye: [s.x - Math.cos(s.facing) * back, ALT + lift, s.y - Math.sin(s.facing) * back],
+        at: [s.x + Math.cos(s.facing) * 118, ALT - 12, s.y + Math.sin(s.facing) * 118],
+        fov: 58 + warp.active * 12,
+      };
+    }
+    // the hangar: a slow turntable around the ship on her cradle
+    const a = now * 0.22;
+    return {
+      eye: [Math.cos(a) * 132, 54, Math.sin(a) * 132],
+      at: [0, 0, 0],
+      fov: 52,
+    };
+  }
+
+  function drawSite(site) {
+    const spin = site.spin + now * 0.05;
+    const tint = site.tint || [0.5, 0.6, 0.7];
+    if (site.kind === 'planet') {
+      gl.body('sphere', site.x, -420 - site.size * 0.6, site.y, site.size, spin,
+        [tint[0] * 0.55, tint[1] * 0.55, tint[2] * 0.6], tint, 0.75, 0.97);
+      gl.sprite(site.x, -420 - site.size * 0.6, site.y, site.size * 2.1,
+        tint[0] * 0.12, tint[1] * 0.14, tint[2] * 0.2);
+      return;
+    }
+    if (site.kind === 'starbase') {
+      // a core drum, a docking ring and two arms — cheap, and it reads as built
+      gl.body('drum', site.x, ALT + 12, site.y, site.size, spin, tint, tint, 0.8, 0.42);
+      gl.body('box', site.x, ALT + 12, site.y, site.size * 0.55, spin * 1.3, tint, tint, 0.9);
+      for (const side of [-1, 1]) {
+        gl.body('box', site.x + Math.cos(spin) * side * site.size * 0.8, ALT + 12,
+          site.y + Math.sin(spin) * side * site.size * 0.8,
+          site.size * 0.22, spin, tint, tint, 0.6, 1.4);
+      }
+      const pulse = 0.5 + 0.5 * Math.sin(now * 2.2 + site.spin);
+      gl.sprite(site.x, ALT + 12, site.y, site.size * (1.5 + pulse * 0.4),
+        0.18, 0.32, 0.5);
+      return;
+    }
+    if (site.kind === 'derelict') {
+      gl.body('box', site.x, ALT + 4, site.y, site.size * 1.1, spin * 0.6,
+        [0.26, 0.24, 0.22], [1.0, 0.6, 0.24], 0.5, 0.5);
+      gl.body('box', site.x + site.size * 0.6, ALT + 4, site.y - site.size * 0.4,
+        site.size * 0.5, spin * 1.7, [0.2, 0.19, 0.18], [1.0, 0.5, 0.2], 0.4, 0.7);
+      const blink = Math.sin(now * 3.4 + site.spin) > 0.4 ? 0.9 : 0.2;
+      gl.sprite(site.x, ALT + 4, site.y, site.size * 1.2, blink * 0.9, blink * 0.4, blink * 0.1);
+      return;
+    }
+    // debris field: a scatter of rocks, each its own little world
+    for (const rock of site.rocks || []) {
+      gl.body('sphere', rock.x, ALT + rock.alt, rock.y, rock.size, rock.spin + now * 0.02,
+        [0.3, 0.29, 0.28], [0.1, 0.11, 0.13], 0.15, 0.8);
+    }
+  }
+
+  function drawShip3D(ship, shipId, size, livery, extra = {}) {
+    // the wing flies the same hull in a slightly greener light, so you can tell
+    // your escorts from yourself at a glance
+    const live = extra.livery || LIVERY_3D[shipId] || livery;
+    const deck = ALT + (ship.alt || 0);
+    const roll = extra.roll || 0;
+    gl.ship(ship.x, deck, ship.y, ship.facing, size, live.tint, live.glow, {
+      roll, pitch: extra.pitch || 0, damage: extra.damage || 0, exposure: live.exposure,
+    });
+    // engines: two nacelles' worth of light, brighter under thrust
+    const thrust = extra.thrust == null ? 0.5 : extra.thrust;
+    const back = -0.92 * size;
+    const side = 0.44 * size;
+    const c = Math.cos(ship.facing);
+    const sn = Math.sin(ship.facing);
+    for (const dir of [-1, 1]) {
+      gl.sprite(
+        ship.x + c * back - sn * side * dir, deck + size * 0.12, ship.y + sn * back + c * side * dir,
+        size * (0.16 + thrust * 0.22),
+        live.glow[0] * (0.4 + thrust * 0.8), live.glow[1] * (0.4 + thrust * 0.8), live.glow[2] * (0.4 + thrust * 0.8),
+      );
+    }
+  }
+
+  /** The whole frame, in 3D. Everything it touches is already on screen. */
+  function render3D(w, h, dpr) {
+    const pose = cameraPose();
+    let [ex, ey, ez] = pose.eye;
+    if (shake > 0.2) {
+      ex += (Math.random() - 0.5) * shake;
+      ey += (Math.random() - 0.5) * shake * 0.6;
+      ez += (Math.random() - 0.5) * shake;
+    }
+    gl.begin(w, h, dpr);
+    gl.camera(ex, ey, ez, pose.at[0], pose.at[1], pose.at[2], pose.fov);
+    gl.sky();
+    if (screen !== 'title') gl.grid();
+
+    for (const site of sites) drawSite(site);
+
+    // the wing, then the contacts, then you: the camera is behind you
+    for (const ally of allies) {
+      drawShip3D(ally, R.PLAYER_SHIP, ally.radius * 1.15, wingLivery, {
+        livery: wingLivery,
+        roll: clamp(-ally.vx * 0.004, -0.5, 0.5),
+        thrust: 0.55,
+      });
+    }
+    for (const enemy of enemies) {
+      const size = enemy.radius * (enemy.id === 'enterprise' ? 1.15 : 1.32);
+      drawShip3D(enemy, enemy.id, size, LIVERY_3D[enemy.id], {
+        roll: clamp(-enemy.vx * 0.003, -0.4, 0.4),
+        damage: 1 - enemy.hull / Math.max(1, enemy.hullMax),
+        thrust: 0.7,
+      });
+    }
+    if (screen === 'title') {
+      // the hangar: your ship, turning on the cradle, no enemies
+      gl.ship(0, 0, 0, now * 0.5, 46, LIVERY_3D.enterprise.tint, LIVERY_3D.enterprise.glow,
+        { roll: Math.sin(now * 0.4) * 0.08, exposure: 1.5 });
+      gl.sprite(0, -6, 0, 70, 0.05, 0.12, 0.2);
+    } else if (screen === 'battle') {
+      const s = player();
+      drawShip3D(s, R.PLAYER_SHIP, s.radius * 1.15, LIVERY_3D.enterprise, {
+        roll: clamp(-input.turn * 0.5, -0.55, 0.55),
+        pitch: clamp(input.thrust * 0.06, -0.09, 0.09),
+        thrust: warp.active > 0 ? 1.6 : 0.45 + Math.abs(input.thrust) * 0.8,
+      });
+    }
+
+    // torpedoes, sparks and beams, all as additive billboards
+    for (const shot of shots) {
+      const rgb = shot.side === 'player' ? [1.0, 0.86, 0.45] : [1.0, 0.46, 0.3];
+      const deck = ALT + (shot.alt || 0);
+      gl.sprite(shot.x, deck, shot.y, 9, rgb[0], rgb[1], rgb[2]);
+      gl.sprite(shot.x - shot.vx * 0.012, deck, shot.y - shot.vy * 0.012, 5, rgb[0] * 0.5, rgb[1] * 0.4, rgb[2] * 0.3);
+    }
+    for (const beam of beams) {
+      const rgb = rgbOf(beam.colour);
+      const fade = clamp(beam.life / 0.12, 0, 1);
+      gl.beam(
+        [beam.x1, ALT + (beam.alt1 || 0), beam.y1],
+        [beam.x2, ALT + (beam.alt2 || 0), beam.y2],
+        3.2, [rgb[0] * 1.4 * fade, rgb[1] * 1.4 * fade, rgb[2] * 1.4 * fade],
+      );
+      gl.sprite(beam.x2, ALT + (beam.alt2 || 0), beam.y2, 22 * fade, rgb[0], rgb[1], rgb[2]);
+    }
+    for (const spark of sparks) {
+      const rgb = rgbOf(spark.colour);
+      const fade = clamp(spark.life / spark.max, 0, 1);
+      if (spark.ring) {
+        gl.sprite(spark.x, ALT, spark.y, Math.max(4, spark.ring), rgb[0] * fade * 0.7, rgb[1] * fade * 0.7, rgb[2] * fade * 0.7);
+      } else {
+        gl.sprite(spark.x, ALT, spark.y, spark.size * 2.4, rgb[0] * fade, rgb[1] * fade, rgb[2] * fade);
+      }
+    }
+    if (warp.active > 0) {
+      // star streaks: the same trick as a hyperspace jump, three lines at a time
+      const s = player();
+      for (let i = 0; i < 14; i++) {
+        const spread = (Math.random() - 0.5) * 260;
+        const along = (Math.random() - 0.5) * 520;
+        const px = s.x + warp.dx * along - warp.dy * spread;
+        const py = s.y + warp.dy * along + warp.dx * spread;
+        gl.sprite(px, ALT + (Math.random() - 0.5) * 180, py, 4 + Math.random() * 10, 0.4, 0.7, 1.0);
+      }
+    }
+    gl.sprites();
+
+    drawOverlay3D(w, h);
+  }
+
+  /**
+   * The 2D layer over the 3D one: lock boxes, off-screen contacts, the marker
+   * on the objective. These are pixels, not DOM nodes, because there can be a
+   * dozen of them and they move every frame.
+   */
+  function drawOverlay3D(w, h) {
+    if (!gl || !overlayCtx) return;
+    const g = overlayCtx;
+    const dpr = perf.dpr || 1;
+    try { g.setTransform(dpr, 0, 0, dpr, 0, 0); } catch { /* old context */ }
+    g.clearRect(0, 0, w, h);
+    if (screen !== 'battle' && screen !== 'over') return;
+
+    const project = (x, alt, y) => {
+      try { return gl.project(x, ALT + alt, y, w, h); } catch { return null; }
+    };
+
+    // the objective's landmark, so "warp to the derelict" has a picture
+    const quest = R.activeQuest ? R.activeQuest(quests) : null;
+    const site = quest && R.questTarget ? R.questTarget(quest, sites) : null;
+    if (site) {
+      const p = project(site.x, 0, site.y);
+      if (p && p.onScreen) {
+        g.strokeStyle = 'rgba(255,213,120,.75)';
+        g.lineWidth = 1.5;
+        g.beginPath();
+        g.moveTo(p.x, p.y - 12); g.lineTo(p.x + 9, p.y); g.lineTo(p.x, p.y + 12); g.lineTo(p.x - 9, p.y);
+        g.closePath();
+        g.stroke();
+      }
+    }
+
+    // contacts: a bracket on the one you are looking at, an arrow otherwise
+    const s = player();
+    for (const enemy of enemies) {
+      const p = project(enemy.x, enemy.alt || 0, enemy.y);
+      const dist = Math.hypot(enemy.x - s.x, enemy.y - s.y);
+      if (!p || !p.onScreen) {
+        // clamp the marker onto the edge in the direction of travel
+        const bearing = R.bearing(s.x, s.y, enemy.x, enemy.y);
+        const rel = R.angleDelta(s.facing, bearing);
+        if (Math.abs(rel) > 2.6) continue;
+        const cx = w / 2 + Math.sin(rel) * w * 0.42;
+        const cy = h - 54 - clamp(dist * 0.02, 0, 80);
+        g.fillStyle = enemy.id === 'narada' ? 'rgba(255,120,90,.85)' : 'rgba(255,170,110,.85)';
+        g.beginPath();
+        g.moveTo(cx, cy - 6); g.lineTo(cx + 6, cy + 4); g.lineTo(cx - 6, cy + 4);
+        g.closePath();
+        g.fill();
+        continue;
+      }
+      const size = clamp(1600 / Math.max(60, dist), 8, 34);
+      g.strokeStyle = enemy.id === 'narada' ? 'rgba(255,140,110,.55)' : 'rgba(255,180,120,.55)';
+      g.lineWidth = 1.2;
+      g.strokeRect(p.x - size, p.y - size, size * 2, size * 2);
+    }
+
+    if (warp.cooldown > 0) {
+      const frac = 1 - warp.cooldown / WARP_COOLDOWN;
+      g.strokeStyle = 'rgba(127,228,255,.5)';
+      g.lineWidth = 2;
+      g.beginPath();
+      g.arc(28, h - 28, 13, -Math.PI / 2, -Math.PI / 2 + frac * TAU);
+      g.stroke();
     }
   }
 
@@ -1332,9 +1969,19 @@
     const waveNum = $('waveNum');
     if (waveNum) waveNum.textContent = String(Math.max(1, run.wave));
     const scoreNum = $('scoreNum');
-    if (scoreNum) scoreNum.textContent = String(R.scoreOf({
-      kills: run.kills, wave: run.wave, seconds: run.seconds, hull: s.hull,
-    }));
+    if (scoreNum) scoreNum.textContent = String(scoreNow());
+
+    // the warp spool: the chip counts down, the button greys out with it
+    const warpBtn = $('warpBtn');
+    const warpTxt = $('warpTxt');
+    const warping = warp.cooldown > 0;
+    if (warpBtn) {
+      warpBtn.disabled = warping;
+      warpBtn.classList.toggle('ready', !warping);
+      warpBtn.classList.toggle('cool', warping);
+    }
+    if (warpTxt) warpTxt.textContent = warping ? `${Math.ceil(warp.cooldown)}s` : 'READY';
+    paintQuest();
 
     // torpedo pips: one dot per tube, lit while the tube is loaded
     const pips = $('torpPips');
@@ -1428,9 +2075,12 @@
     const raw = Math.max(0, (timestamp - last) / 1000);
     const dt = Math.min(0.05, raw);
     last = timestamp;
-    const fit = sdk.fit(canvas, targetDpr());
-    const w = fit.w || canvas.clientWidth || 320;
-    const h = fit.h || canvas.clientHeight || 240;
+    // Size whichever canvas is on screen. The 2D one is `display:none` while the
+    // 3D view is live, and a hidden element measures zero — hence the swap.
+    const live3D = Boolean(gl && glReady && glCanvas);
+    const fit = sdk.fit(live3D ? glCanvas : canvas, targetDpr());
+    const w = fit.w || (live3D ? glCanvas.clientWidth : canvas.clientWidth) || 320;
+    const h = fit.h || (live3D ? glCanvas.clientHeight : canvas.clientHeight) || 240;
     perf.dpr = fit.dpr || 1;
     watchPerf(raw);
 
@@ -1443,24 +2093,46 @@
     const flashEl = $('flash');
     if (flashEl && flashLevel <= 0.01 && flashEl.style.opacity !== '0') flashEl.style.opacity = '0';
 
-    ctx.save();
-    if (shake > 0.2) {
-      ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+    let drew3D = false;
+    if (live3D) {
+      try {
+        render3D(w, h, perf.dpr);
+        drew3D = true;
+      } catch (error) {
+        // A GL frame that throws must not end the run: drop to 2D for good and
+        // say so once. This is the difference between a bug and a black screen.
+        glReady = false;
+        use3D(false);
+        try { console.warn('star battle: 3D frame failed, using 2D —', error && error.message); } catch { /* quiet */ }
+      }
     }
-    drawSpace(w, h);
-    if (screen === 'battle') drawBoundary();
-    if (screen === 'battle' || screen === 'over') {
+
+    if (!drew3D) {
+      // canvas-2D is drawn in CSS pixels; the bitmap is `dpr` times bigger, so
+      // without this transform the whole game renders into a quarter of the
+      // glass on any phone newer than 2019.
+      try {
+        if (typeof ctx.setTransform === 'function') ctx.setTransform(perf.dpr, 0, 0, perf.dpr, 0, 0);
+      } catch { /* an older context */ }
       ctx.save();
-      ctx.translate(w / 2 - cam.x, h / 2 - cam.y);
-      drawEnemies();
-      if (screen === 'battle') drawPlayer();
-      drawShots();
+      if (shake > 0.2) {
+        ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+      }
+      drawSpace(w, h);
+      if (screen === 'battle') drawBoundary();
+      if (screen === 'battle' || screen === 'over') {
+        ctx.save();
+        ctx.translate(w / 2 - cam.x, h / 2 - cam.y);
+        drawEnemies();
+        if (screen === 'battle') drawPlayer();
+        drawShots();
+        ctx.restore();
+      } else {
+        drawTitleScene(w, h);
+      }
       ctx.restore();
-    } else {
-      drawTitleScene(w, h);
+      if (screen === 'battle') drawMarkers(w, h);
     }
-    ctx.restore();
-    if (screen === 'battle') drawMarkers(w, h);
 
     hudTimer += dt;
     if (screen === 'battle' && hudTimer > 0.1) {
@@ -1502,6 +2174,7 @@
     }
     if (key === 'shift') input.torpedo = true;
     if (key === 'e') input.evade = true;
+    if (key === 'q') input.warp = true;
   });
 
   addEventListener('keyup', (event) => {
@@ -1566,13 +2239,43 @@
 
   /* ---------------------------------------------------------------- buttons */
   const on = (id, fn) => { const el = $(id); if (el) el.addEventListener('click', fn); };
+
+  /**
+   * A weapon button must fire while it is held, not when it is released. A
+   * `click` listener gives you the latter, which is why FIRE used to feel dead
+   * on a phone: the first shot landed when you let go. Pointer events start it
+   * on the way down and stop it on the way up, with touch and mouse agreeing.
+   */
+  function holdToFire(el, start, stop) {
+    if (!el || !el.addEventListener) return;
+    const down = (event) => { event.preventDefault?.(); start(); };
+    const up = (event) => { event.preventDefault?.(); stop(); };
+    el.addEventListener('pointerdown', down);
+    el.addEventListener('pointerup', up);
+    el.addEventListener('pointercancel', up);
+    el.addEventListener('pointerleave', up);
+    // pointer events are not universal: mousedown/touchstart cover the rest
+    el.addEventListener('mousedown', down);
+    el.addEventListener('touchstart', down, { passive: false });
+    el.addEventListener('touchend', up);
+    el.addEventListener('touchcancel', up);
+    el.addEventListener('contextmenu', (e) => e.preventDefault?.());
+  }
+
   on('launchBtn', () => startBattle());
   on('againBtn', () => startBattle());
   on('exitBtn', () => { backToTitle(); sdk.close?.(); });
-  on('fireBtn', () => { input.touchFire = true; input.fire = true; });
+  holdToFire($('fireBtn'),
+    () => { input.touchFire = true; input.fire = true; },
+    () => { input.touchFire = false; syncKeyboard(); });
+  on('warpBtn', () => { input.warp = true; });
+  // the pair the player asked for: fullscreen, with the exit right beside it
+  on('fsBtn', () => { sdk.fullscreen?.(); });
+  on('exitHudBtn', () => { setPaused(false); backToTitle(); sdk.close?.(); });
   addEventListener('mouseup', () => { input.touchFire = false; syncKeyboard(); });
   on('pauseBtn', () => setPaused(!paused));
   on('resumeBtn', () => setPaused(false));
+  on('pauseFsBtn', () => { sdk.fullscreen?.(); });
   on('quitBtn', () => { setPaused(false); backToTitle(); sdk.close?.(); });
   document.addEventListener?.('visibilitychange', () => {
     try {
@@ -1596,8 +2299,12 @@
   sdk.ready();
   try {
     loadBest();
+    loadHistory();
     paintHud();
     paintTitleStats();
+    // 3D first: it is the view the player asked for. If the hull has not
+    // landed yet the 2D renderer covers the frame until it does.
+    initGL();
     // The atlas is asked for *after* the hub has been told we are up: a slow
     // image must never delay `arcade:ready`.
     if (ART) {
@@ -1618,7 +2325,11 @@
     set('statPhaser', spec.phaser.dmg);
     set('statTorp', spec.torpedo.load);
     const tag = $('qualityTag');
-    if (tag) tag.textContent = `RENDER ${String(quality).toUpperCase()} · ${Math.round(perf.dpr * 100)}%`;
+    if (tag) {
+      tag.textContent = glReady && gl
+        ? `3D · ${gl.tris} TRIS · ${String(quality).toUpperCase()}`
+        : `2D FALLBACK · ${String(quality).toUpperCase()} · ${Math.round(perf.dpr * 100)}%`;
+    }
   }
 
   /**
@@ -1659,6 +2370,15 @@
     get art() { return ART; },
     applyHubInit,
     spawnWave,
+    get gl() { return glReady; },
+    get sites() { return sites; },
+    get quests() { return quests; },
+    get allies() { return allies; },
+    get history() { return history; },
+    get warpState() { return { cooldown: warp.cooldown, active: warp.active, jumps: warp.jumps }; },
+    warp: beginWarp,
+    scoreNow,
+    questTick,
     tick: (dt) => { update(dt); paintHud(); },
     setWave: (n) => { run.wave = Math.max(0, n | 0); },
     /** Put an enemy at a known place — a test is allowed to be a director. */
