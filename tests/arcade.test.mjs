@@ -14,7 +14,7 @@ const {
   NATIVE_GAMES, mergeCatalogues, filterGames, cardHtml, validateBridgeMessage, BRIDGE, escapeHtml, Arcade,
 } = await import('./app/js/arcade.js');
 const {
-  ArcadeStats, addRating, rankRuns, ratingLabel, normalizeStats, BOARD_TTL_MS,
+  ArcadeStats, addRating, rankRuns, ratingLabel, normalizeStats, BOARD_TTL_MS, HISTORY_LIMIT,
 } = await import('./app/js/arcade-stats.js');
 
 const problems = [];
@@ -378,6 +378,41 @@ console.log('\nthe hub hands that board to the sandboxed game');
   check('an opened game gets a freshly warmed board',
     init2?.payload?.leaderboard?.[0]?.score === 5150, JSON.stringify(init2?.payload?.leaderboard || null));
   arc.destroy();
+}
+
+// ---------------------------------------------------- history + fullscreen lane
+console.log('\nthe hub remembers what you played, and can go fullscreen for a game');
+{
+  const seen = [];
+  const stats = new ArcadeStats({ storage: null, now: () => 1000 });
+  stats.clearLocal();                     // a fresh device, not the earlier suite's
+  await stats.submitRun('star-battle', { score: 1200, day: 4, seconds: 61, meta: '7 kills' }, 'GHANIMZ');
+  await stats.submitRun('iron-tide', { score: 800, day: 2, seconds: 30, meta: '2 docks' }, 'GHANIMZ');
+  await stats.submitRun('star-battle', { score: 2400, day: 6, seconds: 90, meta: '11 kills' }, 'GHANIMZ');
+  seen.push(...stats.data.history);
+  check('every finished run is logged, newest first',
+    seen.length === 3 && seen[0].score === 2400 && seen[2].score === 1200, JSON.stringify(seen.map((r) => r.score)));
+  check('…with the game it belongs to', seen[0].id === 'star-battle' && seen[1].id === 'iron-tide');
+  check('…and the day and the clock, when the game sent them', seen[0].day === 6 && seen[0].seconds === 90);
+  const reloaded = normalizeStats(JSON.parse(JSON.stringify({ history: seen })));
+  check('the log survives a reload, still newest first',
+    reloaded.history.length === 3 && reloaded.history[0].score === 2400 && reloaded.history[2].id === 'star-battle');
+  check('junk rows are dropped instead of drawn', (() => {
+    const dirty = normalizeStats({ history: [null, { id: 'x' }, { id: 'y', score: 5 }, 'nope'] });
+    return dirty.history.length === 1 && dirty.history[0].id === 'y';
+  })());
+  check('the log is capped', normalizeStats({
+    history: Array.from({ length: 90 }, (_, i) => ({ id: 'g', score: i, at: i })),
+  }).history.length === HISTORY_LIMIT, String(HISTORY_LIMIT));
+
+  // a game's ⤢ button: a new, validated bridge message
+  const fsMsg = validateBridgeMessage({ channel: BRIDGE, type: 'arcade:fullscreen', payload: { junk: 1 } });
+  check('a game can ask the hub for fullscreen', fsMsg?.type === 'arcade:fullscreen', JSON.stringify(fsMsg));
+  check('…and the payload it sends is dropped',
+    Object.keys(fsMsg?.payload || {}).length === 0, JSON.stringify(fsMsg?.payload));
+  check('an unknown message is still refused',
+    validateBridgeMessage({ channel: BRIDGE, type: 'arcade:rm-rf', payload: {} }) === null);
+  void seen;
 }
 
 process.exit(problems.length ? 1 : 0);

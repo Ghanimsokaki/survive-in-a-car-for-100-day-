@@ -35,6 +35,7 @@ import {
   installAutoLandscape, isTouchDevice, isPortrait, requestLandscape, requestPortrait,
 } from './orientation.js';
 import { applyPostClass } from './graphics.js';
+import { toggleFullscreen, isFullscreen } from './fullscreen.js';
 import { paintAvatar, initialsOf } from './account-image.js';
 import { MODES } from './modes.js';
 
@@ -64,7 +65,9 @@ export const NATIVE_GAMES = [{
 /** How many modes the built-in game ships with (shown on its card). */
 export const NATIVE_MODE_COUNT = MODES.length;
 
-const ALLOWED_TYPES = new Set(['arcade:ready', 'arcade:state', 'arcade:score', 'arcade:close']);
+const ALLOWED_TYPES = new Set([
+  'arcade:ready', 'arcade:state', 'arcade:score', 'arcade:close', 'arcade:fullscreen',
+]);
 
 /** Drops anything that is not a well-formed, in-range bridge message. */
 export function validateBridgeMessage(data) {
@@ -97,6 +100,9 @@ export function validateBridgeMessage(data) {
           meta: String(p.meta || '').slice(0, 80),
         },
       };
+    case 'arcade:fullscreen':
+      // a sandboxed frame cannot go fullscreen itself; the hub does it for it
+      return { type, payload: {} };
     case 'arcade:close':
     default:
       return { type: 'arcade:close', payload: {} };
@@ -301,7 +307,9 @@ export class Arcade {
           <span id="apTitle">GAME</span>
           <span id="apStatus"></span>
           <button id="apReload" type="button" title="Restart">⟳</button>
-          <button id="apClose" type="button" title="Back to arcade">✕</button>
+          <button id="apFs" class="ap-fs" type="button" data-fullscreen="icon"
+            title="Fullscreen (Alt+Enter)" aria-label="Fullscreen">⤢</button>
+          <button id="apClose" type="button" title="Back to arcade" aria-label="Back to arcade">✕</button>
         </div>
         <div class="ap-stage"><iframe id="apFrame" title="Community game"
           sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe></div>
@@ -644,6 +652,18 @@ export class Arcade {
   renderRecords() {
     const host = this.nodes.records;
     if (!host) return;
+    // "history for what game": one line per finished run, newest first, with
+    // the shelf title where it is known and the id where it is not
+    const runs = Array.isArray(this.stats.data.history) ? this.stats.data.history : [];
+    const titles = new Map(this.games.map((g) => [g.id, g.title]));
+    const history = runs.length
+      ? `<div class="arc-history"><h3>RECENT RUNS<span>${runs.length}</span></h3><ol>${runs
+        .slice(0, 8)
+        .map((r) => `<li><span>${escapeHtml(titles.get(r.id) || r.id)}</span>`
+          + `<em>${r.day ? `W${r.day} · ` : ''}${r.seconds ? `${r.seconds}s` : escapeHtml(r.meta || '')}</em>`
+          + `<b>${r.score}</b></li>`)
+        .join('')}</ol></div>`
+      : '<div class="arc-history"><h3>RECENT RUNS</h3><p class="arc-note">No runs logged on this device yet.</p></div>';
     const rows = this.games.map((g) => {
       const board = rankRuns(this.stats.data.best[g.id] || []).slice(0, 3);
       const best = board[0];
@@ -657,7 +677,7 @@ export class Arcade {
         class="${this.stats.myRating(g.id) >= n ? 'on' : ''}">★</button>`).join('')}</span>
       </div>`;
     }).join('');
-    host.innerHTML = rows;
+    host.innerHTML = history + rows;
     host.querySelectorAll('[data-game-rate]').forEach((btn) => {
       btn.addEventListener('click', async () => {
         await this.stats.rate(btn.dataset.gameRate, Number(btn.dataset.stars));
@@ -819,6 +839,15 @@ export class Arcade {
       return;
     }
     if (msg.type === 'arcade:close') { this.closeGame(); return; }
+    if (msg.type === 'arcade:fullscreen') {
+      // the game's own ⤢ button, routed through the one place that knows how
+      // every browser spells fullscreen
+      toggleFullscreen().then(() => {
+        const btn = this.el?.querySelector?.('#apFs');
+        if (btn) btn.textContent = isFullscreen() ? '⤡' : '⤢';
+      }).catch(() => {});
+      return;
+    }
     if (msg.type === 'arcade:state') {
       this.heardAt = Date.now();
       this.nodes.playerStatus.textContent = msg.payload.status

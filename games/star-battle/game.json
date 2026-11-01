@@ -2,9 +2,15 @@
   "id": "star-battle",
   "title": "Star Battle",
   "author": "ghanimz",
-  "blurb": "Fly the Enterprise-E against the Narada and the Vengeance: phasers, quantum torpedoes and evasive patterns, wave after wave.",
-  "tags": ["space", "shooter", "pve", "arcade"],
-  "version": "1.0.0",
+  "blurb": "Fly the Enterprise-E in 3D through an open sector: warp between landmarks, fly quests with two Enterprises on your wing, and hold off the Narada.",
+  "tags": [
+    "space",
+    "3d",
+    "shooter",
+    "open-world",
+    "quests"
+  ],
+  "version": "2.0.0",
   "entry": "index.html",
   "icon": "icon.svg",
   "accent": "#38c8ff",

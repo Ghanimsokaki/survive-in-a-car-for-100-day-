@@ -1149,6 +1149,21 @@ body.arcade-open{overflow:hidden}
   background:#101620;border:1px solid rgba(255,255,255,.07);font-size:9px;letter-spacing:1.2px}
 .ar-art{width:6px;height:26px;border-radius:3px;flex:0 0 6px}
 .arc-rec b{color:#e8eef8;min-width:150px}
+/* the run log at the top of the Records tab */
+.arc-history{margin:0 0 10px;padding:10px 12px;border-radius:10px;background:#0c1219;
+  border:1px solid rgba(255,255,255,.07)}
+.arc-history h3{margin:0 0 7px;font-size:8px;letter-spacing:2.2px;color:#8b93a5;display:flex;
+  justify-content:space-between;font-weight:700}
+.arc-history h3 span{color:#ffb347}
+.arc-history ol{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+.arc-history li{display:flex;gap:8px;align-items:baseline;font-size:8.5px;letter-spacing:1.1px;
+  color:#cfd8e4;border-bottom:1px solid rgba(255,255,255,.04);padding-bottom:4px}
+.arc-history li:last-child{border-bottom:0;padding-bottom:0}
+.arc-history li span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.arc-history li em{font-style:normal;color:#6f7c8d}
+.arc-history li b{color:#ffd578;font-variant-numeric:tabular-nums}
+.ap-bar .ap-fs{min-width:34px;padding:6px 8px;font-size:11px}
+.ap-bar #apClose{border-color:rgba(255,120,120,.35);color:#ffc7c7}
 .arc-rec em{font-style:normal;color:#8b93a5}
 .ar-stars{margin-left:auto;color:#ffd578;font-size:8px}
 .ar-rate{display:flex;gap:1px}

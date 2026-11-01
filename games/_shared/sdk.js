@@ -9,6 +9,7 @@
  *   arcade:state   → optional live status  { day, score, status }
  *   arcade:score   → finished run          { score, day, seconds, meta }
  *   arcade:close   → player asked to leave
+ *   arcade:fullscreen → toggle the hub's (and therefore this frame's) fullscreen
  *
  * Drop this on the page with <script src="../_shared/sdk.js"></script>.
  * It degrades to a standalone page if nobody is listening (open the file
@@ -85,6 +86,16 @@
     /** Ask the hub to close the game and go back to the arcade. */
     close() {
       post('arcade:close', {});
+      return sdk;
+    },
+
+    /**
+     * Ask the hub to toggle fullscreen. A sandboxed frame cannot request
+     * fullscreen for itself, and the hub element that holds it is the thing the
+     * player wants full anyway — so the button in the game HUD routes here.
+     */
+    fullscreen() {
+      post('arcade:fullscreen', {});
       return sdk;
     },
 

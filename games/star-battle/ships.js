@@ -209,8 +209,107 @@
     };
   }
 
+  /* ------------------------------------------------------------- the sector
+   * An open world needs places in it. These are the fixed points a captain can
+   * see, fly to and be sent to: a starbase, a couple of worlds, a derelict and
+   * a debris field. They are seeded, so a seed is a sector — the same fight in
+   * the same sky, which is what makes a quest replayable.
+   */
+  const SITE_DEFS = [
+    { kind: 'starbase', name: 'STARBASE 74', size: 46, tint: [0.42, 0.66, 1.0] },
+    { kind: 'planet', name: 'RISA', size: 210, tint: [0.24, 0.52, 0.38] },
+    { kind: 'derelict', name: 'DERELICT · NCC-1701-C', size: 40, tint: [0.5, 0.46, 0.4] },
+    { kind: 'field', name: 'DEBRIS FIELD', size: 260, tint: [0.36, 0.34, 0.32] },
+    { kind: 'planet', name: 'VULCAN', size: 180, tint: [0.52, 0.3, 0.2] },
+    { kind: 'starbase', name: 'OUTPOST 12', size: 34, tint: [0.4, 0.7, 0.9] },
+  ];
+
+  /** The sector's landmarks, laid on a ring so none of them overlap. */
+  function sectorSites(seed = 1) {
+    const rand = rng((seed | 0) ^ 0x51ed);
+    return SITE_DEFS.map((def, i) => {
+      const angle = (i / SITE_DEFS.length) * Math.PI * 2 + rand() * 0.55 + 0.3;
+      const dist = 520 + rand() * 1500;
+      return {
+        id: `${def.kind}${i}`,
+        kind: def.kind,
+        name: def.name,
+        size: def.size,
+        tint: def.tint,
+        r: def.kind === 'field' ? 300 : Math.max(70, def.size * 2.2),
+        x: Math.cos(angle) * dist,
+        y: Math.sin(angle) * dist,
+        angle,
+        seed: rand(),
+      };
+    });
+  }
+
+  /**
+   * Four objectives, in the order a captain meets them: clear the contacts,
+   * pick up the survivors, hold the line, report in. Each one is a plain
+   * object with a `progress` and a `need`, so the HUD, the sim and a test all
+   * read the same numbers.
+   */
+  function makeQuests(seed = 1, sites = null) {
+    const list = sites || sectorSites(seed);
+    const pick = (kind) => (list.find((s) => s.kind === kind) || list[0]);
+    const derelict = pick('derelict');
+    const base = pick('starbase');
+    const outpost = [...list].reverse().find((s) => s.kind === 'starbase') || base;
+    return [
+      {
+        id: 'q1', kind: 'destroy', need: 3, progress: 0, done: false, reward: 400,
+        title: 'CLEAR THE SECTOR', hint: 'Destroy 3 hostile contacts', targetId: null,
+      },
+      {
+        id: 'q2', kind: 'reach', need: 1, progress: 0, done: false, reward: 600,
+        title: 'RESCUE PARTY', hint: `Warp to ${derelict.name}`, targetId: derelict.id,
+      },
+      {
+        id: 'q3', kind: 'visit', need: 2, progress: 0, done: false, reward: 750,
+        title: 'SURVEY THE SECTOR', hint: 'Fly to any two landmarks', targetId: null,
+      },
+      {
+        id: 'q4', kind: 'reach', need: 1, progress: 0, done: false, reward: 1200,
+        title: 'REPORT IN', hint: `Dock at ${outpost.name}`, targetId: outpost.id,
+      },
+    ];
+  }
+
+  /** The objective being flown right now: the first one not yet done. */
+  function activeQuest(quests = []) {
+    return quests.find((q) => q && !q.done) || null;
+  }
+
+  /**
+   * Feeds an event into a quest. Returns true when it moved.
+   *   { type: 'kill' }                        — any hostile destroyed
+   *   { type: 'reach', siteId: 'starbase0' }  — you flew to a landmark
+   */
+  function questEvent(quest, event = {}) {
+    if (!quest || quest.done) return false;
+    let hit = false;
+    if (quest.kind === 'destroy' && event.type === 'kill') hit = true;
+    if (quest.kind === 'reach' && event.type === 'reach' && event.siteId === quest.targetId) hit = true;
+    if (quest.kind === 'visit' && event.type === 'reach' && Boolean(event.siteId)) hit = true;
+    if (!hit) return false;
+    quest.progress = Math.min(quest.need, quest.progress + 1);
+    quest.done = quest.progress >= quest.need;
+    return true;
+  }
+
+  /** Where the helm should point for this quest, or null when it is not a place. */
+  function questTarget(quest, sites = []) {
+    if (!quest) return null;
+    if (quest.targetId) return sites.find((s) => s.id === quest.targetId) || null;
+    if (quest.kind === 'visit') return null;         // any landmark will do
+    return null;
+  }
+
   const api = {
     SHIPS, PLAYER_SHIP,
+    sectorSites, makeQuests, activeQuest, questEvent, questTarget,
     waveFor, waveBonus, scoreOf,
     damage, regen,
     bearing, angleDelta, inArc, beamPower, spawnPoint, rng,

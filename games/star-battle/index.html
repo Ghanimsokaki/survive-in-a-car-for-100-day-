@@ -18,6 +18,13 @@
     -webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;
     overscroll-behavior:none;touch-action:none}
   canvas{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none}
+  /* Three layers, only one renderer visible at a time:
+       #c3  WebGL (the real 3D view)
+       #c   canvas-2D (the baked turntables, and the fallback)
+       #c2  markers for the 3D view — pixels are cheaper than DOM at 12 targets */
+  #c{z-index:0}
+  #c3{display:none;z-index:0}
+  #c2{display:none;z-index:1;pointer-events:none}
 
   /* ------------------------------------------------------------- overlays */
   .screen{position:fixed;inset:0;display:flex;flex-direction:column;pointer-events:none;z-index:2}
@@ -125,6 +132,10 @@
     background:rgba(6,16,26,.85);border:1px solid var(--line);color:#bfe6f8;font:inherit;
     font-size:11px;letter-spacing:1px;cursor:pointer}
   .pause:active{transform:translateY(1px)}
+  /* the pair the player asked for: fullscreen, with the exit beside it */
+  .topright{display:flex;gap:6px;align-items:center;flex:0 0 auto}
+  .pause.exit{border-color:rgba(255,120,120,.4);color:#ffc7c7}
+  .pause.exit:active{background:rgba(120,20,20,.6)}
   #pause{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
     background:rgba(2,5,11,.86);z-index:6;pointer-events:auto}
   #pause .card{text-align:center;max-width:340px}
@@ -153,6 +164,10 @@
   .hbtn.fire{border-color:rgba(127,228,255,.6);color:#e8faff;
     box-shadow:0 0 20px rgba(90,210,255,.22) inset}
   .hbtn.fire.hot{background:rgba(30,120,180,.55);box-shadow:0 0 22px rgba(90,210,255,.45)}
+  .hbtn.warp{border-color:rgba(180,150,255,.5);color:#e4dcff}
+  .hbtn.warp.ready{box-shadow:0 0 18px rgba(150,120,255,.25) inset}
+  .chip.quest b{color:var(--gold);letter-spacing:1px;font-size:8px}
+  .history li{font-size:8.5px}
   .hbtn.ready{border-color:#6dffa8;color:#baffd6}
   .hbtn.cool{opacity:.42}
   .banner{position:fixed;left:0;right:0;top:34%;text-align:center;pointer-events:none;
@@ -205,7 +220,9 @@
 </style>
 </head>
 <body>
+<canvas id="c3"></canvas>
 <canvas id="c"></canvas>
+<canvas id="c2"></canvas>
 <div class="fx"></div>
 <div id="damageFx"></div>
 <div id="flash"></div>
@@ -217,7 +234,8 @@
   <div class="card" id="titleCard">
     <p class="kicker"><span><i class="dot"></i>STARFLEET · SECTOR 001</span><span id="qualityTag">RENDER AUTO</span></p>
     <h1>STAR BATTLE</h1>
-    <p class="sub">One starship against the dark. Hold the line as long as you can.</p>
+    <p class="sub">An open sector, three Enterprises and the dark. Patrol the landmarks,
+      fly the objectives, warp out of trouble.</p>
 
     <div class="hangar">
       <div class="ship-card">
@@ -248,10 +266,15 @@
       <ol id="boardList"><li class="empty">NO RUNS LOGGED YET — BE THE FIRST</li></ol>
     </div>
 
+    <div class="board">
+      <h3><span>YOUR RUNS</span><span class="tag" id="historyTag">LAST 6</span></h3>
+      <ol id="historyList" class="history"><li class="empty">NO RUNS LOGGED YET</li></ol>
+    </div>
+
     <p class="keys">
       <kbd>W</kbd>/<kbd>S</kbd> thrust · <kbd>A</kbd>/<kbd>D</kbd> turn · <kbd>SPACE</kbd> phasers ·
-      <kbd>SHIFT</kbd> torpedo · <kbd>E</kbd> evasive<br />
-      On a phone: left half steers, right half fires, and the buttons do the rest.
+      <kbd>SHIFT</kbd> torpedo · <kbd>Q</kbd> warp · <kbd>E</kbd> evasive<br />
+      On a phone: the left half steers, the right half holds fire, and the buttons do the rest.
     </p>
     <button id="launchBtn" class="big" type="button">ENGAGE ▸</button>
     <p class="best" id="bestLine">BEST SCORE — 0<span class="new">NEW BEST</span></p>
@@ -275,17 +298,25 @@
       <span>WAVE</span><b id="waveNum">1</b>
       <span>SCORE</span><b id="scoreNum">0</b>
     </div>
-    <button id="pauseBtn" class="pause" type="button" aria-label="Pause">❚❚</button>
+    <div class="topright">
+      <button id="pauseBtn" class="pause" type="button" aria-label="Pause">❚❚</button>
+      <button id="fsBtn" class="pause" type="button" aria-label="Fullscreen" title="Fullscreen">⤢</button>
+      <button id="exitHudBtn" class="pause exit" type="button" aria-label="Leave the sector"
+        title="Leave the sector">✕</button>
+    </div>
   </div>
   <div class="banner" id="banner"><b id="bannerText"></b><i id="bannerSub"></i></div>
   <div class="bottom">
     <div class="chips">
+      <div class="chip quest" id="questChip"><span>OBJECTIVE</span><b id="questTxt">—</b></div>
       <div class="chip" id="torpedoChip"><span>TORPEDO</span><span class="pips" id="torpPips"></span></div>
       <div class="chip" id="evadeChip"><span>EVADE</span><b id="evadeTxt">READY</b></div>
+      <div class="chip" id="warpChip"><span>WARP</span><b id="warpTxt">READY</b></div>
     </div>
     <div class="actions">
       <button id="evadeBtn" class="hbtn" type="button">EVADE<small>E</small></button>
       <button id="torpBtn" class="hbtn" type="button">TORPEDO<small>SHIFT</small></button>
+      <button id="warpBtn" class="hbtn warp" type="button">WARP<small>Q</small></button>
       <button id="fireBtn" class="hbtn fire" type="button">FIRE<small>SPACE</small></button>
     </div>
   </div>
@@ -297,6 +328,7 @@
     <h2>PAUSED</h2>
     <p>Throttle held at station keeping. The sector waits.</p>
     <button id="resumeBtn" class="big" type="button">RESUME ▸</button>
+    <button id="pauseFsBtn" class="ghost" type="button">FULLSCREEN ⤢</button>
     <button id="quitBtn" class="ghost" type="button">LEAVE THE SECTOR</button>
   </div>
 </div>
@@ -311,6 +343,12 @@
       <div class="stat"><span>WAVE</span><b id="resultWave">1</b></div>
       <div class="stat"><span>KILLS</span><b id="resultKills">0</b></div>
       <div class="stat"><span>TIME</span><b id="resultTime">0s</b></div>
+    </div>
+    <div class="stat-row">
+      <div class="stat"><span>OBJECTIVES</span><b id="resultQuests">0/4</b></div>
+      <div class="stat"><span>WARPS</span><b id="resultWarps">0</b></div>
+      <div class="stat"><span>WING</span><b id="resultWing">2</b></div>
+      <div class="stat"><span>BEST</span><b id="resultBest">0</b></div>
     </div>
     <button id="againBtn" class="big" type="button">ENGAGE AGAIN</button>
     <button id="exitBtn" class="ghost" type="button">LEAVE THE SECTOR</button>
@@ -345,6 +383,7 @@
 <script src="../_shared/sdk.js"></script>
 <script src="ships.js"></script>
 <script src="art.js"></script>
+<script src="gl.js"></script>
 <script src="game.js"></script>
 </body>
 </html>

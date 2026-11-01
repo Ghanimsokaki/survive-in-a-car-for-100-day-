@@ -556,6 +556,103 @@ function downsample({ color, weight, dim, cell, ssaa }) {
   return out;
 }
 
+/* ------------------------------------------------------------ runtime mesh
+ * The game also renders the ship in real 3D (WebGL, no loader, no modules —
+ * the frame is sandboxed). That needs the geometry itself, so the same model is
+ * baked a second time into a quantised, interleaved buffer and shipped as base64
+ * inside a classic script. No fetch, no CORS, no binary MIME types:
+ *
+ *   16 bytes a vertex — position 3×int16 (unit sphere), normal 3×int8 + pad,
+ *   albedo 3×uint8 (sRGB, straight off the model's own base-colour map) and one
+ *   byte of roughness from the roughness map.
+ *
+ * Every livery shares it: the game tints at draw time, exactly like the atlases.
+ */
+function emitMesh(mesh, textures) {
+  const { P, UV, N, I, center, scale } = mesh;
+  const verts = P.length / 3;
+  const tris = I.length / 3;
+  const bytes = new Uint8Array(verts * 16 + tris * 6);
+  const view = new DataView(bytes.buffer);
+  const neutral = { hull: [0.6, 0.64, 0.7], accent: [0.55, 0.72, 0.9] };
+  // Sample the maps once per vertex, then smooth along the edges. A 1024²
+  // photoreal hull map collapsed onto 6k vertices aliases into speckle; one
+  // pass of neighbour averaging keeps the large shapes (dark nacelle bands, the
+  // registry pennant) and drops the noise that would otherwise crawl when the
+  // ship turns.
+  const albedo = new Float32Array(verts * 3);
+  const roughs = new Float32Array(verts);
+  for (let i = 0; i < verts; i++) {
+    const u = UV[i * 2], v = UV[i * 2 + 1];
+    if (textures.albedo) {
+      const s0 = sample(textures.albedo, u, v);
+      albedo[i * 3] = s0[0]; albedo[i * 3 + 1] = s0[1]; albedo[i * 3 + 2] = s0[2];
+      roughs[i] = textures.roughness ? sample(textures.roughness, u, v)[0] : 0.45;
+    } else {
+      const tex = hullTexture(u, v, neutral);
+      albedo[i * 3] = tex.r; albedo[i * 3 + 1] = tex.g; albedo[i * 3 + 2] = tex.b;
+      roughs[i] = 0.42;
+    }
+  }
+  const sum = new Float32Array(verts * 3);
+  const count = new Float32Array(verts);
+  const addEdge = (a, b) => {
+    for (let k = 0; k < 3; k++) {
+      sum[a * 3 + k] += albedo[b * 3 + k];
+      sum[b * 3 + k] += albedo[a * 3 + k];
+    }
+    count[a] += 1; count[b] += 1;
+  };
+  for (let t = 0; t < I.length; t += 3) {
+    addEdge(I[t], I[t + 1]);
+    addEdge(I[t + 1], I[t + 2]);
+    addEdge(I[t + 2], I[t]);
+  }
+  for (let i = 0; i < verts; i++) {
+    if (!count[i]) continue;
+    for (let k = 0; k < 3; k++) {
+      albedo[i * 3 + k] = albedo[i * 3 + k] * 0.45 + (sum[i * 3 + k] / count[i]) * 0.55;
+    }
+  }
+
+  for (let i = 0; i < verts; i++) {
+    const o = i * 16;
+    for (let k = 0; k < 3; k++) {
+      const v = (P[i * 3 + k] - center[k]) / scale;
+      view.setInt16(o + k * 2, Math.max(-32767, Math.min(32767, Math.round(v * 32767))), true);
+    }
+    for (let k = 0; k < 3; k++) {
+      view.setInt8(o + 6 + k, Math.max(-127, Math.min(127, Math.round(N[i * 3 + k] * 127))));
+    }
+    view.setUint8(o + 10, Math.round(Math.max(0, Math.min(1, albedo[i * 3])) * 255));
+    view.setUint8(o + 11, Math.round(Math.max(0, Math.min(1, albedo[i * 3 + 1])) * 255));
+    view.setUint8(o + 12, Math.round(Math.max(0, Math.min(1, albedo[i * 3 + 2])) * 255));
+    view.setUint8(o + 13, Math.round(Math.max(0, Math.min(1, roughs[i])) * 255));
+    // bytes 14–15 stay zero: the stride is 16 so every attribute is aligned
+  }
+  for (let t = 0; t < tris * 3; t++) {
+    view.setUint16(verts * 16 + t * 2, I[t], true);
+  }
+  return {
+    verts,
+    tris,
+    v: Buffer.from(bytes.buffer, 0, verts * 16).toString('base64'),
+    i: Buffer.from(bytes.buffer, verts * 16).toString('base64'),
+  };
+}
+
+/** Signed volume of a mesh: a negative result means the faces wind inwards. */
+function windingSign({ P, I }) {
+  let volume = 0;
+  for (let t = 0; t < I.length; t += 3) {
+    const a = I[t] * 3, b = I[t + 1] * 3, c = I[t + 2] * 3;
+    volume += P[a] * (P[b + 1] * P[c + 2] - P[b + 2] * P[c + 1])
+      + P[a + 1] * (P[b + 2] * P[c] - P[b] * P[c + 2])
+      + P[a + 2] * (P[b] * P[c + 1] - P[b + 1] * P[c]);
+  }
+  return volume >= 0 ? 1 : -1;
+}
+
 /* -------------------------------------------------------------------- PNG */
 function crc32(buf) {
   let c = ~0;
@@ -697,6 +794,30 @@ async function main() {
       console.log(`  ${file} · ${sheetW}×${sheetH} · ${(buf.length / 1024).toFixed(0)} KB`);
     }
   }
+  // ---------------------------------------------------------- the 3D mesh
+  // A second, lighter decimation: the frame draws this every frame on a phone,
+  // often seven ships at once, so it is ~15k triangles rather than 20k. The
+  // atlases keep the denser mesh — a sprite is baked once, a frame is not.
+  const live = decimate(raw, 17000);
+  live.N = computeNormals(live);
+  const sign = windingSign(live);
+  if (sign < 0) for (let i = 0; i < live.N.length; i++) live.N[i] = -live.N[i];
+  const liveMesh = {
+    ...live,
+    center: [0, 1, 2].map((k) => (live.bounds.min[k] + live.bounds.max[k]) / 2),
+    scale: Math.max(...[0, 1, 2].map((k) => live.bounds.max[k] - live.bounds.min[k])) / 2,
+  };
+  const baked = emitMesh(liveMesh, textures);
+  const meshJs = `/* generated by scripts/bake-ship.mjs from model.fbx — do not edit by hand.\n`
+    + ` * ${baked.verts.toLocaleString('en-US')} vertices · ${baked.tris.toLocaleString('en-US')} triangles · stride 16\n`
+    + ` * position int16×3 · normal int8×3 · albedo uint8×3 (sRGB) · roughness uint8 */\n`
+    + `window.STAR_MESH = { version: 1, verts: ${baked.verts}, tris: ${baked.tris}, stride: 16,\n`
+    + `  v: '${baked.v}',\n  i: '${baked.i}' };\n`;
+  writeFileSync(path.join(artDir, 'ship-mesh.js'), meshJs);
+  console.log(`  ship-mesh.js · ${baked.verts.toLocaleString()} verts · ${baked.tris.toLocaleString()} tris · `
+    + `${(meshJs.length / 1024).toFixed(0)} KB (winding ${sign > 0 ? 'outward' : 'flipped'})`);
+  manifest.mesh = { file: 'ship-mesh.js', verts: baked.verts, tris: baked.tris, stride: 16 };
+
   manifest.generatedAt = new Date().toISOString();
   manifest.triangles = mesh.tris;
   manifest.vertices = mesh.verts;

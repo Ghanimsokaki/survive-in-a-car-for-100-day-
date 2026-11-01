@@ -12,13 +12,15 @@
  * it makes the catalogue shared across devices, it does not make the game faster.
  */
 const LOCAL_KEY = 'outrun-arcade-stats';
+/** How many finished runs the hub remembers per device. */
+export const HISTORY_LIMIT = 30;
 
 const safeParse = (raw, fallback) => {
   try { return raw ? JSON.parse(raw) : fallback; } catch { return fallback; }
 };
 
 export function emptyStats() {
-  return { ratings: {}, my: {}, runs: {}, best: {} };
+  return { ratings: {}, my: {}, runs: {}, best: {}, history: [] };
 }
 
 export function normalizeStats(raw) {
@@ -36,6 +38,21 @@ export function normalizeStats(raw) {
     if (s >= 1 && s <= 5) out.my[id] = s;
   }
   for (const [id, n] of Object.entries(raw.runs || {})) out.runs[id] = Math.max(0, Math.round(Number(n) || 0));
+  // newest first, one row per finished run — the hub's "what have I played"
+  if (Array.isArray(raw.history)) {
+    out.history = raw.history
+      .filter((r) => r && typeof r.id === 'string' && Number.isFinite(Number(r.score)))
+      .map((r) => ({
+        id: String(r.id).slice(0, 40),
+        score: Math.max(0, Math.round(Number(r.score))),
+        at: Number(r.at) || 0,
+        meta: String(r.meta || '').slice(0, 40),
+        day: Math.max(0, Math.round(Number(r.day) || 0)),
+        seconds: Math.max(0, Math.round(Number(r.seconds) || 0)),
+      }))
+      .sort((a, b) => b.at - a.at)
+      .slice(0, HISTORY_LIMIT);
+  }
   for (const [id, list] of Object.entries(raw.best || {})) {
     if (Array.isArray(list)) {
       out.best[id] = list
@@ -266,6 +283,15 @@ export class ArcadeStats {
     const board = this.data.best[gameId] || [];
     this.data.best[gameId] = rankRuns([...board, entry]).slice(0, 10);
     this.data.runs[gameId] = (this.data.runs[gameId] || 0) + 1;
+    // the run log: every game, every run, newest first, this device
+    this.data.history = [{
+      id: String(gameId),
+      score: entry.score,
+      at: entry.at,
+      meta: entry.meta,
+      day: Math.max(0, Math.round(Number(run.day) || 0)),
+      seconds: Math.max(0, Math.round(Number(run.seconds) || 0)),
+    }, ...(this.data.history || [])].slice(0, HISTORY_LIMIT);
     this.saveLocal();
 
     const sb = this.sb;
