@@ -6,7 +6,10 @@ request** — no server, no database, no upload form.
 The shelf currently shows **three games**: the built-in *100 Days Outrun* (one
 game with five modes, shipped in `public/`), **`iron-tide/`** (the ship builder)
 and **`star-battle/`** (the starship duel — the Enterprise-E against the Narada
-and the Vengeance). Folders whose name starts with `_` are developer spaces and are never
+and the Vengeance). Both community games are **3D**: `star-battle/gl.js` draws the
+baked hull mesh, and `iron-tide/sea3d.js` draws an ocean displaced by the same wave
+field the physics uses. Each is one self-contained WebGL script with no three.js
+and no loader — the pattern to copy if your game wants a third dimension. Folders whose name starts with `_` are developer spaces and are never
 listed, bundled or scanned: `_template/` (starter), `_shared/` (the SDK) and
 `_parked/` (the five older sample games, kept as reference).
 

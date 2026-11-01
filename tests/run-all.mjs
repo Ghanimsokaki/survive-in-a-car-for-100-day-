@@ -32,6 +32,7 @@ const suites = [
   ['graphics.test.mjs', 'GRAPHICS TIERS + FULLSCREEN'],
   ['iron-tide-water.test.mjs', 'IRON TIDE — WATER PHYSICS'],
   ['iron-tide-boot.test.mjs', 'IRON TIDE — FAST BOOT + DOCK'],
+  ['iron-tide-3d.test.mjs', 'IRON TIDE — THE 3D SEA'],
   ['star-battle.test.mjs', 'STAR BATTLE — SHIPS, WAVES + THE FIGHT'],
   ['star-battle-3d.test.mjs', 'STAR BATTLE — THE 3D RENDERER'],
   ['star-battle-hangar.test.mjs', 'STAR BATTLE — HANGAR, CREW + THE INTERIOR'],

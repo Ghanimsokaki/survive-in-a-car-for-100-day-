@@ -2,9 +2,15 @@
   "id": "iron-tide",
   "title": "Iron Tide",
   "author": "ghanimz",
-  "blurb": "Build a ship, buy jets for the hangar and sink other fleets on a living sea: real swell, drift, wake and a storm that hurts.",
-  "tags": ["naval", "builder", "pve", "solo"],
-  "version": "1.1.0",
+  "blurb": "Build a ship, buy jets, and fight a 3D naval war on a living sea: real swell, heel and spray, islands to fight around.",
+  "tags": [
+    "naval",
+    "builder",
+    "pve",
+    "3d",
+    "open-world"
+  ],
+  "version": "2.0.0",
   "entry": "index.html",
   "icon": "icon.svg",
   "accent": "#59c9ff",

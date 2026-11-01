@@ -45,8 +45,8 @@ console.log('\nthe ship, loaded the way Vercel serves it');
   check('every script it asks for exists', page.missing.length === 0,
     page.missing.map((m) => new URL(m).pathname).join(', ') || 'all found');
   check('nothing threw while loading', page.errors.length === 0, page.errors.join(' · ') || 'clean');
-  check('all four files ran, in order',
-    page.executed.join(',') === '/games/_shared/sdk.js,/games/iron-tide/fleet.js,/games/iron-tide/water.js,/games/iron-tide/game.js',
+  check('all five files ran, in order',
+    page.executed.join(',') === '/games/_shared/sdk.js,/games/iron-tide/fleet.js,/games/iron-tide/water.js,/games/iron-tide/sea3d.js,/games/iron-tide/game.js',
     page.executed.join(', '));
 
   const ready = page.posted.find((m) => m?.type === 'arcade:ready');
@@ -121,7 +121,7 @@ console.log('\na game with a custom entry, and a missing file');
   const broken = await loadPage('/games/iron-tide/', { breakScript: 'water.js' });
   check('a missing file is named', broken.missing.some((m) => m.endsWith('/water.js')),
     broken.missing.map((m) => new URL(m).pathname).join(', ') || 'none');
-  check('…and the rest still ran', broken.executed.length === 3, broken.executed.length);
+  check('…and the rest still ran', broken.executed.length === 4, broken.executed.length);
 }
 
 console.log('\nand without the fix it fails — the regression this suite guards');
