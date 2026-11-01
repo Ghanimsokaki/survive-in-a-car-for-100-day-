@@ -279,6 +279,28 @@ console.log('\nthe reported run: FUEL RUN on a phone');
       check('the programs compiled and nothing was skipped', (info.calls ?? 0) > 0,
         `${info.calls ?? 0} calls, ${info.triangles ?? 0} triangles`);
     }
+    // stutter, as far as a headless run can see it: the simulation + camera work
+    // a frame costs. The draw itself needs a GPU, but a frame that spends its
+    // whole budget before it ever reaches one is the usual cause of a visible
+    // hitch, and it is measurable here.
+    {
+      const samples = [];
+      g.paused = false;
+      g.dead = false;
+      for (let i = 0; i < 240; i++) {
+        const t0 = performance.now();
+        g.updatePerf(1 / 60);
+        g.time += 1 / 60;
+        try { if (g.started && !g.paused) g.update(1 / 60); } catch { break; }
+        g.updateCamera(1 / 60);
+        samples.push(performance.now() - t0);
+      }
+      samples.sort((a, b) => a - b);
+      const mean = samples.reduce((a, b) => a + b, 0) / Math.max(1, samples.length);
+      const p95 = samples[Math.floor(samples.length * 0.95)] ?? mean;
+      check('a frame of simulation fits a phone budget', mean < 8,
+        `mean ${mean.toFixed(2)} ms · p95 ${p95.toFixed(2)} ms over ${samples.length} frames`);
+    }
     try { g.dispose?.(); } catch { /* no rAF handle under Node */ }
   }
 }
