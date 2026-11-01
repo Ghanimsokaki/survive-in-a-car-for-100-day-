@@ -54,7 +54,10 @@ function page({ breakDock = false } = {}) {
     },
   };
   globalThis.parent = globalThis.window.parent;
-  globalThis.addEventListener = () => {};
+  // keep the listeners: the keyboard is part of the game, so a suite has to be
+  // able to press a key the way a desktop player does
+  const listeners = {};
+  globalThis.addEventListener = (type, fn) => { (listeners[type] = listeners[type] || []).push(fn); };
   globalThis.removeEventListener = () => {};
   globalThis.requestAnimationFrame = () => 1;
   if (breakDock) {
@@ -72,7 +75,14 @@ function page({ breakDock = false } = {}) {
     }
   }
   const bootMs = performance.now() - started;
-  return { posted, atReady, errors, bootMs, it: globalThis.window.__ironTide || globalThis.__ironTide };
+  /** Press (or release) a key on the window, exactly as the browser would. */
+  const key = (type, k) => (listeners[type] || []).forEach((fn) => fn({
+    key: k, preventDefault() {}, stopPropagation() {},
+  }));
+  return {
+    posted, atReady, errors, bootMs, key,
+    it: globalThis.window.__ironTide || globalThis.__ironTide,
+  };
 }
 
 console.log('\nthe ship boots');
@@ -111,8 +121,78 @@ console.log('\nthe ship sails');
   for (let i = 0; i < 180; i++) it.tick(1 / 60);
   const tickMs = performance.now() - t;
   check('three seconds of sea costs almost nothing', tickMs < 500, `${tickMs.toFixed(1)} ms for 180 frames`);
-  it.fire();
-  check('firing does not throw', true);
+  // The keyboard is a control, not decoration: W must put way on the hull, and
+  // D must swing the bow — a boat only answers her rudder once she is moving.
+  {
+    const s = it.session;
+    const start = { x: s.x, y: s.y, heading: s.yaw };
+    good.key('keydown', 'w');
+    for (let i = 0; i < 180; i++) it.tick(1 / 60);
+    const way = Math.hypot(s.x - start.x, s.y - start.y);
+    check('W puts way on the hull', s.body.u > 1 && way > 5, `${s.body.u.toFixed(1)} m/s · ${way.toFixed(0)} m`);
+    good.key('keydown', 'd');
+    for (let i = 0; i < 90; i++) it.tick(1 / 60);
+    const turned = Math.abs(s.yaw - start.heading);
+    check('D swings the bow', turned > 0.15, `${turned.toFixed(2)} rad`);
+    good.key('keyup', 'd');
+    good.key('keyup', 'w');
+    // a hull carries her way: she coasts for a long time, but she does slow down
+    const wayOn = s.body.u;
+    for (let i = 0; i < 900; i++) it.tick(1 / 60);
+    check('releasing W lets the hull coast down', s.body.u < wayOn * 0.75,
+      `${wayOn.toFixed(1)} → ${s.body.u.toFixed(1)} m/s after 15 s`);
+  }
+
+  // FIRE has to *do* something: a click on the real button must spend the
+  // reload, put a shell in the water per fitted turret, hit what is in front of
+  // the bow, and refuse a second click inside the cooldown. (The old check only
+  // proved the button was clickable.)
+  {
+    const s = it.session;
+    // The suite is a director here, so that what is measured is FIRE's effect
+    // and not the helmsman's skill: one raider dead ahead at a range the guns
+    // reach, everything else out of the way, so the aim assist has no choice.
+    const living = s.ships.filter((e) => !e.dead);
+    const target = living[0];
+    for (const other of living.slice(1)) {
+      other.x = other.body.x = -2000;
+      other.y = other.body.y = -2000;
+      other.vx = 0; other.vy = 0;
+    }
+    // `x`/`y` are a mirror of the body, so a raider is only really somewhere
+    // once its *body* is — writing the mirror alone is undone on the next tick
+    const ahead = (m) => {
+      if (!target) return;
+      const x = s.x + Math.cos(s.yaw) * m;
+      const y = s.y + Math.sin(s.yaw) * m;
+      target.x = target.body.x = x;
+      target.y = target.body.y = y;
+      target.vx = 0; target.vy = 0;
+      target.body.u = 0; target.body.v = 0;
+    };
+    ahead(180);
+
+    const before = { shots: s.shots, bullets: s.bullets.length };
+    globalThis.document.getElementById('fireBtn').dispatch('click');
+    check('the FIRE button fires', s.shots === before.shots + 1, `${before.shots} → ${s.shots}`);
+    check('…one shell per fitted turret', s.bullets.length >= before.bullets + Math.max(1, s.lo.turrets),
+      `${before.bullets} → ${s.bullets.length} shells for ${s.lo.turrets} turret(s)`);
+    check('…and the guns lock what the bow is pointed at', Boolean(s.lock),
+      s.lock ? `${Math.hypot(s.lock.x - s.x, s.lock.y - s.y).toFixed(0)} m` : 'no lock');
+    check('…with real damage on it', s.bullets.every((b) => b.dmg > 0),
+      `${s.bullets[s.bullets.length - 1]?.dmg} a shell`);
+    globalThis.document.getElementById('fireBtn').dispatch('click');
+    check('a second click inside the reload does nothing', s.shots === before.shots + 1,
+      `${s.shots} broadsides`);
+
+    const hpBefore = target ? target.hp : 0;
+    for (let i = 0; i < 90 && target && !target.dead && target.hp === hpBefore; i++) {
+      ahead(180);                        // hold her in the line of fire
+      it.tick(1 / 60);
+    }
+    check('the shell hits what the bow is pointed at', !target || target.hp < hpBefore || target.dead,
+      target ? `${hpBefore} → ${target.dead ? 'sunk' : target.hp}` : 'no raider left');
+  }
 
   it.endBattle(false);
   check('a lost hull ends the sortie', it.screen === 'result');
