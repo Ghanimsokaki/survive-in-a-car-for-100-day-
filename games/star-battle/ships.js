@@ -307,8 +307,229 @@
     return null;
   }
 
+  /* ------------------------------------------------------------- the hangar
+   * Three hulls to start in, and nowhere to go but up. Requisition is earned
+   * from kills and objectives; every upgrade is a plain number so the rules,
+   * the HUD and a test all read the same table.
+   */
+  const STARTERS = {
+    enterprise: {
+      id: 'enterprise', name: 'ENTERPRISE-E', registry: 'NCC-1701-E', klass: 'SOVEREIGN',
+      blurb: 'The one you know. Nothing it does badly.',
+      hull: 460, shields: 520, speed: 216, turn: 2.55, radius: 30, berths: 3,
+    },
+    saber: {
+      id: 'saber', name: 'SABER', registry: 'NCC-61947', klass: 'ESCORT',
+      blurb: 'Fast and nimble. Thin skin, quick hands.',
+      hull: 300, shields: 380, speed: 272, turn: 3.2, radius: 22, berths: 2,
+    },
+    akira: {
+      id: 'akira', name: 'AKIRA', registry: 'NCC-62497', klass: 'HEAVY CRUISER',
+      blurb: 'Slow to come about, very hard to kill.',
+      hull: 620, shields: 600, speed: 178, turn: 1.85, radius: 38, berths: 4,
+    },
+  };
+
+  /**
+   * Every upgrade: a name, a cap, what a step costs, and what the step gives.
+   * `effect` is applied in `shipStats`, so there is exactly one place where an
+   * upgrade turns into a number the fight uses.
+   */
+  const UPGRADES = {
+    impulse: {
+      id: 'impulse', name: 'IMPULSE POWER', max: 5, base: 240, step: 180,
+      blurb: '+8% impulse speed a step',
+    },
+    thrusters: {
+      id: 'thrusters', name: 'THRUSTERS', max: 5, base: 200, step: 160,
+      blurb: '+9% turn rate a step',
+    },
+    shields: {
+      id: 'shields', name: 'SHIELD GRID', max: 5, base: 300, step: 220,
+      blurb: '+12% shield capacity a step',
+    },
+    hull: {
+      id: 'hull', name: 'HULL PLATING', max: 5, base: 260, step: 200,
+      blurb: '+10% hull a step',
+    },
+    torpedoes: {
+      id: 'torpedoes', name: 'TORPEDO BAY', max: 3, base: 420, step: 320,
+      blurb: '+2 tubes in the rack',
+    },
+    warp: {
+      id: 'warp', name: 'WARP CORE', max: 4, base: 460, step: 360,
+      blurb: 'Jump further, spool faster',
+    },
+    laser: {
+      id: 'laser', name: 'PHOTON LASER', max: 3, base: 520, step: 420,
+      blurb: 'A rapid pulse cannon beside the phasers',
+    },
+    crew: {
+      id: 'crew', name: 'CREW QUARTERS', max: 3, base: 380, step: 260,
+      blurb: '+1 berth for a specialist',
+    },
+  };
+
+  const UPGRADE_ORDER = ['impulse', 'thrusters', 'shields', 'hull', 'warp', 'torpedoes', 'laser', 'crew'];
+
+  /** The specialists you can hire. Each one changes a number, and can be left
+   *  to run its own station so the captain can fly. */
+  const CREW_ROLES = {
+    helm: { id: 'helm', name: 'HELM', blurb: '+6% turn rate, and can fly evasives', station: 'helm' },
+    tactical: { id: 'tactical', name: 'TACTICAL', blurb: 'Fires the phasers when you do not', station: 'tactical' },
+    engineering: { id: 'engineering', name: 'ENGINEERING', blurb: '+30% shield regeneration', station: 'engineering' },
+    medical: { id: 'medical', name: 'MEDICAL', blurb: 'Repairs the hull out of contact', station: 'medical' },
+    science: { id: 'science', name: 'SCIENCE', blurb: 'Charges the warp core twice as fast', station: 'science' },
+  };
+
+  const CREW_NAMES = [
+    'DATA', 'TROI', 'LAFORGE', 'CRUSHER', 'WORF', 'RIKER', 'O\'BRIEN', 'SISKO',
+    'JANEWAY', 'CHAKOTAY', 'TUVOK', 'KIM', 'PARIS', 'TORRES', 'SEVEN', 'SPOCK',
+    'UHURA', 'SCOTT', 'MCCOY', 'SULU', 'CHEKOV', 'PICARD', 'YAR', 'GUINAN',
+  ];
+
+  /** A fresh captain's locker: one hull, one starter crew, some requisition. */
+  function newHangar({ seed = 1 } = {}) {
+    const rand = rng(seed | 0);
+    const names = [...CREW_NAMES];
+    const pick = () => names.splice(Math.floor(rand() * names.length), 1)[0] || 'CREWMAN';
+    return {
+      ship: 'enterprise',
+      credits: 700,
+      upgrades: {},
+      // a starter crew of two, in a hull with three berths: there is always
+      // one empty seat, so "hire someone" is something you can do on day one
+      crew: [
+        { id: 'c1', name: pick(), role: 'helm', skill: 2 },
+        { id: 'c2', name: pick(), role: 'tactical', skill: 2 },
+      ],
+      auto: { engine: false, tactical: false, medical: false },   // who is flying
+      runs: 0,
+      kills: 0,
+    };
+  }
+
+  /** The hull you are flying, with nothing bolted on yet. */
+  function starterOf(id) {
+    return STARTERS[id] || STARTERS.enterprise;
+  }
+
+  const levelOf = (hangar, id) => Math.max(0, Math.min(
+    (UPGRADES[id]?.max) ?? 0, Math.round(Number(hangar?.upgrades?.[id]) || 0),
+  ));
+
+  /** What the next step costs, or null when the line is maxed out. */
+  function upgradeCost(upgrades, id) {
+    const def = UPGRADES[id];
+    if (!def) return null;
+    const level = levelOf({ upgrades }, id);
+    if (level >= def.max) return null;
+    return def.base + def.step * level;
+  }
+
+  /**
+   * Every number the fight uses, from the hull and the upgrades and the crew.
+   * The default hangar reproduces `SHIPS.enterprise` exactly, which is what
+   * lets the balance tests and the HUD agree.
+   */
+  function shipStats(hangar = {}) {
+    const base = starterOf(hangar.ship);
+    const up = (id) => levelOf(hangar, id);
+    const crew = Array.isArray(hangar.crew) ? hangar.crew : [];
+    const hasRole = (role) => crew.some((c) => c && c.role === role);
+    const berths = base.berths + up('crew');
+    const impulse = up('impulse');
+    const thrusters = up('thrusters');
+    const shieldLevel = up('shields');
+    const hullLevel = up('hull');
+    const torpLevel = up('torpedoes');
+    const warpLevel = up('warp');
+    const laserLevel = up('laser');
+    const helm = hasRole('helm') ? 1.06 : 1;
+    return {
+      id: base.id,
+      name: base.name,
+      registry: base.registry,
+      klass: base.klass,
+      radius: base.radius,
+      hull: Math.round(base.hull * (1 + hullLevel * 0.1)),
+      shields: Math.round(base.shields * (1 + shieldLevel * 0.12)),
+      speed: base.speed * (1 + impulse * 0.08),
+      turn: base.turn * (1 + thrusters * 0.09) * helm,
+      torpedoes: 4 + torpLevel * 2,
+      // warp: every step is 15% more distance and 8% less spool
+      warpJump: 1200 * (1 + warpLevel * 0.15),
+      warpCooldown: 13 * (1 - Math.min(0.5, warpLevel * 0.08)),
+      laser: laserLevel,
+      laserDps: laserLevel ? 26 * laserLevel : 0,
+      berths,
+      crewSlots: berths,
+      shieldRegen: 44 * (hasRole('engineering') ? 1.3 : 1),
+      repair: hasRole('medical') ? 5 : 0,
+      crew,
+    };
+  }
+
+  /** Can this buy happen? (The HUD asks this, the sim asserts it.) */
+  function canBuy(hangar, id) {
+    const cost = upgradeCost(hangar?.upgrades, id);
+    if (cost == null) return false;
+    return (Number(hangar?.credits) || 0) >= cost;
+  }
+
+  /** Spends the requisition. Returns the new level, or null when it was refused. */
+  function buyUpgrade(hangar, id) {
+    if (!hangar || !canBuy(hangar, id)) return null;
+    const cost = upgradeCost(hangar.upgrades, id);
+    hangar.credits = Math.max(0, (Number(hangar.credits) || 0) - cost);
+    hangar.upgrades = hangar.upgrades || {};
+    hangar.upgrades[id] = levelOf(hangar, id) + 1;
+    return hangar.upgrades[id];
+  }
+
+  /** A hull can only be swapped for one you have the berths for. */
+  function selectShip(hangar, id) {
+    if (!hangar || !STARTERS[id]) return false;
+    hangar.ship = id;
+    return true;
+  }
+
+  /** Hire a specialist into the next free berth. */
+  function hireCrew(hangar, role, { cost = 180, seed = 7 } = {}) {
+    if (!hangar || !CREW_ROLES[role]) return null;
+    const stats = shipStats(hangar);
+    const crew = Array.isArray(hangar.crew) ? hangar.crew : [];
+    if (crew.length >= stats.berths) return null;
+    if ((Number(hangar.credits) || 0) < cost) return null;
+    const rand = rng((seed | 0) ^ (crew.length * 7919));
+    const used = new Set(crew.map((c) => c.name));
+    const pool = CREW_NAMES.filter((n) => !used.has(n));
+    const name = pool[Math.floor(rand() * pool.length)] || 'CREWMAN';
+    const member = { id: `c${crew.length + 1}-${role}`, name, role, skill: 1 + Math.floor(rand() * 3) };
+    hangar.credits = Math.max(0, Number(hangar.credits) - cost);
+    hangar.crew = [...crew, member];
+    return member;
+  }
+
+  /** Let go of a specialist (no refund: Starfleet does not do refunds). */
+  function dismissCrew(hangar, id) {
+    if (!hangar || !Array.isArray(hangar.crew)) return false;
+    const before = hangar.crew.length;
+    hangar.crew = hangar.crew.filter((c) => c.id !== id);
+    return hangar.crew.length < before;
+  }
+
+  function crewBonus(hangar, role) {
+    const crew = Array.isArray(hangar?.crew) ? hangar.crew : [];
+    return crew.filter((c) => c && c.role === role)
+      .reduce((sum, c) => sum + Math.max(1, Math.round(c.skill || 1)), 0);
+  }
+
   const api = {
     SHIPS, PLAYER_SHIP,
+    STARTERS, UPGRADES, UPGRADE_ORDER, CREW_ROLES, CREW_NAMES,
+    newHangar, starterOf, upgradeCost, shipStats, canBuy, buyUpgrade, selectShip,
+    hireCrew, dismissCrew, crewBonus, levelOf,
     sectorSites, makeQuests, activeQuest, questEvent, questTarget,
     waveFor, waveBonus, scoreOf,
     damage, regen,

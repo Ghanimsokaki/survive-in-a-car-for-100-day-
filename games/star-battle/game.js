@@ -79,6 +79,10 @@
   let frames = 0, fps = 60, fpsTimer = 0, slowStreak = 0;
   const perf = { frames: 0, dropped: 0, dpr: 2, ui: 'high' };
   let board = null;            // Supabase leaderboard from the hub, when sent
+  let squadron = [];           // the other players in your room, from the hub
+  let interior = false;        // main engineering, on screen instead of the sector
+  let crewShip = null;         // the ship the crew is flying, if they are
+  let crashCount = 0;          // a broken frame must not be a broken game
 
   /* --------------------------------------------------------------- the 3D
    * `glReady` is the switch between the two renderers. It only ever turns on
@@ -99,8 +103,73 @@
   let quests = [];             // objectives, in order
   let history = [];            // this device's last runs
   const HISTORY_KEY = 'star-battle-history';
-  const WARP_COOLDOWN = 13;
+  const WARP_COOLDOWN = 13;    // the default; the warp core upgrade shortens it
   const warp = { cooldown: 0, active: 0, dx: 1, dy: 0, jumps: 0 };
+
+  /* -------------------------------------------------------------- the hangar
+   * Which hull you fly, what is bolted to it, and who is sitting at the
+   * stations. It persists where storage is allowed, and for the session where
+   * it is not (a sandboxed iframe has an opaque origin and storage throws).
+   */
+  const HANGAR_KEY = 'star-battle-hangar';
+  let hangar = R.newHangar ? R.newHangar({ seed: 5 }) : { ship: 'enterprise', credits: 0, upgrades: {}, crew: [], auto: {} };
+  const statsNow = () => (R.shipStats ? R.shipStats(hangar) : R.SHIPS[R.PLAYER_SHIP]);
+
+  function loadHangar() {
+    try {
+      const raw = localStorage.getItem(HANGAR_KEY);
+      if (raw) {
+        const saved = JSON.parse(raw) || {};
+        const fresh = R.newHangar ? R.newHangar({ seed: 5 }) : hangar;
+        hangar = {
+          ...fresh,
+          ...saved,
+          upgrades: { ...(saved.upgrades || {}) },
+          crew: Array.isArray(saved.crew) ? saved.crew.slice(0, 8) : fresh.crew,
+          auto: { ...fresh.auto, ...(saved.auto || {}) },
+        };
+      }
+    } catch { /* opaque origin: the locker lives for the session */ }
+    paintHangar();
+  }
+
+  function saveHangar() {
+    try { localStorage.setItem(HANGAR_KEY, JSON.stringify(hangar)); } catch { /* session only */ }
+    // rebuilding three lists on every kill would stutter the fight: only a
+    // panel that is actually on screen needs repainting
+    if (hangarOpen || interiorOpen) paintHangar();
+    applyStatsToRun();
+  }
+
+  /**
+   * Fold a purchase into the run that is already flying: pools grow by the
+   * difference, so buying hull plating mid-fight gives you the plating.
+   */
+  function applyStatsToRun() {
+    if (!run || !run.ship) return;
+    const prev = run.stats || statsNow();
+    const next = statsNow();
+    run.stats = next;
+    const ship = run.ship;
+    const dHull = Math.max(0, next.hull - (prev.hull || 0));
+    const dShield = Math.max(0, next.shields - (prev.shields || 0));
+    const dTorp = Math.max(0, (next.torpedoes || 0) - (prev.torpedoes || 0));
+    ship.hullMax = next.hull;
+    ship.hull = clamp((ship.hull || 0) + dHull, 0, ship.hullMax);
+    ship.shieldsMax = next.shields;
+    ship.shields = clamp((ship.shields || 0) + dShield, 0, ship.shieldsMax);
+    ship.torpedoes = Math.min(next.torpedoes, (ship.torpedoes || 0) + dTorp);
+    paintHud(true);
+  }
+
+  /** Requisition, from a kill or a finished objective. */
+  function pay(amount) {
+    const gain = Math.max(0, Math.round(Number(amount) || 0));
+    if (!gain) return 0;
+    hangar.credits = (Number(hangar.credits) || 0) + gain;
+    saveHangar();
+    return gain;
+  }
 
   /* ------------------------------------------------------------------ input */
   const input = {
@@ -580,7 +649,47 @@
 
   /* ------------------------------------------------------------- the player */
   const player = () => run.ship;
-  const shipSpec = () => R.SHIPS[R.PLAYER_SHIP];
+
+  /**
+   * The live spec: the hull you are flying, with the upgrades and the crew
+   * folded in. Everything in the sim asks this, so a purchase changes the fight
+   * the moment the next run starts.
+   */
+  function shipSpec() {
+    const base = R.SHIPS[R.PLAYER_SHIP];
+    const st = run.stats || statsNow();
+    return {
+      ...base,
+      hull: st.hull,
+      shields: st.shields,
+      speed: st.speed,
+      turn: st.turn,
+      radius: st.radius || base.radius,
+      shieldRegen: st.shieldRegen || base.shieldRegen,
+      torpedo: { ...base.torpedo, load: st.torpedoes || base.torpedo.load },
+      // everything the hangar can change has to survive the spread, or the
+      // panel would be telling the truth and the fight a different story
+      warpJump: st.warpJump || 1200,
+      warpCooldown: st.warpCooldown || WARP_COOLDOWN,
+      laser: st.laser || 0,
+      laserDps: st.laserDps || 0,
+      repair: st.repair || 0,
+      berths: st.berths || base.berths,
+      crew: st.crew || [],
+    };
+  }
+
+  /** The nearest live contact, or null. The crew's eyes. */
+  function nearestEnemy() {
+    const s = player();
+    let best = null;
+    let bestDist = Infinity;
+    for (const enemy of enemies) {
+      const d = Math.hypot(enemy.x - s.x, enemy.y - s.y);
+      if (d < bestDist) { bestDist = d; best = enemy; }
+    }
+    return best;
+  }
 
   /**
    * Pause is a first-class state: the sim stops, the clock stops, and the
@@ -617,6 +726,25 @@
     run = R.newRun({ seed: (Math.random() * 0xffff) | 0 });
     run.screen = 'battle';
     screen = 'battle';
+    hangarOpen = false;
+    interiorOpen = false;
+    $('hangar')?.classList.add('hidden');
+    $('interior')?.classList.add('hidden');
+    // the hull, the upgrades and the crew all land on the ship here, which is
+    // the one place a run is allowed to start from
+    const st = statsNow();
+    run.stats = st;
+    run.ship.hull = run.ship.hullMax = st.hull;
+    run.ship.shields = run.ship.shieldsMax = st.shields;
+    run.ship.torpedoes = st.torpedoes;
+    run.ship.laserHeat = 0;
+    run.ship.crewFire = 0;
+    run.creditsEarned = 0;
+    warp.cooldown = 0;
+    warp.jump = st.warpJump / 0.62;
+    input.manualAt = -99;
+    input.crewTurn = 0;
+    input.crewThrust = 0;
     enemies = [];
     shots = [];
     beams = [];
@@ -694,9 +822,10 @@
     if (title) title.textContent = isBest ? 'NEW BEST RUN' : 'SHIP LOST';
     const text = $('resultText');
     if (text) {
+      const bank = `${hangar.credits} CR IN REQUISITION — THE SHIPYARD IS OPEN.`;
       text.textContent = isBest
-        ? 'Starfleet Command has logged the best run in the sector.'
-        : 'The Enterprise is gone. Starfleet will remember the delay you bought.';
+        ? `Starfleet Command has logged the best run in the sector. ${bank}`
+        : `The Enterprise is gone. ${bank}`;
     }
     saveBest(score);
     paintBest(isBest);
@@ -712,6 +841,10 @@
   }
 
   function backToTitle() {
+    hangarOpen = false;
+    interiorOpen = false;
+    $('hangar')?.classList.add('hidden');
+    $('interior')?.classList.add('hidden');
     screen = 'title';
     $('result').classList.add('hidden');
     $('hud').classList.add('hidden');
@@ -810,6 +943,7 @@
       flash(0.22);
       ring(x, y, 'rgba(255,180,120,.85)', 70, 0.6);
       run.kills += 1;
+      pay(enemy.id === 'narada' ? 120 : 80);
       for (const quest of quests) R.questEvent(quest, { type: 'kill' });
       paintQuest();
       burst(x, y, 46, 'rgba(255,170,110,.95)', 240);
@@ -819,7 +953,8 @@
       enemies = enemies.filter((e) => e !== enemy);
       if (!enemies.length && screen === 'battle') {
         waveTimer = 2.2;
-        banner(`WAVE ${run.wave} CLEARED`, 1.6);
+        pay(60);
+        banner(`WAVE ${run.wave} CLEARED`, 1.6, '+60 CR REQUISITION');
         sdk.state({ wave: run.wave + 1, score: scoreNow() });
       }
     }
@@ -836,14 +971,21 @@
     s.evade = Math.max(0, s.evade - dt);
     s.phaserHeat = Math.max(0, s.phaserHeat - dt);
     s.sinceHit += dt;
-    warp.cooldown = Math.max(0, warp.cooldown - dt);
+    const science = hangar.crew.some((c) => c.role === 'science') ? 2 : 1;
+    warp.cooldown = Math.max(0, warp.cooldown - dt * science);
 
     const boost = s.evadeBoost > 0 ? spec.evade.boost : 1;
-    s.facing += input.turn * spec.turn * (s.evadeBoost > 0 ? 1.25 : 1) * dt;
+    // The helm is a station like any other: if the crew is flying and nobody has
+    // touched the stick recently, their hands are on it. Touching it takes it back.
+    const crewHelm = Boolean(hangar.auto?.engine) && hangar.crew.some((c) => c.role === 'helm')
+      && now - (input.manualAt || -99) > 1.5;
+    const turnAxis = crewHelm ? input.crewTurn || 0 : input.turn;
+    const thrustAxis = crewHelm ? (input.crewThrust || 0) : input.thrust;
+    s.facing += turnAxis * spec.turn * (s.evadeBoost > 0 ? 1.25 : 1) * dt;
 
-    const targetSpeed = input.thrust >= 0
-      ? input.thrust * spec.speed * boost
-      : input.thrust * spec.speed * 0.32;
+    const targetSpeed = thrustAxis >= 0
+      ? thrustAxis * spec.speed * boost
+      : thrustAxis * spec.speed * 0.32;
     const tvx = Math.cos(s.facing) * targetSpeed;
     const tvy = Math.sin(s.facing) * targetSpeed;
     const k = 1 - Math.exp(-3.4 * dt);
@@ -854,7 +996,7 @@
     // gets the ship back and has to live with the momentum
     if (warp.active > 0) {
       warp.active = Math.max(0, warp.active - dt);
-      const punch = spec.speed * 9.5;
+      const punch = warp.jump || spec.speed * 9.5;
       s.vx = warp.dx * punch;
       s.vy = warp.dy * punch;
       if (Math.random() < 0.55) burst(s.x, s.y, 2, 'rgba(150,220,255,.8)', 90);
@@ -890,6 +1032,40 @@
       }
     } else {
       s.reload = 0;
+    }
+
+    // the photon laser: a rapid pulse cannon, once the tactical bay has it
+    if (spec.laserDps > 0) {
+      s.laserHeat = Math.max(0, (s.laserHeat || 0) - dt);
+      if (s.laserHeat <= 0) {
+        const found = targetInArc(spec.phaser.arc * 0.9, spec.phaser.range * 0.8);
+        if (found) {
+          s.laserHeat = 0.42;
+          beams.push({
+            x1: s.x + Math.cos(s.facing) * 20, y1: s.y + Math.sin(s.facing) * 20,
+            x2: found.enemy.x, y2: found.enemy.y,
+            life: 0.1, hit: true, colour: 'rgba(190,255,220,.95)',
+          });
+          hitEnemy(found.enemy, spec.laserDps * 0.42, found.enemy.x, found.enemy.y);
+          beep(1180, 0.025, 0.012);
+        } else {
+          s.laserHeat = 0.16;
+        }
+      }
+    }
+
+    // tactical crew: they shoot at what is in the arc, a little slower than you
+    if (!input.fire && hangar.auto?.tactical && hangar.crew.some((c) => c.role === 'tactical')) {
+      s.crewFire = Math.max(0, (s.crewFire || 0) - dt);
+      if (s.crewFire <= 0 && targetInArc(spec.phaser.arc * 0.75, spec.phaser.range * 0.9)) {
+        s.crewFire = spec.phaser.every * 1.45;
+        firePhasers();
+      }
+    }
+
+    // medical: a slow patch while nothing is hitting you
+    if (spec.repair > 0 && s.sinceHit > 5 && s.hull < s.hullMax) {
+      s.hull = Math.min(s.hullMax, s.hull + spec.repair * dt);
     }
 
     if (input.fire) firePhasers();
@@ -1015,6 +1191,24 @@
   }
 
   /** One simulation step. Pure enough for a test to drive it by hand. */
+  /**
+   * The helmsman's hands. They point the bow at the nearest contact and close
+   * to a range where the phasers bite, then hold station — which is what a
+   * competent officer does and also what makes watching them work fun.
+   */
+  function crewTick() {
+    const auto = hangar.auto || {};
+    const s = player();
+    const helm = auto.engine && hangar.crew.some((c) => c && c.role === 'helm');
+    const target = helm ? nearestEnemy() : null;
+    if (!target) { input.crewTurn = 0; input.crewThrust = 0; return; }
+    const dist = Math.hypot(target.x - s.x, target.y - s.y);
+    const to = R.bearing(s.x, s.y, target.x, target.y);
+    const rel = R.angleDelta(s.facing, to);
+    input.crewTurn = clamp(rel * 2.1, -1, 1);
+    input.crewThrust = dist > 360 ? 1 : dist < 200 ? -0.55 : 0.15;
+  }
+
   function update(dt) {
     now += dt;
     const s = player();
@@ -1032,6 +1226,7 @@
 
     if (screen !== 'battle' || paused) return;
     run.seconds += dt;
+    crewTick();
     updatePlayer(dt);
     for (const enemy of [...enemies]) updateEnemy(enemy, dt);
     for (const ally of allies) updateAlly(ally, dt);
@@ -1085,14 +1280,27 @@
   }
 
   /** A wing ship: another Enterprise, half a run younger than yours. */
+  /**
+   * The other players in the room, as the hub knows them. A sandboxed frame
+   * cannot open a socket of its own, so the names arrive with `arcade:init` —
+   * and when nobody else is online the wing is two Starfleet ships instead of a
+   * lie about who is playing.
+   */
+  function roomPlayers() {
+    const raw = sdk.player && sdk.player.peers;
+    return Array.isArray(raw) ? raw.filter((n) => typeof n === 'string' && n).slice(0, 2) : [];
+  }
+
   function spawnAlly(i) {
     const spec = R.SHIPS[R.PLAYER_SHIP];
     const angle = 2.1 + i * 1.5;
+    const crewmate = roomPlayers()[i];
     return {
       id: R.PLAYER_SHIP,
       ally: true,
-      name: i ? 'ENTERPRISE-F' : 'ENTERPRISE-D',
-      registry: i ? 'NCC-1701-F' : 'NCC-1701-D',
+      pilot: crewmate || '',
+      name: crewmate ? String(crewmate).toUpperCase().slice(0, 12) : (i ? 'ENTERPRISE-F' : 'ENTERPRISE-D'),
+      registry: crewmate ? 'PLAYER · WING' : (i ? 'NCC-1701-F' : 'NCC-1701-D'),
       x: Math.cos(angle) * 300,
       y: Math.sin(angle) * 300,
       alt: i ? 30 : -24,
@@ -1188,7 +1396,8 @@
     warp.active = 0.62;
     warp.dx = Math.cos(aim);
     warp.dy = Math.sin(aim);
-    warp.cooldown = WARP_COOLDOWN;
+    warp.jump = (shipSpec().warpJump || 1200) / 0.62;
+    warp.cooldown = shipSpec().warpCooldown || WARP_COOLDOWN;
     warp.jumps += 1;
     ring(s.x, s.y, 'rgba(150,220,255,.85)', 44, 0.55);
     banner('WARP', 1.0, target && target.name ? target.name : 'HELM TO BEARING');
@@ -1225,8 +1434,9 @@
       const s = player();
       s.hull = Math.min(s.hullMax, s.hull + s.hullMax * 0.18);
       s.shields = s.shieldsMax;
-      s.torpedoes = R.SHIPS[R.PLAYER_SHIP].torpedo.load;
-      banner('OBJECTIVE COMPLETE', 1.8, `${quest.title} · +${quest.reward}`);
+      s.torpedoes = shipSpec().torpedo.load;
+      pay(Math.max(40, Math.round(quest.reward * 0.3)));
+      banner('OBJECTIVE COMPLETE', 1.8, `${quest.title} · +${Math.round(quest.reward * 0.3)} CR`);
       ring(s.x, s.y, 'rgba(140,255,190,.85)', 60, 0.8);
       beep(660, 0.18, 0.05);
       paintHud(true);
@@ -1252,6 +1462,451 @@
       }
     }
     claimQuests();
+  }
+
+  /* ============================================================ THE HANGAR
+   * Pick a hull, bolt things onto it, and hire the people who run it. Every
+   * number in here comes from `ships.js` (`shipStats`), so the panel and the
+   * fight can never disagree: an upgrade is bought in the DOM and felt in the
+   * simulation on the very next frame.
+   */
+  const CREW_COST = 180;
+  const ROLE_ORDER = ['helm', 'tactical', 'engineering', 'medical', 'science'];
+  let hangarOpen = false;
+  let interiorOpen = false;
+  let interiorCtx = null;
+  let interiorDrawnAt = -1;
+  let interiorWasPaused = false;
+
+  function note(text, kind = '') {
+    const el = $('hangarNote');
+    if (!el) return;
+    el.textContent = text;
+    el.className = kind;
+  }
+
+  function specText(st) {
+    return `${st.klass} · ${st.hull} HULL · ${st.shields} SHIELDS · ${Math.round(st.speed)} IMPULSE`
+      + ` · ${st.berths} BERTHS`;
+  }
+
+  /** The hull cards, the systems list and the roster, rebuilt from the state. */
+  function paintHangar() {
+    const st = statsNow();
+    const set = (id, value) => { const el = $(id); if (el) el.textContent = String(value); };
+    set('hangarCredits', `${hangar.credits} CR`);
+    set('hangarHull', st.name);
+    set('hangarSpec', specText(st));
+    set('startShipName', st.name);
+    set('startShipReg', `${st.registry} · REFIT ▸`);
+    const sysCount = R.UPGRADE_ORDER.reduce((n, id) => n + (R.levelOf(hangar, id) || 0), 0);
+    set('hangarSysCount', `${sysCount} / 8 LINES`);
+    set('hangarCrewCount', `${hangar.crew.length} / ${st.berths} BERTHS`);
+
+    const ships = $('hangarShips');
+    if (ships) {
+      ships.innerHTML = Object.values(R.STARTERS).map((hull) => {
+        const on = hull.id === hangar.ship ? ' on' : '';
+        const berths = hull.berths + R.levelOf(hangar, 'crew');
+        return `<button class="ship-opt${on}" type="button" data-ship="${hull.id}">`
+          + `<b>${hull.name}</b><em>${hull.registry} · ${hull.klass}</em>`
+          + `<span class="nums"><span>${hull.hull}H</span><span>${hull.shields}S</span>`
+          + `<span>${hull.speed}SPD</span><span>${berths} BERTH</span></span></button>`;
+      }).join('');
+    }
+
+    const systems = $('hangarSystems');
+    if (systems) {
+      systems.innerHTML = R.UPGRADE_ORDER.map((id) => {
+        const def = R.UPGRADES[id];
+        const level = R.levelOf(hangar, id);
+        const cost = R.upgradeCost(hangar.upgrades, id);
+        const maxed = cost == null;
+        const afford = !maxed && hangar.credits >= cost;
+        const pips = [];
+        for (let i = 0; i < def.max; i++) pips.push(`<i class="${i < level ? 'on' : ''}"></i>`);
+        return `<div class="sys"><span class="nm">${def.name}<small>${def.blurb}</small></span>`
+          + `<span class="pips">${pips.join('')}</span>`
+          + `<button class="buy${maxed ? ' max' : ''}" type="button" data-up="${id}"`
+          + `${maxed || !afford ? ' disabled' : ''}>${maxed ? 'MAX' : `${cost} CR`}</button></div>`;
+      }).join('');
+    }
+
+    const crewHost = $('hangarCrew');
+    if (crewHost) {
+      const rows = hangar.crew.map((member) => {
+        const role = R.CREW_ROLES[member.role] || { name: member.role.toUpperCase(), blurb: '' };
+        return `<div class="crew-row"><span class="dot">${String(member.name).slice(0, 2)}</span>`
+          + `<span class="who"><b>${member.name}</b><em>${role.name} · SKILL ${member.skill}</em></span>`
+          + `<span class="act"><button class="pill" type="button" data-dismiss="${member.id}">LEAVE</button></span></div>`;
+      });
+      // every role that is not filled yet is a hire the player can make
+      const filled = new Set(hangar.crew.map((m) => m.role));
+      const room = hangar.crew.length < st.berths;
+      for (const role of ROLE_ORDER) {
+        if (filled.has(role)) continue;
+        const def = R.CREW_ROLES[role];
+        const can = room && hangar.credits >= CREW_COST;
+        rows.push(`<div class="crew-row"><span class="dot empty">＋</span>`
+          + `<span class="who"><b>${def.name} OFFICER</b><em>${def.blurb}</em></span>`
+          + `<span class="act"><button class="pill hire" type="button" data-hire="${role}"`
+          + `${can ? '' : ' disabled'}>${CREW_COST} CR</button></span></div>`);
+      }
+      if (!room) {
+        rows.push('<div class="crew-row"><span class="dot empty">·</span><span class="who">'
+          + '<b>ALL BERTHS FULL</b><em>BUY CREW QUARTERS FOR ANOTHER SPECIALIST</em></span></div>');
+      }
+      crewHost.innerHTML = rows.join('');
+    }
+  }
+
+  /** One delegated listener: the panel is rebuilt wholesale on every change. */
+  function onHangarClick(event) {
+    const target = event.target.closest ? event.target.closest('[data-ship],[data-up],[data-hire],[data-dismiss]') : null;
+    if (!target) return;
+    const { ship, up, hire, dismiss } = target.dataset;
+
+    if (ship) {
+      if (R.selectShip(hangar, ship)) {
+        saveHangar();
+        paintHangar();
+        note(`${R.starterOf(ship).name} on the cradle.`, 'good');
+        paintTitleStats();
+      }
+    } else if (up) {
+      const def = R.UPGRADES[up];
+      const level = R.buyUpgrade(hangar, up);
+      if (level == null) note(`Not enough requisition for ${def.name}.`, 'bad');
+      else {
+        saveHangar();
+        paintHangar();
+        note(`${def.name} → LEVEL ${level}`, 'good');
+        paintTitleStats();
+        beep(620, 0.08, 0.03);
+      }
+    } else if (hire) {
+      const member = R.hireCrew(hangar, hire, { cost: CREW_COST, seed: (Math.random() * 0xffff) | 0 });
+      if (!member) note('No free berth, or not enough requisition.', 'bad');
+      else {
+        saveHangar();
+        paintHangar();
+        note(`${member.name} reports to ${R.CREW_ROLES[hire].name}.`, 'good');
+        paintTitleStats();
+        beep(540, 0.1, 0.03);
+      }
+    } else if (dismiss) {
+      R.dismissCrew(hangar, dismiss);
+      saveHangar();
+      paintHangar();
+      paintTitleStats();
+      note('They have been reassigned.');
+    }
+  }
+
+  function openHangar({ from = screen } = {}) {
+    hangarReturn = from;
+    hangarOpen = true;
+    interiorOpen = false;
+    $('interior')?.classList.add('hidden');
+    const el = $('hangar');
+    if (el) el.classList.remove('hidden');
+    const title = $('title');
+    if (title) title.classList.add('hidden');
+    const result = $('result');
+    if (result) result.classList.add('hidden');
+    paintHangar();
+    note('Requisition is earned in the sector: every kill, every objective.');
+  }
+
+  function closeHangar(launch = false) {
+    hangarOpen = false;
+    const el = $('hangar');
+    if (el) el.classList.add('hidden');
+    if (launch) { startBattle(); return; }
+    if (hangarReturn === 'title' || hangarReturn === 'over') {
+      // the result screen's id is `result`, the run's name for it is `over`
+      const target = $(hangarReturn === 'over' ? 'result' : 'title');
+      if (target) target.classList.remove('hidden');
+      if (hangarReturn === 'title') paintTitleStats();
+    } else {
+      // came from the pause menu: put the bridge back
+      const pause = $('pause');
+      if (pause) pause.classList.remove('hidden');
+    }
+  }
+  let hangarReturn = 'title';
+
+  /* ---------------------------------------------------------- the interior
+   * A cutaway of the ship you are flying: saucer forward, engineering aft,
+   * the warp core where the corridors meet, and a dot for every station with
+   * someone sitting at it. It is the same roster the panel edits, drawn.
+   */
+  function openInterior() {
+    interiorOpen = true;
+    interiorWasPaused = paused;
+    paused = true;
+    const el = $('interior');
+    if (el) el.classList.remove('hidden');
+    const hangarEl = $('hangar');
+    if (hangarEl) hangarEl.classList.add('hidden');
+    const pause = $('pause');
+    if (pause) pause.classList.add('hidden');
+    const c = $('interiorCanvas');
+    if (c) {
+      c.width = 1280;
+      c.height = 720;
+      try { interiorCtx = c.getContext('2d'); } catch { interiorCtx = null; }
+    }
+    paintInteriorPanel();
+    drawInterior();
+  }
+
+  function closeInterior() {
+    interiorOpen = false;
+    const el = $('interior');
+    if (el) el.classList.add('hidden');
+    // it was opened from the shipyard: go back there, not into the fight
+    if (hangarOpen) {
+      const yard = $('hangar');
+      if (yard) yard.classList.remove('hidden');
+      paintHangar();
+      return;
+    }
+    if (screen === 'title' || screen === 'over') {
+      paused = false;
+      const target = $(screen);
+      if (target) target.classList.remove('hidden');
+      return;
+    }
+    paused = interiorWasPaused ? true : false;
+    if (paused) {
+      const pause = $('pause');
+      if (pause) pause.classList.remove('hidden');
+    }
+  }
+
+  const STATIONS = [
+    { id: 'helm', label: 'HELM', x: 0.30, y: 0.50, auto: 'engine' },
+    { id: 'tactical', label: 'TACTICAL', x: 0.44, y: 0.30, auto: 'tactical' },
+    { id: 'engineering', label: 'ENGINEERING', x: 0.66, y: 0.50, auto: null },
+    { id: 'medical', label: 'MEDICAL', x: 0.30, y: 0.72, auto: 'medical' },
+    { id: 'science', label: 'SCIENCE', x: 0.44, y: 0.74, auto: null },
+  ];
+
+  function paintInteriorPanel() {
+    const st = statsNow();
+    const set = (id, value) => { const el = $(id); if (el) el.textContent = String(value); };
+    set('intShip', st.name);
+    set('intWarp', `WARP CORE ${(R.levelOf(hangar, 'warp') + 1) * 100}%`);
+    set('intSub', hangar.crew.length
+      ? `${hangar.crew.length} OF ${st.berths} STATIONS CREWED. TOUCH A STATION TO HAND IT TO THE CREW.`
+      : `NOBODY ABOARD BUT YOU. HIRE A CREW OR FLY EVERY STATION YOURSELF.`);
+    const host = $('intStations');
+    if (!host) return;
+    host.innerHTML = STATIONS.map((station) => {
+      const role = R.CREW_ROLES[station.id];
+      const member = hangar.crew.find((m) => m.role === station.id);
+      const auto = station.auto ? Boolean(hangar.auto[station.auto]) : null;
+      const toggle = station.auto
+        ? `<button class="pill${auto ? ' on' : ''}" type="button" data-auto="${station.auto}">`
+          + `${auto ? 'CREW' : 'YOU'}</button>`
+        : '';
+      if (!member) {
+        return `<div class="station vacant"><span class="who"><b>${role.name}</b>`
+          + `<em>VACANT · ${role.blurb}</em></span>`
+          + `<button class="pill hire" type="button" data-hire-here="${station.id}">HIRE</button></div>`;
+      }
+      return `<div class="station"><span class="who"><b>${member.name}</b>`
+        + `<em>${role.name} · SKILL ${member.skill}</em></span>${toggle}</div>`;
+    }).join('');
+  }
+
+  /** The cutaway. Cheap 2D, drawn only while the panel is open. */
+  function drawInterior() {
+    const g = interiorCtx;
+    if (!g) return;
+    const st = statsNow();
+    const s = player();
+    const W = 640, H = 360;
+    g.setTransform(2, 0, 0, 2, 0, 0);
+
+    const sky = g.createLinearGradient(0, 0, 0, H);
+    sky.addColorStop(0, '#050e1c');
+    sky.addColorStop(1, '#01040a');
+    g.fillStyle = sky;
+    g.fillRect(0, 0, W, H);
+
+    // the deck grid, so the empty space reads as a ship and not a void
+    g.strokeStyle = 'rgba(127,228,255,.055)';
+    g.lineWidth = 1;
+    for (let x = 20; x < W; x += 32) {
+      g.beginPath(); g.moveTo(x, 0); g.lineTo(x, H); g.stroke();
+    }
+    for (let y = 18; y < H; y += 32) {
+      g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke();
+    }
+
+    const hullPct = clamp(s.hull / Math.max(1, s.hullMax), 0, 1);
+    const plank = hullPct < 0.32 ? 'rgba(255,120,110,.75)' : 'rgba(127,228,255,.62)';
+    const body = 'rgba(12,34,54,.86)';
+
+    const round = (x, y, w, h, r) => {
+      g.beginPath();
+      if (g.roundRect) g.roundRect(x, y, w, h, r);
+      else g.rect(x, y, w, h);
+    };
+
+    // ---- saucer (nose to the left)
+    g.save();
+    g.beginPath();
+    g.ellipse(196, 180, 112, 86, 0, 0, TAU);
+    g.fillStyle = body;
+    g.fill();
+    g.strokeStyle = plank;
+    g.lineWidth = 2;
+    g.stroke();
+    // deck rings
+    g.strokeStyle = 'rgba(127,228,255,.13)';
+    g.lineWidth = 1;
+    for (const r of [34, 56, 78]) {
+      g.beginPath(); g.ellipse(196, 180, r, r * 0.77, 0, 0, TAU); g.stroke();
+    }
+    g.restore();
+
+    // ---- engineering hull and the nacelles behind it
+    g.fillStyle = body;
+    g.strokeStyle = plank;
+    g.lineWidth = 2;
+    round(268, 148, 276, 64, 30);
+    g.fill(); g.stroke();
+    round(300, 92, 214, 26, 13);
+    g.fill(); g.stroke();
+    round(300, 242, 214, 26, 13);
+    g.fill(); g.stroke();
+    g.strokeStyle = 'rgba(127,228,255,.35)';
+    g.beginPath();
+    g.moveTo(272, 152); g.lineTo(310, 118);
+    g.moveTo(272, 208); g.lineTo(310, 242);
+    g.stroke();
+
+    // ---- nacelle glow: they are the reason the ship moves
+    const thrust = clamp(Math.hypot(s.vx, s.vy) / Math.max(1, st.speed), 0, 1);
+    for (const ny of [105, 255]) {
+      const glow = g.createLinearGradient(470, ny, 530, ny);
+      glow.addColorStop(0, `rgba(120,220,255,${0.1 + thrust * 0.5})`);
+      glow.addColorStop(1, 'rgba(120,220,255,0)');
+      g.fillStyle = glow;
+      g.fillRect(470, ny - 8, 62, 16);
+    }
+
+    // ---- the warp core: the heart of the cutaway, pulsing with the upgrade
+    const level = R.levelOf(hangar, 'warp') + 1;
+    const pulse = 0.55 + Math.sin(now * (2.2 + level * 0.3)) * 0.3;
+    const coreX = 402;
+    const coreY = 118;
+    const coreH = 124;
+    const halo = g.createRadialGradient(coreX, coreY + coreH / 2, 4, coreX, coreY + coreH / 2, 64);
+    halo.addColorStop(0, `rgba(150,235,255,${0.42 * pulse})`);
+    halo.addColorStop(0.55, 'rgba(80,170,255,.13)');
+    halo.addColorStop(1, 'rgba(80,170,255,0)');
+    g.fillStyle = halo;
+    g.fillRect(coreX - 70, coreY - 26, 140, coreH + 52);
+
+    g.fillStyle = 'rgba(6,20,36,.95)';
+    round(coreX - 13, coreY - 10, 26, coreH + 20, 13);
+    g.fill();
+    g.strokeStyle = 'rgba(127,228,255,.5)';
+    g.lineWidth = 1.5;
+    g.stroke();
+
+    const plasma = g.createLinearGradient(0, coreY, 0, coreY + coreH);
+    plasma.addColorStop(0, `rgba(220,248,255,${0.55 + pulse * 0.4})`);
+    plasma.addColorStop(0.5, `rgba(120,215,255,${0.35 + pulse * 0.35})`);
+    plasma.addColorStop(1, `rgba(80,140,255,${0.25 + pulse * 0.3})`);
+    g.fillStyle = plasma;
+    round(coreX - 7, coreY, 14, coreH, 7);
+    g.fill();
+
+    // rising plasma, so the core is visibly alive
+    for (let i = 0; i < 7; i++) {
+      const t = ((now * (0.5 + level * 0.12) + i / 7) % 1);
+      const y = coreY + coreH - t * coreH;
+      g.fillStyle = `rgba(235,252,255,${(1 - t) * 0.75})`;
+      g.beginPath();
+      g.arc(coreX, y, 1.6 + (1 - t) * 2.4, 0, TAU);
+      g.fill();
+    }
+
+    // injectors either side of the core
+    g.strokeStyle = 'rgba(127,228,255,.4)';
+    for (const side of [-1, 1]) {
+      g.beginPath();
+      g.moveTo(coreX + side * 16, coreY + 24);
+      g.lineTo(coreX + side * 40, coreY + 40);
+      g.lineTo(coreX + side * 40, coreY + coreH - 24);
+      g.lineTo(coreX + side * 16, coreY + coreH - 12);
+      g.stroke();
+    }
+
+    // ---- stations and the people at them
+    for (const station of STATIONS) {
+      const role = R.CREW_ROLES[station.id];
+      const member = hangar.crew.find((m) => m.role === station.id);
+      const x = station.x * W;
+      const y = station.y * H;
+      g.strokeStyle = 'rgba(127,228,255,.18)';
+      g.lineWidth = 1;
+      g.beginPath();
+      g.moveTo(196, 180);
+      g.lineTo(x, y);
+      g.stroke();
+
+      g.beginPath();
+      g.arc(x, y, member ? 15 : 11, 0, TAU);
+      g.fillStyle = member ? 'rgba(20,60,90,.95)' : 'rgba(8,20,32,.7)';
+      g.fill();
+      g.strokeStyle = member ? 'rgba(127,228,255,.8)' : 'rgba(127,228,255,.24)';
+      g.lineWidth = 1.5;
+      if (member) g.setLineDash([]);
+      else g.setLineDash([3, 3]);
+      g.stroke();
+      g.setLineDash([]);
+
+      if (member) {
+        const bob = Math.sin(now * 1.6 + station.x * 9) * 1.2;
+        g.fillStyle = '#7fe4ff';
+        g.beginPath();
+        g.arc(x, y - 3 + bob, 3.2, 0, TAU);   // head
+        g.fill();
+        g.fillRect(x - 3.4, y + 1 + bob, 6.8, 6);   // shoulders
+        g.fillStyle = 'rgba(220,245,255,.95)';
+        g.font = '600 7px ui-monospace,monospace';
+        g.textAlign = 'center';
+        g.fillText(member.name.slice(0, 7), x, y + 24);
+      } else {
+        g.fillStyle = 'rgba(120,170,200,.75)';
+        g.font = '600 7px ui-monospace,monospace';
+        g.textAlign = 'center';
+        g.fillText('VACANT', x, y + 22);
+      }
+      g.fillStyle = 'rgba(127,170,200,.85)';
+      g.font = '600 6.5px ui-monospace,monospace';
+      g.textAlign = 'center';
+      g.fillText(role.name, x, y - 20);
+    }
+
+    // ---- labels around the hull
+    g.textAlign = 'left';
+    g.fillStyle = 'rgba(127,228,255,.55)';
+    g.font = '600 7.5px ui-monospace,monospace';
+    g.fillText('SAUCER · DECKS 1–12', 92, 300);
+    g.fillText('ENGINEERING HULL · DECKS 13–24', 268, 130);
+    g.fillStyle = 'rgba(255,213,120,.8)';
+    g.fillText(`WARP CORE MK ${level}`, coreX - 34, coreY + coreH + 34);
+    g.fillStyle = hullPct < 0.32 ? 'rgba(255,120,110,.9)' : 'rgba(127,228,255,.6)';
+    g.textAlign = 'right';
+    g.fillText(`HULL ${Math.round(hullPct * 100)}% · SHIELDS ${Math.round((s.shields / Math.max(1, s.shieldsMax)) * 100)}%`,
+      W - 16, H - 14);
   }
 
   /* -------------------------------------------------------------- history
@@ -1601,8 +2256,10 @@
       g.strokeRect(p.x - size, p.y - size, size * 2, size * 2);
     }
 
+    try { drawWingTags(g, project, w, h); } catch { /* a tag is not worth a frame */ }
+
     if (warp.cooldown > 0) {
-      const frac = 1 - warp.cooldown / WARP_COOLDOWN;
+      const frac = 1 - warp.cooldown / Math.max(1, shipSpec().warpCooldown || WARP_COOLDOWN);
       g.strokeStyle = 'rgba(127,228,255,.5)';
       g.lineWidth = 2;
       g.beginPath();
@@ -1668,6 +2325,29 @@
    * range in hundreds of units. Without this a deep wave is a blind hunt, which
    * reads as "nothing is happening" even while you are being shot at.
    */
+  /** The wing's name tags: proof that the other captains are out here. */
+  function drawWingTags(g, project, w, h) {
+    for (const ally of allies) {
+      if (!ally.pilot) continue;
+      const p = project(ally.x, ally.alt || 0, ally.y);
+      if (!p || !p.onScreen) continue;
+      const dist = Math.hypot(ally.x - player().x, ally.y - player().y);
+      if (dist > 1400) continue;
+      g.save();
+      g.globalAlpha = clamp(1.35 - dist / 1100, 0.25, 1);
+      g.fillStyle = 'rgba(150,255,205,.95)';
+      g.font = '600 9px ui-monospace,monospace';
+      g.textAlign = 'center';
+      g.fillText(ally.name, p.x, p.y - 20);
+      g.strokeStyle = 'rgba(109,255,168,.55)';
+      g.lineWidth = 1;
+      g.beginPath();
+      g.moveTo(p.x - 10, p.y - 14); g.lineTo(p.x, p.y - 8); g.lineTo(p.x + 10, p.y - 14);
+      g.stroke();
+      g.restore();
+    }
+  }
+
   function drawMarkers(w, h) {
     const pad = 30;
     for (const enemy of enemies) {
@@ -2131,7 +2811,23 @@
         drawTitleScene(w, h);
       }
       ctx.restore();
-      if (screen === 'battle') drawMarkers(w, h);
+      if (screen === 'battle') {
+        drawMarkers(w, h);
+        try {
+          drawWingTags(ctx, (x, alt, y) => ({
+            x: w / 2 + (x - cam.x),
+            y: h / 2 + (y - cam.y) - (alt || 0) * 0.4,
+            onScreen: true,
+          }), w, h);
+        } catch { /* a tag is not worth a frame */ }
+      }
+    }
+
+    // the cutaway is a schematic, not a 60 fps scene: 20 redraws a second is
+    // plenty and leaves the rest of the frame budget to the fight behind it
+    if (interiorOpen && now - interiorDrawnAt > 0.05) {
+      interiorDrawnAt = now;
+      try { drawInterior(); } catch { interiorOpen = false; }
     }
 
     hudTimer += dt;
@@ -2152,10 +2848,16 @@
     input.turn = (input.keys.right ? 1 : 0) - (input.keys.left ? 1 : 0);
     input.thrust = (input.keys.up ? 1 : 0) - (input.keys.down ? 1 : 0);
     input.fire = Boolean(input.keys.fire) || input.touchFire;
+    // a hand on the stick is a hand on the stick: the crew stands down
+    if (input.turn || input.thrust) input.manualAt = now;
   }
 
   addEventListener('keydown', (event) => {
     const key = String(event.key || '').toLowerCase();
+    if (key === 'escape') {
+      if (interiorOpen) { closeInterior(); return; }
+      if (hangarOpen) { closeHangar(false); return; }
+    }
     if (screen !== 'battle') {
       if ((key === 'enter' || key === ' ') && screen === 'title') { event.preventDefault(); startBattle(); }
       if ((key === 'enter' || key === ' ') && screen === 'over') { event.preventDefault(); startBattle(); }
@@ -2217,6 +2919,7 @@
     input.stick.y = Math.sin(angle) * mag;
     input.turn = clamp(input.stick.x * 1.8, -1, 1);
     input.thrust = clamp(-input.stick.y * 1.8, -1, 1);
+    input.manualAt = now;
     event.preventDefault?.();
   }
 
@@ -2263,6 +2966,38 @@
   }
 
   on('launchBtn', () => startBattle());
+  on('hangarBtn', () => openHangar({ from: screen === 'battle' ? 'pause' : screen }));
+  on('resultHangarBtn', () => openHangar({ from: 'over' }));
+  on('hangarCloseBtn', () => closeHangar(false));
+  on('hangarLaunchBtn', () => closeHangar(true));
+  on('interiorBtn', () => openInterior());
+  on('interiorCloseBtn', () => closeInterior());
+  on('interiorHireBtn', () => { closeInterior(); });
+  on('pauseIntBtn', () => openInterior());
+  on('pauseHangarBtn', () => openHangar({ from: 'pause' }));
+
+  const hangarCard = $('hangarCard');
+  if (hangarCard) hangarCard.addEventListener('click', onHangarClick);
+
+  const intStations = $('intStations');
+  if (intStations) {
+    intStations.addEventListener('click', (event) => {
+      const autoBtn = event.target.closest ? event.target.closest('[data-auto]') : null;
+      if (autoBtn) {
+        const key = autoBtn.dataset.auto;
+        hangar.auto = hangar.auto || {};
+        hangar.auto[key] = !hangar.auto[key];
+        saveHangar();
+        paintInteriorPanel();
+        return;
+      }
+      const hireBtn = event.target.closest ? event.target.closest('[data-hire-here]') : null;
+      if (hireBtn) {
+        closeInterior();
+        note('Hire a specialist for that station.', '');
+      }
+    });
+  }
   on('againBtn', () => startBattle());
   on('exitBtn', () => { backToTitle(); sdk.close?.(); });
   holdToFire($('fireBtn'),
@@ -2300,6 +3035,7 @@
   try {
     loadBest();
     loadHistory();
+    loadHangar();
     paintHud();
     paintTitleStats();
     // 3D first: it is the view the player asked for. If the hull has not
@@ -2319,11 +3055,14 @@
   /** The hangar's stat strip: the numbers come from `ships.js`, not the page. */
   function paintTitleStats() {
     const spec = R.SHIPS[R.PLAYER_SHIP];
+    const st = statsNow();
     const set = (id, value) => { const el = $(id); if (el) el.textContent = String(value); };
-    set('statHull', spec.hull);
-    set('statShields', spec.shields);
+    set('statHull', st.hull);
+    set('statShields', st.shields);
     set('statPhaser', spec.phaser.dmg);
-    set('statTorp', spec.torpedo.load);
+    set('statTorp', st.torpedoes || spec.torpedo.load);
+    set('startShipName', st.name);
+    set('startShipReg', `${st.registry} · REFIT ▸`);
     const tag = $('qualityTag');
     if (tag) {
       tag.textContent = glReady && gl
@@ -2375,6 +3114,25 @@
     get quests() { return quests; },
     get allies() { return allies; },
     get history() { return history; },
+    get hangar() { return hangar; },
+    get stats() { return statsNow(); },
+    hangarPanel: openHangar,
+    interior: openInterior,
+    // the debug helpers go through the same door as the buttons, or the test
+    // would be exercising a different game than the player is
+    buy: (id) => {
+      const level = R.buyUpgrade(hangar, id);
+      if (level != null) { saveHangar(); paintHangar(); }
+      return level;
+    },
+    hit: (enemy, amount) => { if (enemy) hitEnemy(enemy, amount, enemy.x, enemy.y); },
+    hire: (role) => {
+      const member = R.hireCrew(hangar, role, { cost: CREW_COST });
+      if (member) { saveHangar(); paintHangar(); }
+      return member;
+    },
+    fly: (on) => { hangar.auto.engine = Boolean(on); }, 
+    get credits() { return hangar.credits; },
     get warpState() { return { cooldown: warp.cooldown, active: warp.active, jumps: warp.jumps }; },
     warp: beginWarp,
     scoreNow,

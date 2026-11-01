@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generatedAt": "2026-11-01T09:18:14.445Z",
+  "generatedAt": "2026-11-01T09:42:35.568Z",
   "count": 2,
   "games": [
     {
@@ -28,8 +28,8 @@
       "id": "star-battle",
       "title": "STAR BATTLE",
       "author": "ghanimz",
-      "blurb": "Fly the Enterprise-E in 3D through an open sector: warp between landmarks, fly quests with two Enterprises on your wing, and hold off the Narada.",
-      "version": "2.0.0",
+      "blurb": "3D open sector: pick a starter hull, refit thrusters shields torpedoes warp and lasers, hire a crew and watch them run the ship.",
+      "version": "2.1.0",
       "entry": "index.html",
       "icon": "icon.svg",
       "tags": [
@@ -37,13 +37,13 @@
         "3d",
         "shooter",
         "open-world",
-        "quests"
+        "crew"
       ],
       "accent": "#38c8ff",
       "players": "1",
       "featured": true,
       "files": 15,
-      "bytes": 2412654,
+      "bytes": 2459926,
       "path": "games/star-battle"
     }
   ]

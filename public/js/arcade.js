@@ -803,6 +803,12 @@ export class Arcade {
             color: player.color || '#5ff0ff',
             room: player.room || 'highway-01',
             custom: player.custom || null,
+            // the other people the hub can see, so a game can put them in the
+            // world: a wing ship with a name on it, not a generic ally
+            peers: (this.account?.friends || [])
+              .filter((f) => f && f.online && f.username)
+              .map((f) => f.username)
+              .slice(0, 4),
           },
           quality: player.quality || 'auto',
           // Cached by `ArcadeStats.topRuns` (one Supabase query per game per

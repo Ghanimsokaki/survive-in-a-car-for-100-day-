@@ -522,23 +522,29 @@ export class Game {
   }
 
   homeStick() {
-    if (!this.stickEl) return;
     const s = this.stickEl;
+    if (!s?.style) return;
     s.style.left = '18px';
     s.style.top = 'auto';
     s.style.bottom = 'calc(148px + env(safe-area-inset-bottom))';
     // parked hint stays invisible: a faded ring used to sit on top of the hotbar
     s.style.opacity = '0';
-    this.stickKnob.style.left = '35px';
-    this.stickKnob.style.top = '35px';
+    if (this.stickKnob?.style) {
+      this.stickKnob.style.left = '35px';
+      this.stickKnob.style.top = '35px';
+    }
   }
 
   startStick(e) {
+    // the thumb-stick is the only way to drive on a phone: build it on demand
+    // rather than silently throwing the first time a finger lands on the glass
+    if (!this.stickEl?.style) this.buildStick();
+    const s = this.stickEl;
+    if (!s?.style) { this.stickActive = false; return; }
     this.stickActive = true;
     // stage space: the stick graphic lives inside the (possibly rotated) stage
     const pt = toStagePoint(e.clientX, e.clientY);
     this.stickOrigin = { x: pt.x, y: pt.y };
-    const s = this.stickEl;
     s.style.opacity = '0.95';
     s.style.left = `${pt.x - 60}px`;
     s.style.top = `${pt.y - 60}px`;
@@ -547,6 +553,7 @@ export class Game {
   }
 
   moveStick(e) {
+    if (!this.stickActive || !this.stickOrigin) return;
     const pt = toStagePoint(e.clientX, e.clientY);
     const dx = pt.x - this.stickOrigin.x;
     const dy = pt.y - this.stickOrigin.y;
@@ -575,13 +582,23 @@ export class Game {
   }
 
   bindHud() {
-    document.getElementById('anchorBtn').addEventListener('click', () => this.toggleAnchor());
-    document.getElementById('benchBtn').addEventListener('click', () => this.toggleBench());
-    document.getElementById('scavBtn').addEventListener('click', () => this.scavenge());
-    document.getElementById('benchClose').addEventListener('click', () => this.toggleBench(false));
-    document.getElementById('respawnBtn').addEventListener('click', () => { this.resetRun(); this.paused = false; });
-    document.getElementById('invBtn')?.addEventListener('click', () => this.toggleInventory());
-    document.getElementById('lobbyBtn').addEventListener('click', () => this.onQuit?.());
+    // One missing `id` in the HUD markup used to throw here and take the whole
+    // boot with it ("cannot read properties of undefined"). A button that is
+    // not on the page is a button that cannot be pressed — not a crash.
+    const on = (id, fn) => {
+      const el = document.getElementById(id);
+      if (el?.addEventListener) el.addEventListener('click', fn);
+      return Boolean(el);
+    };
+    this.hudButtons = {
+      anchor: on('anchorBtn', () => this.toggleAnchor()),
+      bench: on('benchBtn', () => this.toggleBench()),
+      scav: on('scavBtn', () => this.scavenge()),
+      benchClose: on('benchClose', () => this.toggleBench(false)),
+      respawn: on('respawnBtn', () => { this.resetRun(); this.paused = false; }),
+      inv: on('invBtn', () => this.toggleInventory()),
+      lobby: on('lobbyBtn', () => this.onQuit?.()),
+    };
     const menuBtn = document.getElementById('mobileMenuBtn');
     if (menuBtn) {
       menuBtn.addEventListener('click', () => {
@@ -601,7 +618,7 @@ export class Game {
 
   focusChat() {
     const el = document.getElementById('chatInput');
-    if (this.paused) return;
+    if (this.paused || !el?.focus) return;
     el.focus();
   }
 

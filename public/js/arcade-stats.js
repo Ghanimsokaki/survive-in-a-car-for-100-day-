@@ -104,6 +104,55 @@ const storage = () => {
  */
 export const BOARD_TTL_MS = 60_000;
 
+/**
+ * Owner analytics: one shape for "who played what".
+ *
+ * `game_runs` rows are the only durable record of a play across devices, so the
+ * console folds a page of them into totals and a per-game table in one pass.
+ * Pure and exported on purpose: the owner console must be readable in a test
+ * without a database, and a wrong number there is a wrong decision.
+ */
+export function summarizePlays(rows = [], now = Date.now()) {
+  const games = new Map();
+  const players = new Set();
+  let total = 0;
+  let today = 0;
+  let guests = 0;
+  let best = 0;
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (!row || typeof row !== 'object') continue;
+    const id = String(row.game_id || 'unknown');
+    const score = Math.max(0, Math.round(Number(row.score) || 0));
+    const at = Date.parse(row.created_at) || Number(row.at) || 0;
+    total += 1;
+    if (at && now - at < 86400000) today += 1;
+    if (row.user_id) players.add(String(row.user_id));
+    else guests += 1;
+    best = Math.max(best, score);
+    const game = games.get(id)
+      || { id, plays: 0, best: 0, sum: 0, last: 0, players: new Set(), wins: 0 };
+    game.plays += 1;
+    game.sum += score;
+    game.best = Math.max(game.best, score);
+    game.last = Math.max(game.last, at);
+    if (row.user_id) game.players.add(String(row.user_id));
+    if (row.won) game.wins += 1;
+    games.set(id, game);
+  }
+  const list = [...games.values()]
+    .map((g) => ({
+      id: g.id,
+      plays: g.plays,
+      best: g.best,
+      avg: Math.round(g.sum / Math.max(1, g.plays)),
+      last: g.last,
+      players: g.players.size,
+      wins: g.wins,
+    }))
+    .sort((a, b) => b.plays - a.plays || a.id.localeCompare(b.id));
+  return { total, today, players: players.size, guests, best, games: list };
+}
+
 export class ArcadeStats {
   constructor({ account = null, storage: store = null, now = () => Date.now() } = {}) {
     this.account = account;
