@@ -60,6 +60,19 @@
 
   const canvas = document.getElementById('c');
   const ctx = canvas.getContext('2d');
+  /**
+   * The 3D view has its own canvas. A canvas that has handed out a 2D context
+   * can never hand out a WebGL one, so the battle needs a second bitmap — and
+   * `#c` stays on top as the overlay: the stick, the lock bracket, the range
+   * ring and the hull labels are cheap as pixels and unchanged from the old
+   * renderer.
+   */
+  const glCanvas = document.getElementById('c3');
+  const SEA = window.Sea3D || null;
+  let gl = null;
+  let glReady = false;        // the battle is drawn in WebGL
+  let glBroken = false;       // a frame threw: never ask again this session
+  let sea3dNote = '';         // why there is no 3D, for the dock's hint line
   const $ = (id) => document.getElementById(id);
 
   const fleet = R.newFleet();
@@ -298,6 +311,10 @@
     session = {
       lo,
       cap,
+      length: hull.length,
+      // the sea has places in it: seven islands, seeded per sortie, so the
+      // fight has a shape and somewhere to run to
+      islands: buildIslands(1000 + (fleet.sorties + 1) * 37),
       t: 0,
       hull: lo.hp,
       maxHull: lo.hp,
@@ -331,6 +348,8 @@
       banner: 0,
       bannerText: '',
     };
+    initGL();
+    use3D(Boolean(glReady));
     const enemies = R.enemyFleet(fleet.sorties + 1);
     enemies.forEach((e, i) => {
       const a = (i / enemies.length) * Math.PI * 2;
@@ -492,6 +511,7 @@
     s.yaw = s.body.heading;
     s.vel = W.velocityOf(s.body);
     s.knots = W.knots(s.body.u);
+    pushOffIslands(s);
 
     // slamming through a crest in a heavy sea damages the hull (slowly) and
     // throws spray; the toast is throttled so it never spams
@@ -796,6 +816,7 @@
   }
 
   function backToDock() {
+    use3D(false);
     session = null;
     screen = 'dock';
     $('result').classList.add('hidden');
@@ -939,7 +960,323 @@
     ctx.restore();
   }
 
+  /* ==================================================================== 3D
+   * The same simulation, looked at from behind the stern instead of from an
+   * aeroplane. `sea3d.js` does the drawing; this section decides *what* is in
+   * the world and how the water that `water.js` is simulating looks.
+   */
+  const PALETTES = {
+    calm: {
+      zenith: [0.05, 0.12, 0.22], horizon: [0.16, 0.28, 0.36],
+      fog: [0.12, 0.20, 0.26], foam: 0.55,
+    },
+    moderate: {
+      zenith: [0.04, 0.10, 0.19], horizon: [0.13, 0.22, 0.29],
+      fog: [0.10, 0.17, 0.22], foam: 0.7,
+    },
+    rough: {
+      zenith: [0.03, 0.07, 0.13], horizon: [0.10, 0.16, 0.20],
+      fog: [0.08, 0.13, 0.17], foam: 0.85,
+    },
+    storm: {
+      zenith: [0.03, 0.05, 0.09], horizon: [0.09, 0.12, 0.15],
+      fog: [0.07, 0.10, 0.13], foam: 1,
+    },
+  };
+  const paletteFor = (sea) => PALETTES[(sea && sea.state) || 'moderate'] || PALETTES.moderate;
+
+  /** Ask for a renderer once. A device that says no keeps the 2D view. */
+  function initGL() {
+    if (gl || glBroken) return glReady;
+    if (!SEA || !glCanvas) return false;
+    try { gl = SEA.create(glCanvas); } catch { gl = null; }
+    if (!gl) {
+      glBroken = true;
+      glReady = false;
+      sea3dNote = 'no WebGL on this device — the chart view carries the battle';
+      use3D(false);
+      return false;
+    }
+    glReady = true;
+    sea3dNote = '';
+    use3D(true);
+    return true;
+  }
+
+  /** Show exactly one renderer. `#c` is the overlay either way. */
+  function use3D(on) {
+    try {
+      if (glCanvas && glCanvas.style) glCanvas.style.display = on ? 'block' : 'none';
+    } catch { /* detached DOM */ }
+    const tag = $('renderTag');
+    if (tag) tag.textContent = on && gl ? `3D · ${(gl.tris / 1000).toFixed(0)}K TRIS` : 'CHART VIEW';
+  }
+
+  /** Is the battle being drawn in 3D this frame? */
+  const live3D = () => Boolean(glReady && !glBroken && gl && screen === 'battle' && session && !session.over);
+
+  /** The chase camera: low behind the stern, aimed down the bow. */
+  function camera3D(s) {
+    const b = s.body || {};
+    const heading = b.heading ?? s.yaw ?? 0;
+    const speed = Math.min(1, Math.abs(b.u || 0) / 60);
+    const back = 74 + s.length * 0.55 + speed * 26;
+    const lift = 27 + speed * 7 + (s.sea ? s.sea.severity * 5 : 0);
+    const ex = s.x - Math.cos(heading) * back;
+    const ez = s.y - Math.sin(heading) * back;
+    const ax = s.x + Math.cos(heading) * 90;
+    const az = s.y + Math.sin(heading) * 90;
+    return {
+      eye: [ex, (b.heave || 0) + lift, ez],
+      at: [ax, (b.heave || 0) + lift * 0.22, az],
+      fov: 54 + speed * 6,
+    };
+  }
+
+  /** The wing of the world: islands, so the sea has places in it. */
+  function buildIslands(seed) {
+    const rand = (() => {
+      let a = (seed | 0) || 1;
+      return () => {
+        a = (a * 1103515245 + 12345) & 0x7fffffff;
+        return a / 0x7fffffff;
+      };
+    })();
+    const out = [];
+    for (let i = 0; i < 7; i++) {
+      const a = rand() * Math.PI * 2;
+      const d = 900 + rand() * 1500;
+      const r = 90 + rand() * 190;
+      out.push({ x: Math.cos(a) * d, y: Math.sin(a) * d, r, h: r * (0.28 + rand() * 0.3) });
+    }
+    return out;
+  }
+
+  /**
+   * An island is solid: sail into one and the hull stops, because an open world
+   * you can drive through is a backdrop, not a world. Cheap, and it gives the
+   * sea a shape to fight around.
+   */
+  function pushOffIslands(s) {
+    for (const isle of s.islands || []) {
+      const dx = s.x - isle.x;
+      const dy = s.y - isle.y;
+      const d = Math.hypot(dx, dy);
+      const keep = isle.r * 0.72 + 26;
+      if (d < keep && d > 0.001) {
+        s.x = isle.x + (dx / d) * keep;
+        s.y = isle.y + (dy / d) * keep;
+        if (s.body) {
+          s.body.x = s.x;
+          s.body.y = s.y;
+          s.body.u *= 0.35;
+        }
+        if (s.hull > 0 && !s.aground) {
+          s.aground = 0.8;
+          s.hull -= 4;
+          showBanner('AGROUND — BACK OFF', 1.1);
+        }
+      }
+    }
+    s.aground = Math.max(0, (s.aground || 0) - 1 / 60);
+  }
+
+  /** Draw the battle in 3D. Returns false if the frame failed (the 2D view takes over). */
+  function draw3D(w, h, dpr) {
+    const s = session;
+    const pal = paletteFor(s.sea);
+    try {
+      gl.begin(w, h, dpr);
+      const cam = camera3D(s);
+      gl.camera(cam.eye[0], cam.eye[1], cam.eye[2], cam.at[0], cam.at[1], cam.at[2], cam.fov);
+      gl.sky(pal.zenith, pal.horizon, pal.fog);
+      gl.sea(s.sea, s.x, s.y);
+
+      // islands first: they are the far things, and the fog hides their bases
+      for (const isle of s.islands || []) {
+        const far = Math.hypot(isle.x - s.x, isle.y - s.y);
+        if (far > 3200) continue;
+        gl.body('island', isle.x, -isle.h * 0.05, isle.y, 0, 1, [1, 1, 1],
+          { sx: isle.r, sy: isle.h, sz: isle.r });
+      }
+
+      // enemy hulls, heeled and trimmed by the same water field as ours
+      for (const e of s.ships) {
+        if (e.dead) continue;
+        const body = e.body || {};
+        const len = body.spec?.length || 48;
+        gl.body(e.carrier ? 'carrier' : 'ship',
+          e.x, (body.heave || 0) - len * 0.03, e.y, e.yaw, len,
+          e.carrier ? [1.15, 0.9, 0.9] : [1.05, 0.82, 0.8],
+          { heel: (body.roll || 0) * 1.4, trim: (body.pitch || 0) * 1.2 });
+      }
+
+      // jets
+      for (const j of s.jets) {
+        gl.body('jet', j.x, (j.y0 ?? 0.6), j.y, j.yaw, 14, [0.8, 0.95, 1]);
+      }
+
+      // our ship last, so it is never depth-fighting an enemy at the same range
+      const b = s.body || {};
+      const mine = s.cap > 1 ? 'carrier' : 'ship';
+      gl.body(mine, s.x, (b.heave || 0) - (s.length || 46) * 0.03, s.y, s.yaw,
+        s.length || 46, [0.82, 0.92, 1.06],
+        { heel: (b.roll || 0) * 1.4, trim: (b.pitch || 0) * 1.2 });
+
+      // shells, spray, splashes and hits: one additive pass
+      for (const shot of s.bullets) {
+        gl.sprite(shot.x, 2.2, shot.y, 1.9, 1, 0.83, 0.36);
+        gl.sprite(shot.x, 2.2, shot.y, 4.6, 0.55, 0.42, 0.12);
+      }
+      for (const shot of s.enemyBullets) {
+        gl.sprite(shot.x, 2.2, shot.y, 1.9, 1, 0.42, 0.44);
+      }
+      for (const p of s.spray) {
+        gl.sprite(p.x, 1.4 + (1 - p.life) * 5.5, p.y, 1.1 + p.r * 0.5, 0.78, 0.9, 1);
+      }
+      for (const sp of s.splash) {
+        const t = 1 - Math.max(0, sp.life);
+        gl.sprite(sp.x, 1.2 + t * 3.4, sp.y, 1.4 + sp.r * 0.22, 0.8, 0.92, 1);
+      }
+      for (const p of s.particles || []) {
+        gl.sprite(p.x, 2.6 + (1 - p.life) * 6, p.y, 1.8, 1, 0.62, 0.3);
+      }
+      for (const w2 of s.wake) {
+        gl.sprite(w2.x, 0.35, w2.y, Math.max(0.8, w2.r * 0.8), 0.6, 0.78, 0.9);
+      }
+      gl.flushSprites();
+      return true;
+    } catch (err) {
+      // a broken GL frame costs the 3D, never the battle
+      glReady = false;
+      glBroken = true;
+      use3D(false);
+      try { console.warn('iron tide: 3D frame failed, chart view from here —', err && err.message); } catch { /* quiet */ }
+      return false;
+    }
+  }
+
+  /** The overlay: everything that reads better as text than as geometry. */
+  function drawBattleOverlay(w, h) {
+    const s = session;
+    ctx.clearRect(0, 0, w, h);
+    const project = (x, y, alt = 0) => {
+      try { return gl.project(x, alt, y, w, h); } catch { return null; }
+    };
+
+    // the guns' reach, drawn as a ring on the water
+    ctx.strokeStyle = 'rgba(89,201,255,.16)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    let started = false;
+    for (let i = 0; i <= 48; i++) {
+      const p = project(s.x + Math.cos((i / 48) * Math.PI * 2) * s.range,
+        1.2, s.y + Math.sin((i / 48) * Math.PI * 2) * s.range);
+      if (!p) { started = false; continue; }
+      if (!started) { ctx.moveTo(p.x, p.y); started = true; }
+      else ctx.lineTo(p.x, p.y);
+    }
+    ctx.stroke();
+
+    // hulls: a name and a bar over each contact, clamped to the glass
+    for (const e of s.ships) {
+      if (e.dead) continue;
+      const p = project(e.x, e.y, 16);
+      if (!p || !p.onScreen) continue;
+      const frac = Math.max(0, Math.min(1, e.hp / Math.max(1, e.maxHp)));
+      const wid = 54;
+      ctx.fillStyle = 'rgba(255,120,110,.9)';
+      ctx.font = '700 8px ui-monospace,monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(`${e.name} ${Math.round(Math.max(0, e.hp))}`, p.x, p.y - 12);
+      ctx.fillStyle = 'rgba(10,20,30,.75)';
+      ctx.fillRect(p.x - wid / 2, p.y - 8, wid, 3);
+      ctx.fillStyle = frac > 0.5 ? 'rgba(255,180,120,.95)' : 'rgba(255,90,90,.95)';
+      ctx.fillRect(p.x - wid / 2, p.y - 8, wid * frac, 3);
+    }
+
+    // lock bracket
+    if (s.lock && !s.lock.dead && s.lockT > 0) {
+      const p = project(s.lock.x, s.lock.y, 8);
+      if (p && p.onScreen) {
+        ctx.strokeStyle = 'rgba(109,255,168,.9)';
+        ctx.lineWidth = 1.5;
+        const r = 34, c = 10;
+        for (const [sx, sy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+          ctx.beginPath();
+          ctx.moveTo(p.x + sx * r, p.y + sy * (r - c));
+          ctx.lineTo(p.x + sx * r, p.y + sy * r);
+          ctx.lineTo(p.x + sx * (r - c), p.y + sy * r);
+          ctx.stroke();
+        }
+      }
+    }
+
+    // jets are small and far: a pip over each so the wing is never invisible
+    for (const j of s.jets) {
+      const p = project(j.x, j.y, 6);
+      if (!p || !p.onScreen) continue;
+      ctx.fillStyle = 'rgba(89,201,255,.85)';
+      ctx.beginPath();
+      ctx.arc(p.x, p.y - 6, 2.4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // islands you can actually see, named when they are close
+    for (const isle of s.islands || []) {
+      const p = project(isle.x, isle.y, isle.h * 0.6);
+      if (!p || p.onScreen) continue;
+      const d = Math.round(Math.hypot(isle.x - s.x, isle.y - s.y) / 10);
+      const clampedX = Math.max(24, Math.min(w - 24, p.x));
+      ctx.fillStyle = 'rgba(180,220,190,.6)';
+      ctx.font = '700 7px ui-monospace,monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(`ISLE ${d}`, clampedX, 26);
+    }
+
+    drawStickAndReticle(w, h);
+  }
+
+  /** The thumb stick and the aim line — identical in both renderers. */
+  function drawStickAndReticle(w, h) {
+    const s = session;
+    if (s.joy.active) {
+      ctx.strokeStyle = 'rgba(89,201,255,.45)';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(s.joy.ox, s.joy.oy, 46, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = 'rgba(89,201,255,.5)';
+      ctx.beginPath();
+      ctx.arc(s.joy.ox + s.joy.x * 40, s.joy.oy + s.joy.y * 40, 16, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // where the guns are pointed, on the glass
+    const aim = typeof aimYaw === 'function' ? aimYaw() : s.yaw;
+    const cx = w / 2, cy = h * 0.56;
+    ctx.strokeStyle = 'rgba(255,213,120,.5)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 9, 0, Math.PI * 2);
+    ctx.moveTo(cx - 15, cy); ctx.lineTo(cx - 11, cy);
+    ctx.moveTo(cx + 11, cy); ctx.lineTo(cx + 15, cy);
+    ctx.stroke();
+    void aim;
+  }
+
   function drawBattle() {
+    const s = session;
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    if (s.over || screen === 'result') return;
+    if (live3D()) {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      if (draw3D(w, h, dpr)) {
+        drawBattleOverlay(w, h);
+        return;
+      }
+    }
+    drawBattle2D(w, h);
+  }
+
+  function drawBattle2D() {
     const s = session;
     const w = canvas.clientWidth, h = canvas.clientHeight;
     if (s.over || screen === 'result') return;
@@ -1230,7 +1567,13 @@
   function frame(now) {
     const dt = Math.min(0.05, (now - last) / 1000);
     last = now;
-    const fit = sdk.fit(canvas, 2);
+    // The 3D canvas and the overlay canvas are sized separately: hiding one
+    // and measuring it would give a zero, and a zero-width sea is a black
+    // screen that looks exactly like a crash.
+    const in3D = live3D();
+    const fit = in3D && glCanvas
+      ? sdk.fit(glCanvas, 2)
+      : sdk.fit(canvas, 2);
     // The backing store is `dpr` times the CSS size, and everything below draws
     // in CSS pixels — so the context has to be scaled to match. Without this
     // the whole sea renders into the top-left quarter of a phone's screen.
@@ -1244,6 +1587,8 @@
     } else if (screen === 'dock') {
       drawDockScene();
     }
+    // the chart view is the only thing that draws when there is no battle
+    if (!in3D && glCanvas && glCanvas.style && glCanvas.style.display !== 'none') use3D(false);
     requestAnimationFrame(frame);
   }
 
@@ -1304,5 +1649,14 @@
     },
     get screen() { return screen; },
     setTab: (t) => { tab = t; renderAll(); },
+    // 3D: what the renderer is, whether it is live, and why not when it is not
+    get gl() { return glReady; },
+    get glBroken() { return glBroken; },
+    get glInfo() { return gl ? { tris: gl.tris, sea: gl.seaTris } : null; },
+    get sea3dNote() { return sea3dNote; },
+    get islands() { return session ? session.islands || [] : []; },
+    render3D: () => (live3D()
+      ? draw3D(canvas.clientWidth, canvas.clientHeight, Math.min(window.devicePixelRatio || 1, 2))
+      : false),
   };
 })();

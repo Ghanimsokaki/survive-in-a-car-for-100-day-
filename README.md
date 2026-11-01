@@ -118,6 +118,16 @@ Build the ship, then take it to war.
 * **Sortie** — sail against a fleet of other captains (AI). Steering with the stick, fire broadsides,
   launch jets, and retreat when the hull bar turns red. Sinking ships and surviving the sortie pays
   credits and salvage, and every run is scored into the arcade leaderboard.
+* **It is 3D now** — `sea3d.js` is a dependency-free WebGL renderer with four programs: the ocean, lit
+  solids, a sky with a sun, and additive billboards. The sea is a **radial** grid (fine under the bow,
+  coarse at the fog line) displaced in the vertex shader from the *same* wave set `water.js` simulates,
+  so the swell you look at is the swell that lifts your hull — with analytic normals, slope-based foam
+  and distance fog. Hulls heel and trim from the physics body, spray and splashes are one additive draw,
+  and seven islands give the battle a shape you can actually run into (they are solid).
+* **A chase camera, not a chart** — the view sits 30 metres up and ~110 behind the stern, so the roll of
+  the deck and the size of a destroyer read at a glance. `#c` stays on top as the overlay: the stick, the
+  lock bracket, hull bars over contacts, the range ring drawn as a circle *on the water*. If a device has
+  no WebGL, or a frame throws, the old chart view carries the battle — the game never dies of a render.
 
 ### 🖖 Star Battle (open-sector starship battle)
 
@@ -788,6 +798,8 @@ lib/lobby.mjs         rooms, codes, telemetry/chat limits, seat recovery — no 
 lib/cors-policy.mjs   the origin allowlist shared by express and the socket handshake
 lib/keepalive.mjs     the 10-minute self-ping that keeps a free container awake
 games/                community games: <slug>/{game.json,icon.svg,index.html,…,js}
+games/star-battle/gl.js     WebGL renderer for Star Battle (hull mesh, sky, sprites)
+games/iron-tide/sea3d.js    WebGL renderer for Iron Tide (ocean, hulls, sky, sprites)
 games/_shared/sdk.js  the postMessage SDK every community game loads
 scripts/scan-games.mjs  validates every game.json and regenerates games/index.json
 supabase/schema.sql   tables, RLS policies, friend RPCs, owner gate, bans, signup trigger
@@ -801,7 +813,7 @@ docs/DEPLOY-RENDER.md the room server on Render: ports, CORS, staying awake
 
 ## 🧪 Tests
 
-`npm test` copies the browser modules into a shim lane and runs thirty suites with no browser:
+`npm test` copies the browser modules into a shim lane and runs the suites in `tests/run-all.mjs` with no browser:
 (`tests/run-all.mjs` is the list; `node tests/build.mjs` must run first after any edit).
 
 * **simulation** — driving, fuel, anchors vs. tornado drift, bosses, scavenging, every recipe, melee,

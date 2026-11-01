@@ -1,27 +1,28 @@
 {
   "version": 1,
-  "generatedAt": "2026-11-01T09:42:35.568Z",
+  "generatedAt": "2026-11-01T11:11:53.475Z",
   "count": 2,
   "games": [
     {
       "id": "iron-tide",
       "title": "IRON TIDE",
       "author": "ghanimz",
-      "blurb": "Build a ship, buy jets for the hangar and sink other fleets on a living sea: real swell, drift, wake and a storm that hurts.",
-      "version": "1.1.0",
+      "blurb": "Build a ship, buy jets, and fight a 3D naval war on a living sea: real swell, heel and spray, islands to fight around.",
+      "version": "2.0.0",
       "entry": "index.html",
       "icon": "icon.svg",
       "tags": [
         "naval",
         "builder",
         "pve",
-        "solo"
+        "3d",
+        "open-world"
       ],
       "accent": "#59c9ff",
       "players": "1",
       "featured": true,
-      "files": 6,
-      "bytes": 92304,
+      "files": 7,
+      "bytes": 139091,
       "path": "games/iron-tide"
     },
     {
