@@ -238,6 +238,13 @@ console.log('\nthe reported run: FUEL RUN on a phone');
     check('it is the fuel run, on the phone tier', g.modeId === 'sprint' && ['low', 'medium'].includes(g.quality),
       `${g.modeId} @ ${g.quality}`);
 
+    // The game's own renderer is checked *before* the recording one replaces it:
+    // anything the game does to `renderer.debug` breaks the first draw of every
+    // material in a browser, and swapping the renderer out is exactly how that
+    // went unnoticed while the reported banner was on screen.
+    check('the game leaves three.js its shader debug hook',
+      Boolean(g.renderer?.debug) && typeof g.renderer.debug.checkShaderErrors === 'boolean',
+      g.renderer?.debug ? `checkShaderErrors ${g.renderer.debug.checkShaderErrors}` : 'renderer.debug is undefined');
     if (renderer) {
       g.renderer = renderer;
       g.renderer.shadowMap.enabled = g.tier.shadows;
@@ -329,6 +336,60 @@ for (const mode of MODES.map((m) => m.id)) {
   }
   check(`${mode} — constructed, 30 frames, scene clean`, !failure, failure || 'ok');
   try { g?.dispose?.(); } catch { /* no rAF handle */ }
+}
+
+console.log('\nthe desktop tiers draw too');
+{
+  // A phone resolves to LOW/MEDIUM, so the reported run never touched the HIGH
+  // and ULTRA material sets (physical skin, normal-mapped cloth, PBR env maps,
+  // 2K/4K shadows) that a desktop — or Settings → GRAPHICS → VERY HIGH — uses.
+  for (const quality of ['high', 'ultra']) {
+    let g = null;
+    let fault = '';
+    try {
+      g = new Game({
+        mount: new El('div', 'app'),
+        profile: { name: 'AUDIT', color: 0xffb347, carColor: 0xd24a2b },
+        room: 'audit', quality, mode: 'sprint', onQuit: () => {},
+      });
+      if (renderer) { g.renderer = renderer; g.renderer.shadowMap.enabled = g.tier.shadows; }
+      g.started = true;
+      g.keys.forward = 1;
+      for (let i = 0; i < 30 && !fault; i++) {
+        g.update(1 / 60);
+        g.updateCamera(1 / 60);
+        if (renderer) renderer.render(g.scene, g.camera);
+        fault = auditScene(g.scene, g.camera, `${quality} frame ${i}`);
+      }
+      // the recording context has no window for three to cancel a frame on
+      try { g.dispose?.(); } catch { /* harness only, not the game */ }
+    } catch (err) { fault = err.message; }
+    check(`${quality} — FUEL RUN draws 30 real frames`, !fault, fault || `${quality} clean`);
+  }
+}
+
+console.log('\nthe reported failure, on demand');
+{
+  // Three reads `renderer.debug.checkShaderErrors` the first time it builds a
+  // program. With a real WebGLRenderer that is not a warning: it throws, once
+  // per draw, for the life of the run. This is the shape of the FUEL RUN report
+  // ("GRAPHICS ERROR — … PRESS RESTART" plus RENDER ERROR on every frame), kept
+  // as a test so the mechanism can never be mistaken for a device problem again.
+  const sc = new THREE.Scene();
+  sc.add(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ color: 0xff0000 })));
+  const cam = new THREE.PerspectiveCamera(60, 1, 0.1, 100);
+  cam.position.z = 4;
+  const healthy = new THREE.WebGLRenderer({ canvas, context: makeGL() });
+  let healthyFault = '';
+  try { healthy.render(sc, cam); } catch (err) { healthyFault = err.message; }
+  check('an untouched renderer draws', !healthyFault, healthyFault || 'drew');
+
+  const sabotaged = new THREE.WebGLRenderer({ canvas, context: makeGL() });
+  sabotaged.debug = undefined;
+  let fault = '';
+  try { sabotaged.render(sc, cam); } catch (err) { fault = err.message; }
+  check('nulling renderer.debug breaks the draw (the reported bug)',
+    /checkShaderErrors/.test(fault), fault || 'it drew — the mechanism changed');
 }
 
 console.log(problems.length ? `\n${problems.length} FAILURES` : '\nTHE REAL RENDERER HOLDS');
