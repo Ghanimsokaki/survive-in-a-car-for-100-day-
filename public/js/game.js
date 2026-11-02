@@ -1,7 +1,7 @@
 import * as THREE from '../vendor/three.module.js';
 import { World, ZONES } from './world.js';
 import { Vehicle, ANCHOR_TIERS, anchorTierData } from './vehicle.js';
-import { buildAvatar } from './avatar.js';
+import { buildAvatar, nameTexture } from './avatar.js';
 import { buildEnvironment } from './materials.js';
 import { Tornado } from './tornado.js';
 import { Hollow, RaiderCar } from './enemies.js';
@@ -24,6 +24,9 @@ export { RECIPES };
 const PERK_CAPS = { maxhp: 100, maxfuel: 60, armor: 0.35, dmg: 1.0, scav: 1.0, magnet: 4 };
 const DAY_LENGTH = 95;               // seconds of real survival per in-game day
 const INVULN = 0.55;
+// how far a *peer* is still worth drawing. Beyond this a survivor is a radar
+// blip, not a body — and skipping them is free.
+const PEER_CULL = 1400;
 
 export const WEAPON_DATA = {
   fists: { name: 'BARE FISTS', dmg: 8, dur: Infinity, range: 2.5, cd: 0.5 },
@@ -2307,42 +2310,99 @@ export class Game {
   }
 
   // ------------------------------------------------------------ multiplayer
+  /**
+   * A survivor joins the room. They get a body of their own — the same rig the
+   * player has, in their colours — and a nameplate over it, so "somebody else is
+   * here" is something you can *see* rather than read off a party list.
+   *
+   * Two rules learned the hard way:
+   *   · a peer stays hidden until a position arrives. `hello` carries a name and
+   *     a colour but no coordinates, and spawning a body at (0,0,0) for it put
+   *     ghosts in the middle of the map;
+   *   · a driver keeps their nameplate. It used to be attached to the walking
+   *     body only, so the moment somebody got in a car they became an anonymous
+   *     vehicle — indistinguishable from a raider.
+   */
   onPeer(p) {
+    if (!p || !p.id) return;
     let v = this.peerVisuals?.get(p.id);
     if (!v) {
       if (!this.peerVisuals) this.peerVisuals = new Map();
+      const colour = p.color || 0xffb347;
+      const name = p.name || 'SURVIVOR';
+      const custom = p.custom || null;
       const avatar = buildAvatar({
-        color: p.color || 0xffb347,
-        name: p.name || 'SURVIVOR',
-        custom: p.custom || null,
+        color: colour, name, custom,
+        detail: this.avatarDetail, env: this.envMap,
       });
       const car = new Vehicle({ color: p.carColor || 0xd24a2b, lights: false });
+      const carTag = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: nameTexture(String(name).slice(0, 14), `#${colour.toString(16).padStart(6, '0')}`),
+        transparent: true, depthTest: false,
+      }));
+      carTag.position.y = 2.9;
+      carTag.scale.set(3.1, 0.78, 1);
+      carTag.renderOrder = 21;
+      carTag.visible = false;
+      car.group.add(carTag);
+      // nothing is drawn until we know where they are
+      avatar.root.visible = false;
       car.group.visible = false;
-      avatar.root.visible = true;
       this.scene.add(avatar.root, car.group);
-      v = { avatar, car, group: new THREE.Group(), target: new THREE.Vector3(), yaw: 0, inCar: false, hp: 100, name: p.name };
+      v = {
+        avatar, car, carTag, colour, name,
+        target: new THREE.Vector3(), yaw: 0, inCar: false, live: false,
+        hp: 100, callsign: name,
+      };
       this.peerVisuals.set(p.id, v);
     }
-    v.name = p.name;
-    if (typeof p.x !== 'number' || typeof p.z !== 'number') return;
-    v.hp = p.hp ?? 100;
-    v.inCar = !!p.inCar;
-    v.target.set(p.x, p.y || 0, p.z);
-    v.yaw = p.yaw || 0;
-    if (v.hidden) { v.avatar.root.visible = true; v.hidden = false; }
+    v.name = v.callsign = p.name || v.name || 'SURVIVOR';
+    if (typeof p.x !== 'number' || typeof p.z !== 'number'
+      || !Number.isFinite(p.x) || !Number.isFinite(p.z)) return;
+    v.hp = Number.isFinite(p.hp) ? p.hp : 100;
+    v.inCar = Boolean(p.inCar);
+    v.target.set(p.x, Number.isFinite(p.y) ? p.y : 0, p.z);
+    v.yaw = Number.isFinite(p.yaw) ? p.yaw : 0;
+    // the *first* position is a placement, not a movement: without this the body
+    // slides in from the world origin, a ghost crossing the map to reach them
+    if (!v.live) v.snap = true;
+    v.live = true;
   }
 
   onPeerLeave(p) {
-    const v = this.peerVisuals?.get(p.id);
+    const v = this.peerVisuals?.get(p && p.id);
     if (!v) return;
     this.scene.remove(v.avatar.root, v.car.group);
+    try {
+      v.carTag.material.map?.dispose?.();
+      v.carTag.material.dispose?.();
+    } catch { /* a peer that never got a tag */ }
     this.peerVisuals.delete(p.id);
   }
 
+  /**
+   * One frame of everybody else: interpolate toward what the network last said,
+   * show the body that matches how they are travelling, and keep the nameplate
+   * on whichever of the two is on screen.
+   */
   updatePeers(dt) {
     if (!this.peerVisuals) return;
     for (const v of this.peerVisuals.values()) {
-      const root = v.inCar ? v.car.group : v.avatar.root;
+      if (!v.live) continue;                      // still waiting for a position
+      const far = v.target.distanceToSquared(this.pos) > PEER_CULL * PEER_CULL;
+      if (far) {
+        // a survivor across the map costs nothing to skip and nothing to miss
+        v.avatar.root.visible = false;
+        v.car.group.visible = false;
+        continue;
+      }
+      if (v.snap) {
+        v.snap = false;
+        v.car.pos.copy(v.target);
+        v.car.yaw = v.yaw;
+        v.avatar.root.position.copy(v.target);
+        v.avatar.root.rotation.y = v.yaw;
+      }
       if (v.inCar) {
         v.car.group.visible = true;
         v.avatar.root.visible = false;
@@ -2350,16 +2410,18 @@ export class Game {
         v.car.yaw = angleLerp(v.car.yaw, v.yaw, 1 - Math.exp(-9 * dt));
         v.car.group.rotation.y = v.car.yaw;
         v.car.mesh.wheels.forEach((w) => (w.tyre.rotation.x += dt * 6));
+        v.carTag.visible = true;
+        if (v.avatar.tag) v.avatar.tag.visible = false;
       } else {
         v.car.group.visible = false;
+        v.carTag.visible = false;
         v.avatar.root.visible = true;
         v.avatar.root.position.lerp(v.target, 1 - Math.exp(-9 * dt));
         v.avatar.root.rotation.y = angleLerp(v.avatar.root.rotation.y, v.yaw, 1 - Math.exp(-9 * dt));
         const moving = v.avatar.root.position.distanceTo(v.target) > 0.06 ? 1 : 0;
         v.avatar.animate(dt, moving, false);
+        if (v.avatar.tag) v.avatar.tag.visible = true;
       }
-      if (v.avatar.tag) v.avatar.tag.visible = !v.inCar;
-      void root;
     }
   }
 

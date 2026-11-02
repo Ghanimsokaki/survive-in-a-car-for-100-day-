@@ -35,7 +35,11 @@ function faceTexture() {
  * a round portrait inside the same plate, so the face you chose follows you into
  * the world instead of only living on a menu.
  */
-function nameTexture(name, color, portrait = null) {
+/**
+ * The nameplate texture. Exported because the world puts one over a *peer's*
+ * car as well: a survivor you cannot name is a stranger you will shoot at.
+ */
+export function nameTexture(name, color, portrait = null) {
   const c = canvasTex(512, 128, (ctx) => {
     ctx.clearRect(0, 0, 512, 128);
     ctx.font = 'bold 52px ui-monospace, monospace';
