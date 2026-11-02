@@ -11,6 +11,7 @@ import {
 } from './orientation.js';
 import { MODES, DEFAULT_MODE, modeById } from './modes.js';
 import { loadBook, bestLine, careerLine, resetBook } from './records.js';
+
 import {
   SKIN_TONES, OUTFIT_COLORS, HAIR_STYLES, HAIR_COLORS, ACCESSORIES,
   DEFAULT_CUSTOM, normalizeCustom, resolveCustom, describeCustom,
@@ -603,6 +604,40 @@ async function probeRelay() {
 }
 
 // --------------------------------------------------------------------- game
+
+/**
+ * THE MEMORY: a run the game remembers, and a card that offers it back.
+ *
+ * `js/memory.js` is fetched *after* the menu is up — the home is the one screen
+ * with a size budget and the card is never the first thing a player looks at.
+ * The card itself ships inside that module (`installContinueCard`), so this is
+ * only the wiring: which mode is selected, and what "continue" means.
+ */
+let pendingResume = null;
+let refreshContinue = () => null;
+
+const loadMemory = () => import('./memory.js').then((m) => {
+  refreshContinue = m.installContinueCard({
+    getMode: () => state.mode,
+    onContinue: (record) => {
+      // the saved run knows which mode it is: a player who last drove FUEL RUN
+      // continues FUEL RUN, not whatever card happened to be selected
+      state.mode = modeById(record.game)?.id || state.mode;
+      pendingResume = record.state;
+      startRun();
+    },
+    onForget: (record) => {
+      const note = $('netStatus');
+      if (!note) return;
+      note.textContent = record
+        ? '● FORGOTTEN — THAT RUN CANNOT BE CONTINUED'
+        : '● NOTHING TO FORGET';
+      note.className = 'net-status warn';
+    },
+  });
+  return m;
+}).catch(() => null);
+
 async function startRun() {
   if (starting) return;
   starting = true;
@@ -677,12 +712,15 @@ async function startRun() {
         ? { url: account.sb.url, key: account.sb.key }
         : null,
       mode: state.mode,
+      // a remembered run is applied by the Game itself (Game.applyResume)
+      resume: pendingResume,
       onQuit: () => location.reload(),
       onRunEnd: (stats) => {
         account.recordRun(stats);
         account.setPresence({ status: 'lobby', room: null });
       },
     });
+    pendingResume = null;
     game.audio.init();
     // the player's saved volume / mute / shake / tier apply to the new run
     applySettings(settings, settingsForGame());
@@ -883,6 +921,10 @@ async function boot() {
       if (!btn) return;
       state.mode = btn.dataset.mode;
       paintMode();
+
+  // the remembered run: the card is mounted by js/memory.js once it lands
+  loadMemory();
+      refreshContinue();
       saveLocal();
     });
   }

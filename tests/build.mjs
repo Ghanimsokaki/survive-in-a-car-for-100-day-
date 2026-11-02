@@ -20,4 +20,23 @@ for (const file of await readdir(dest)) {
   const code = await readFile(p, 'utf8');
   await writeFile(p, code.replace(/'\.\.\/vendor\/three\.module\.js'/g, "'../../three-shim.js'"));
 }
-console.log('prepared tests/app/js');
+/**
+ * …and a second copy against the **real** vendored three.js. `tests/app/js` is
+ * the fast lane (the shim draws nothing); `tests/real/js` is the honest one: the
+ * same browser modules fed real three.js, real geometries and a real
+ * WebGLRenderer on a recording context. A render bug that only exists in three
+ * itself — like the nulled `renderer.debug` that broke FUEL RUN — can only be
+ * caught here.
+ */
+const realDest = path.join(here, 'real', 'js');
+await rm(path.join(here, 'real'), { recursive: true, force: true });
+await mkdir(realDest, { recursive: true });
+await cp(src, realDest, { recursive: true });
+for (const file of await readdir(realDest)) {
+  if (!file.endsWith('.js')) continue;
+  const p = path.join(realDest, file);
+  const code = await readFile(p, 'utf8');
+  await writeFile(p, code.replace(/'\.\.\/vendor\/three\.module\.js'/g, "'../../../public/vendor/three.module.js'"));
+}
+
+console.log('prepared tests/app/js (shim) + tests/real/js (real three)');

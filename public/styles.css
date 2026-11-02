@@ -61,6 +61,20 @@ input:focus{border-color:var(--amber);box-shadow:0 0 0 3px rgba(255,179,71,.14)}
 .ghost-btn{padding:13px 26px;border-radius:10px;background:transparent;border:1px solid rgba(255,255,255,.2);
   letter-spacing:2px;font-size:12px}
 .ghost-btn:hover{border-color:var(--amber);color:var(--amber)}
+/* the remembered run, directly under START — a second, quieter way in */
+.continue-card{display:flex;gap:8px;margin:10px 0 0;align-items:stretch}
+.continue-card.hidden{display:none}
+.continue-main{flex:1;display:grid;grid-template-columns:auto 1fr;grid-template-rows:auto auto;
+  column-gap:10px;row-gap:2px;align-items:center;text-align:left;padding:11px 14px;border-radius:10px;
+  background:rgba(255,179,71,.08);border:1px solid rgba(255,179,71,.34);transition:.15s}
+.continue-main:hover{background:rgba(255,179,71,.16);border-color:var(--amber);transform:translateY(-1px)}
+.cc-tag{grid-row:1/3;font-size:9px;font-weight:800;letter-spacing:2px;color:#1a0f01;
+  background:linear-gradient(100deg,var(--amber),var(--amber-hot));padding:7px 9px;border-radius:7px}
+.continue-main b{font-size:12px;letter-spacing:1.4px;color:#f4ead9;font-weight:700}
+.continue-main em{font-size:10px;letter-spacing:1.2px;color:#9aa4b5;font-style:normal}
+.continue-forget{padding:0 13px;border-radius:10px;border:1px solid rgba(255,255,255,.16);
+  color:#8b93a3;font-size:12px;letter-spacing:1px}
+.continue-forget:hover{border-color:rgba(255,120,110,.6);color:#ff8f86}
 .net-status{margin:12px 0 0;font-size:10.5px;letter-spacing:1.4px;color:#7c8697;min-height:14px}
 .net-status.ok{color:var(--green)}
 .net-status.warn{color:var(--amber)}

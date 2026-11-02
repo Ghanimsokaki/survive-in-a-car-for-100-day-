@@ -16,6 +16,7 @@ import { Inventory, InventoryUI } from './inventory.js';
 import { rollLoot, isMaterial, ITEMS, itemName } from './items.js';
 import { MODES, DEFAULT_MODE, modeById as resolveMode, goalLabel } from './modes.js';
 import { loadBook, saveBook, commitRun, freshLabels, modeStats } from './records.js';
+import { rememberRun, forgetRun } from './memory.js';
 import { stageSize, toStagePoint } from './orientation.js';
 import { tier as graphicsTier, resolveQuality, applyPostClass } from './graphics.js';
 
@@ -84,7 +85,7 @@ export const WEATHERS = {
 };
 
 export class Game {
-  constructor({ mount, profile, room, onQuit, onRunEnd, quality, mode, supabase = null, relayUrl = '' }) {
+  constructor({ mount, profile, room, onQuit, onRunEnd, quality, mode, supabase = null, relayUrl = '', resume = null }) {
     this.mount = mount;
     this.profile = profile;
     this.onQuit = onQuit;
@@ -188,8 +189,17 @@ export class Game {
     this.lootSeq = 0;
 
     this.resetRun();
+    // a remembered run picks up exactly where it was left (see js/memory.js).
+    // Applied after resetRun, so the snapshot only describes the difference.
+    if (resume) this.applyResume(resume);
     this.net.start();
-    window.addEventListener('resize', () => this.resize());
+    this.listenWin('resize', () => this.resize());
+    // a remembered run is written when the tab goes away, not only on a timer:
+    // the last five seconds are the ones a player notices
+    this.listenWin('pagehide', () => { try { this.saveMemory(); } catch { /* closed */ } });
+    this.listenWin('visibilitychange', () => {
+      try { if (document.hidden) this.saveMemory(); } catch { /* no document */ }
+    });
     this.clock = new THREE.Clock();
     this.loop = this.loop.bind(this);
     requestAnimationFrame(this.loop);
@@ -293,6 +303,159 @@ export class Game {
     this.camLook = new THREE.Vector3(7, 1, 30);
   }
 
+  /**
+   * Everything a remembered run needs, and nothing else. Kept small on purpose:
+   * a snapshot is written to storage every few seconds, so it holds the state a
+   * player would notice losing — where they are, when, how alive, what is in the
+   * pack — not the physics debris.
+   */
+  snapshot() {
+    const car = this.car;
+    return {
+      mode: this.mode.id,
+      day: this.day,
+      dayTimer: Math.round(this.dayTimer * 10) / 10,
+      time: Math.round(this.time || 0),
+      hp: Math.round(this.hp),
+      hpMax: Math.round(this.hpMax || 100),
+      inCar: Boolean(this.inCar),
+      x: Math.round(this.pos.x * 10) / 10,
+      z: Math.round(this.pos.z * 10) / 10,
+      yaw: Math.round((car?.yaw || 0) * 1000) / 1000,
+      fuel: Math.round((car?.fuel ?? 0) * 100) / 100,
+      anchorTier: car?.anchorTier || 1,
+      distance: Math.round(this.distance || 0),
+      kills: this.kills,
+      itemsLooted: this.itemsLooted,
+      crafted: this.craftedCount,
+      zone: this.zone,
+      weather: this.weather,
+      stormCat: this.stormCat || 0,
+      weapon: this.weapon,
+      owned: [...(this.owned || [])],
+      durability: { ...(this.durability || {}) },
+      materials: { ...(this.materials || {}) },
+      items: [...(this.inventory?.items || [])],
+      hotbar: [...(this.inventory?.hotbar || [])],
+      perks: { ...(this.perks || {}) },
+    };
+  }
+
+  /**
+   * Puts a snapshot back on a freshly reset run. Each field is validated: a slot
+   * written by an older build (or edited in devtools) must degrade to a sane
+   * run, never to a broken one.
+   */
+  applyResume(state) {
+    if (!state || typeof state !== 'object') return false;
+    const num = (v, lo, hi, fallback) => {
+      const n = Number(v);
+      return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : fallback;
+    };
+    this.day = Math.round(num(state.day, 1, 9999, 1));
+    this.dayTimer = num(state.dayTimer, 0, this.dayLength, 0);
+    this.time = num(state.time, 0, 1e7, 0);
+    this.hpMax = num(state.hpMax, 1, 999, 100);
+    this.hp = num(state.hp, 1, this.hpMax, this.hpMax);
+    this.distance = num(state.distance, 0, 1e8, 0);
+    this.kills = Math.round(num(state.kills, 0, 1e6, 0));
+    this.itemsLooted = Math.round(num(state.itemsLooted, 0, 1e6, 0));
+    this.craftedCount = Math.round(num(state.crafted, 0, 1e6, 0));
+    this.zone = Math.round(num(state.zone, 0, ZONES.length - 1, 0));
+    this.stormCat = Math.round(num(state.stormCat, 0, 5, 0));
+
+    const x = num(state.x, -900, 900, 7);
+    const z = num(state.z, -1300, 1300, 30);
+    this.pos.set(x, 0, z);
+    this.vel.set(0, 0, 0);
+    this.avatar.root.position.set(x, 0, z);
+    this.car.group.position.set(x, 0, z);
+    this.car.yaw = num(state.yaw, -Math.PI * 4, Math.PI * 4, Math.PI);
+    this.car.group.rotation.y = this.car.yaw;
+    this.car.fuel = num(state.fuel, 0, this.car.maxFuel, 10);
+    const tier = Math.round(Number(state.anchorTier));
+    if (Number.isFinite(tier)) this.car.anchorTier = Math.max(1, Math.min(3, tier));
+    this.camYaw = this.car.yaw;
+
+    if (state.materials && typeof state.materials === 'object') {
+      for (const k of Object.keys(this.materials)) {
+        const v = Number(state.materials[k]);
+        if (Number.isFinite(v) && v >= 0) this.materials[k] = Math.min(9999, Math.round(v));
+      }
+    }
+    if (Array.isArray(state.items) && this.inventory) {
+      for (const entry of state.items.slice(0, 64)) {
+        if (!Array.isArray(entry)) continue;
+        const id = String(entry[0] || '');
+        const qty = Math.round(Number(entry[1]) || 0);
+        if (qty > 0) this.inventory.add(id, qty);
+      }
+      if (Array.isArray(state.hotbar)) {
+        state.hotbar.slice(0, this.inventory.hotbar.length).forEach((id, i) => {
+          if (typeof id === 'string' && this.inventory.count(id) > 0) this.inventory.hotbar[i] = id;
+        });
+      }
+    }
+    if (Array.isArray(state.owned) && this.owned?.add) {
+      for (const w of state.owned.slice(0, 16)) if (WEAPON_DATA[w]) this.owned.add(w);
+      if (WEAPON_DATA[state.weapon] && this.owned.has(state.weapon)) this.weapon = state.weapon;
+      this.syncWeapon();
+      if (state.durability && typeof state.durability === 'object') {
+        for (const [w, left] of Object.entries(state.durability).slice(0, 16)) {
+          const v = Number(left);
+          if (Number.isFinite(v) && v > 0) this.durability[w] = v;
+        }
+      }
+    }
+    if (state.perks && typeof state.perks === 'object') {
+      for (const k of Object.keys(this.perks)) {
+        const v = Number(state.perks[k]);
+        if (Number.isFinite(v) && v >= 0) this.perks[k] = Math.min(PERK_CAPS[k] ?? 1e6, v);
+      }
+    }
+
+    // weather / zone / night are all best effort: a snapshot must never be able
+    // to stop a run from starting
+    try { this.world?.setZone(this.zone, true); } catch { /* keep zone 0 */ }
+    try {
+      const w = String(state.weather || 'clear');
+      this.weather = WEATHERS[w] ? w : 'clear';
+      this.world?.setWeather?.(this.weather);
+    } catch { this.weather = 'clear'; }
+
+    // on foot or in the rig, placed directly: toggleCar() would teleport the
+    // player sideways, and this is a restore, not a transition
+    this.inCar = state.inCar !== false;
+    if (!this.inCar) {
+      this.avatar.root.visible = true;
+      this.avatar.root.position.set(x, 0, z);
+    }
+
+    this.hud?.setDay?.(this.day, this.dayTimer / Math.max(1, this.dayLength), ZONES[this.zone]?.name);
+    this.hud?.toast?.('RESUMED — WHERE YOU LEFT IT', 'good');
+    return true;
+  }
+
+  /**
+   * Writes this run's slot. Called on a timer while playing, and once more when
+   * the run ends or the page is hidden, so the last few seconds are never the
+   * ones that get lost.
+   */
+  saveMemory() {
+    if (this.dead || this.won || !this.started) return null;
+    const record = rememberRun(this.mode.id, this.snapshot(), {
+      label: `${this.mode.name.toUpperCase()} · DAY ${this.day}`,
+    });
+    if (record) this.lastMemory = record;
+    return record;
+  }
+
+  /** The run is over: nothing left to continue. */
+  clearMemory() {
+    forgetRun(this.mode.id);
+    this.lastMemory = null;
+  }
+
   resetRun() {
     this.dayLength = this.mode.dayLength || DAY_LENGTH;
     this.day = 1;
@@ -370,6 +533,18 @@ export class Game {
     this.hud.show();
   }
 
+  /**
+   * Everything this run hangs on `window` goes through here, so `dispose()` can
+   * take it back down. A run that leaves its key handlers behind keeps driving a
+   * game that is gone — the classic "the menu moves when I press W" leak.
+   */
+  listenWin(type, fn) {
+    this._winListeners ||= [];
+    this._winListeners.push([type, fn]);
+    window.addEventListener(type, fn);
+    return fn;
+  }
+
   // ------------------------------------------------------------------ input
   setupInput() {
     this.keys = { forward: 0, back: 0, left: 0, right: 0, boost: false, jump: false };
@@ -383,7 +558,7 @@ export class Game {
       KeyD: 'right', ArrowRight: 'right',
     };
 
-    window.addEventListener('keydown', (e) => {
+    this.listenWin('keydown', (e) => {
       if (this.chatOpen) return;
       const k = keyMap[e.code];
       if (k) { this.keys[k] = 1; e.preventDefault(); }
@@ -409,12 +584,12 @@ export class Game {
       }
       if (e.code === 'Enter') { e.preventDefault(); this.focusChat(); }
     });
-    window.addEventListener('keyup', (e) => {
+    this.listenWin('keyup', (e) => {
       const k = keyMap[e.code];
       if (k) this.keys[k] = 0;
       if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') this.keys.boost = false;
     });
-    window.addEventListener('blur', () => {
+    this.listenWin('blur', () => {
       this.keys.forward = this.keys.back = this.keys.left = this.keys.right = 0;
       this.keys.boost = false;
     });
@@ -501,8 +676,8 @@ export class Game {
 
     // browsers can leave the audio graph suspended until a gesture — re-arm it
     const arm = () => { try { this.audio.init(); } catch {} };
-    window.addEventListener('pointerdown', arm, { once: false });
-    window.addEventListener('keydown', arm, { once: false });
+    this.listenWin('pointerdown', arm);
+    this.listenWin('keydown', arm);
 
     if (this.touchMode) this.buildTouchButtons();
   }
@@ -2299,6 +2474,7 @@ export class Game {
     this.hud.closeBench();
     this.audio.crash();
     this.hud.storm(null);
+    this.clearMemory();
     const wrecked = this.runSummary(false);
     const record = this.recordRun(wrecked);
     this.hud.showGameOver('WRECKED', `${this.mode.name} · the highway claimed another survivor.`, [
@@ -2321,6 +2497,7 @@ export class Game {
     this.invUI?.hide();
     this.hud.closeBench();
     this.hud.storm(null);
+    this.clearMemory();
     const cleared = this.runSummary(true);
     const record = this.recordRun(cleared);
     this.hud.showGameOver('YOU LIVED', `${this.mode.name} cleared — ${Number.isFinite(this.mode.targetDay) ? this.mode.targetDay + ' days' : this.day + ' days'}. One rig. The coast is yours.`, [
@@ -2520,6 +2697,13 @@ export class Game {
    * faster — a database cannot render frames, so the work has to be avoided here.
    */
   updatePerf(dt) {
+    // the memory: five seconds of play is the most a player can lose to a
+    // refresh, a locked phone or a closed tab
+    this.memoryTimer = (this.memoryTimer || 0) + dt;
+    if (this.memoryTimer >= 5) {
+      this.memoryTimer = 0;
+      this.saveMemory();
+    }
     this.frameTime = this.frameTime * 0.9 + dt * 0.1;
     this.perfTimer += dt;
     if (this.perfTimer < 1.2) return;
@@ -2550,6 +2734,7 @@ export class Game {
 
   dispose() {
     this.disposed = true;
+    try { this.saveMemory(); } catch { /* nothing worth keeping */ }
     // stop the loop first: a disposed renderer that is still being drawn is a
     // guaranteed "context lost" on the next frame
     if (this._raf !== undefined) {
@@ -2568,6 +2753,17 @@ export class Game {
         }
       });
     } catch { /* a stub scene in tests */ }
+    // and unhook the keyboard/mouse: a disposed run must not answer keys
+    for (const [type, fn] of this._winListeners || []) {
+      try { window.removeEventListener(type, fn); } catch { /* nothing to remove */ }
+    }
+    this._winListeners = [];
+    // and drop the graph itself: a disposed run should not keep the scene (and
+    // everything parented to it) alive just because a stale reference exists
+    try {
+      while (this.scene?.children?.length) this.scene.remove(this.scene.children[0]);
+      this.scene = null;
+    } catch { /* a stub scene */ }
     this.renderer.dispose?.();
     if (this.mount) this.mount.innerHTML = '';
   }

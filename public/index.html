@@ -234,6 +234,15 @@
         </div>
 
         <button id="playBtn" class="play-btn">START THE RUN <span>▸</span></button>
+        <!-- the game remembers your last play: see js/memory.js -->
+        <div id="continueCard" class="continue-card hidden">
+          <button id="continueBtn" class="continue-main" type="button">
+            <span class="cc-tag">CONTINUE</span>
+            <b id="continueTitle">YOUR LAST RUN</b>
+            <em id="continueWhen">JUST NOW</em>
+          </button>
+          <button id="continueForget" class="continue-forget" type="button" title="Forget this run" aria-label="Forget this run">✕</button>
+        </div>
         <p id="netStatus" class="net-status">checking relay…</p>
       </div>
 

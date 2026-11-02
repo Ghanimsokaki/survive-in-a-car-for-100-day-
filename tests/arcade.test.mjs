@@ -415,4 +415,71 @@ console.log('\nthe hub remembers what you played, and can go fullscreen for a ga
   void seen;
 }
 
+// --------------------------------------------- the result card + history given
+console.log('\nthe RUN LOGGED card cannot outlive its run');
+{
+  const arc = new Arcade({ account: null, getPlayer: () => ({ name: 'GHANIMZ' }) });
+  arc.games = mergeCatalogues(NATIVE_GAMES, { games: [{
+    id: 'star-battle', title: 'STAR BATTLE', author: 'ghanimz', blurb: 'b', tags: [], accent: '#ff0000',
+  }] });
+  arc.nodes.frame = { src: '', contentWindow: { postMessage() {} } };
+
+  // play, finish, and the hub paints its card
+  arc.playing = arc.games.find((g) => g.id === 'star-battle');
+  arc.stats = new ArcadeStats({ storage: null });
+  arc.stats.clearLocal();
+  await arc.onMessage({ data: { channel: BRIDGE, type: 'arcade:score', payload: { score: 3200, day: 5, seconds: 44, meta: '9 kills' } } });
+  check('finishing a run shows the result card', !arc.nodes.result.classList.contains('hidden'));
+  check('…and it says the run was logged', /RUN LOGGED/.test(arc.nodes.result.innerHTML));
+
+  // ENGAGE AGAIN — the in-game button, or the card's PLAY AGAIN: either way the
+  // new sector must not be behind a stale card
+  arc.launch('star-battle');
+  check('relaunching the game takes the card down', arc.nodes.result.classList.contains('hidden'));
+  check('…and empties it, so nothing can flash back', arc.nodes.result.innerHTML === '');
+
+  // and the card's own PLAY AGAIN is wired to a real relaunch
+  arc.playing = arc.games.find((g) => g.id === 'star-battle');
+  await arc.onMessage({ data: { channel: BRIDGE, type: 'arcade:score', payload: { score: 100, day: 1, seconds: 5 } } });
+  const again = arc.nodes.result.querySelector('[data-ap="again"]');
+  check('the card offers PLAY AGAIN', Boolean(again));
+  again?.dispatch?.('click');
+  check('PLAY AGAIN restarts the same game, not nothing', arc.playing?.id === 'star-battle' && arc.nodes.frame.src.includes('star-battle'),
+    arc.nodes.frame.src || 'no src');
+
+  // leaving the run takes the card with it
+  arc.nodes.result.innerHTML = 'RUN LOGGED';
+  arc.closeGame();
+  check('leaving the game hides the card too', arc.nodes.result.classList.contains('hidden') && arc.nodes.result.innerHTML === '');
+
+  // RECENT RUNS says *when*
+  arc.playing = null;
+  arc.tab = 'records';
+  arc.renderRecords();
+  const html = arc.nodes.records.innerHTML;
+  check('recent runs carry a date or a time', /<em>[^<]*\d/.test(html), (html.match(/<em>[^<]*<\/em>/) || [''])[0]);
+  arc.destroy();
+}
+
+console.log('\nthe sandboxed game is handed its own run history');
+{
+  const arc = new Arcade({ account: null, getPlayer: () => ({ name: 'GHANIMZ' }) });
+  arc.stats = new ArcadeStats({ storage: null });
+  arc.stats.clearLocal();
+  await arc.stats.submitRun('star-battle', { score: 900, day: 3, seconds: 31, meta: '4 kills' }, 'GHANIMZ');
+  await arc.stats.submitRun('iron-tide', { score: 120, day: 1, meta: '1 dock' }, 'GHANIMZ');
+  const posted = [];
+  arc.nodes.frame = { src: '', contentWindow: { postMessage: (m) => posted.push(m) } };
+  arc.playing = { id: 'star-battle', title: 'STAR BATTLE' };
+  arc.postInit();
+  const init = posted.find((m) => m.type === 'arcade:init');
+  const history = init?.payload?.history || [];
+  check('the frame is given its runs, not the whole device', history.length === 1 && history[0].score === 900,
+    JSON.stringify(history));
+  check('…with when they happened', history[0]?.at > 0 && history[0]?.day === 3, JSON.stringify(history[0]));
+  check('a different game gets a different list', arc.historyFor('iron-tide').length === 1
+    && arc.historyFor('iron-tide')[0].score === 120);
+  arc.destroy();
+}
+
 process.exit(problems.length ? 1 : 0);

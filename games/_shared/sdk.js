@@ -22,7 +22,7 @@
   let parentOrigin = '*';
   let ready = false;
   let started = false;
-  const listeners = { start: [], message: [], pause: [], resume: [] };
+  const listeners = { start: [], init: [], message: [], pause: [], resume: [] };
   const emit = (kind, payload) => (listeners[kind] || []).forEach((fn) => fn(payload));
   const post = (type, payload) => {
     try {
@@ -49,6 +49,13 @@
      * real leaderboard. `[{ score, name, meta, at }]`, best first, or null.
      */
     leaderboard: null,
+    /**
+     * This game's own recent runs, newest first: `[{ score, at, day, seconds, meta }]`.
+     * Sent with `arcade:init` because the frame is sandboxed without same-origin:
+     * its localStorage is empty on every reload, so the hub — which can read
+     * storage — remembers the runs and the game just paints them.
+     */
+    history: [],
 
     on(kind, fn) {
       if (!listeners[kind]) throw new Error(`unknown arcade event "${kind}"`);
@@ -124,7 +131,14 @@
         if (Array.isArray(data.payload && data.payload.leaderboard)) {
           sdk.leaderboard = data.payload.leaderboard;
         }
+        if (Array.isArray(data.payload && data.payload.history)) {
+          sdk.history = data.payload.history;
+        }
         if (!started) { started = true; emit('start', sdk.player); }
+        // every init, not just the first: the hub re-sends the player, the
+        // board and the run history when it learns something new (a run just
+        // logged), and a game that only listened once would never see it
+        emit('init', data.payload || {});
         break;
       }
       case 'arcade:message':

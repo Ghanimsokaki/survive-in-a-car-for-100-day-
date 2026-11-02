@@ -11,3 +11,4 @@ dist/
 
 # generated test fixtures
 tests/app/
+tests/real/
