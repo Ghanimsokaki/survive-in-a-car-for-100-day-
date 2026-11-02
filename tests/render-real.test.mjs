@@ -36,7 +36,11 @@ const check = (label, cond, extra = '') => {
 
 globalThis.__COARSE__ = true;          // a phone: the tier the report came from
 globalThis.__TOUCH__ = true;
-installDOM({ width: 412, height: 915 });
+// The page's *own* WebGL context is a recording one, so the Game builds — and
+// draws through — its own real WebGLRenderer. This is the difference that
+// matters: the first version of this lane swapped in a pristine renderer, and
+// so could not see the game null `renderer.debug` and break every draw.
+installDOM({ width: 412, height: 915, webgl: () => makeGL() });
 
 /* --------------------------------------------------------------- the mock GL */
 const K = {};
@@ -140,31 +144,26 @@ function makeGL() {
 const THREE = await import('../public/vendor/three.module.js');
 console.log('three r' + THREE.REVISION + ', real WebGLRenderer on a recording context');
 
-const mockGL = makeGL();
-const canvas = {
-  style: {}, width: 412, height: 915, clientWidth: 412, clientHeight: 915,
-  addEventListener() {}, removeEventListener() {},
-  getContext: (kind) => (kind === '2d' ? null : mockGL),
-  getBoundingClientRect: () => ({ left: 0, top: 0, width: 412, height: 915 }),
-};
-mockGL.canvas = canvas;
-
-let renderer = null;
-try {
-  renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false, stencil: false, depth: true });
-  renderer.setPixelRatio(1);
-  renderer.setSize(412, 915);
-  renderer.outputColorSpace = THREE.SRGBColorSpace;
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-} catch (err) {
-  renderer = null;
-  console.log(`  (the real renderer refused the stub: ${err.message})`);
+/** A real WebGLRenderer on a fresh recording context (used by the probe below). */
+function probeRenderer(width = 412, height = 915) {
+  const gl = makeGL();
+  const canvas = {
+    style: {}, width, height, clientWidth: width, clientHeight: height,
+    addEventListener() {}, removeEventListener() {},
+    getContext: (kind) => (kind === '2d' ? null : gl),
+    getBoundingClientRect: () => ({ left: 0, top: 0, width, height }),
+  };
+  gl.canvas = canvas;
+  const r = new THREE.WebGLRenderer({ canvas, context: gl, antialias: true, alpha: false, stencil: false, depth: true });
+  r.setPixelRatio(1);
+  r.setSize(width, height);
+  r.outputColorSpace = THREE.SRGBColorSpace;
+  r.toneMapping = THREE.ACESFilmicToneMapping;
+  return { r, canvas };
 }
 
-const { Game } = await import('./app/js/game.js');
-const { MODES } = await import('./app/js/modes.js');
+const { Game } = await import('./real/js/game.js');
+const { MODES } = await import('./real/js/modes.js');
 
 /** What three.js touches, and what a GPU rejects. Returns the first few faults. */
 function auditScene(scene, camera, where) {
@@ -238,18 +237,15 @@ console.log('\nthe reported run: FUEL RUN on a phone');
     check('it is the fuel run, on the phone tier', g.modeId === 'sprint' && ['low', 'medium'].includes(g.quality),
       `${g.modeId} @ ${g.quality}`);
 
-    // The game's own renderer is checked *before* the recording one replaces it:
-    // anything the game does to `renderer.debug` breaks the first draw of every
-    // material in a browser, and swapping the renderer out is exactly how that
-    // went unnoticed while the reported banner was on screen.
+    // the reported bug, exactly as a browser would hit it: the game's *own*
+    // renderer, on its own context, with nothing swapped in
+    const own = g.renderer;
+    check('the game built a real renderer on a real context', own?.isWebGLRenderer === true
+      && typeof own.render === 'function', own?.constructor?.name || 'no renderer');
     check('the game leaves three.js its shader debug hook',
-      Boolean(g.renderer?.debug) && typeof g.renderer.debug.checkShaderErrors === 'boolean',
-      g.renderer?.debug ? `checkShaderErrors ${g.renderer.debug.checkShaderErrors}` : 'renderer.debug is undefined');
-    if (renderer) {
-      g.renderer = renderer;
-      g.renderer.shadowMap.enabled = g.tier.shadows;
-      g.mount.appendChild(canvas);
-    }
+      Boolean(own?.debug) && typeof own.debug.checkShaderErrors === 'boolean',
+      own?.debug ? `checkShaderErrors ${own.debug.checkShaderErrors}` : 'renderer.debug is undefined');
+    if (own) own.shadowMap.enabled = g.tier.shadows;
     g.started = true;
     g.hud?.show?.();
 
@@ -267,11 +263,11 @@ console.log('\nthe reported run: FUEL RUN on a phone');
         failure = `update threw at frame ${i}: ${err.message}`;
         break;
       }
-      if (renderer) {
-        try { renderer.render(g.scene, g.camera); } catch (err) {
-          failure = `render threw at frame ${i}: ${err.message}`;
-          break;
-        }
+      try {
+        g.renderer.render(g.scene, g.camera);
+      } catch (err) {
+        failure = `render threw at frame ${i}: ${err.message}`;
+        break;
       }
       firstFault = auditScene(g.scene, g.camera, `${MODE} frame ${i}`);
     }
@@ -279,10 +275,10 @@ console.log('\nthe reported run: FUEL RUN on a phone');
     check('the scene is drawable, frame after frame', !firstFault, firstFault || 'no missing attributes');
     check('the game logged no render error of its own', (g.errorLog || []).length === 0,
       (g.errorLog || []).map((e) => `${e.kind}: ${e.message}`).join(' / ') || 'clean');
-    if (renderer) {
-      check('the renderer drew something (not a silently empty frame)', calls.draws > 0,
-        `${calls.draws} draw calls`);
-      const info = renderer.info?.render || {};
+    check('the renderer drew something (not a silently empty frame)', calls.draws > 0,
+      `${calls.draws} draw calls`);
+    {
+      const info = g.renderer.info?.render || {};
       check('the programs compiled and nothing was skipped', (info.calls ?? 0) > 0,
         `${info.calls ?? 0} calls, ${info.triangles ?? 0} triangles`);
     }
@@ -322,13 +318,12 @@ for (const mode of MODES.map((m) => m.id)) {
       profile: { name: 'AUDIT', color: 0xffb347, carColor: 0xd24a2b },
       room: 'audit', quality: 'medium', mode, onQuit: () => {},
     });
-    if (renderer) { g.renderer = renderer; g.mount.appendChild(canvas); }
     g.started = true;
     g.keys.forward = 1;
     for (let i = 0; i < 30 && !failure; i++) {
       g.update(1 / 60);
       g.updateCamera(1 / 60);
-      if (renderer) renderer.render(g.scene, g.camera);
+      g.renderer.render(g.scene, g.camera);
     }
     failure = auditScene(g.scene, g.camera, mode);
   } catch (err) {
@@ -352,13 +347,13 @@ console.log('\nthe desktop tiers draw too');
         profile: { name: 'AUDIT', color: 0xffb347, carColor: 0xd24a2b },
         room: 'audit', quality, mode: 'sprint', onQuit: () => {},
       });
-      if (renderer) { g.renderer = renderer; g.renderer.shadowMap.enabled = g.tier.shadows; }
+      if (g.renderer) g.renderer.shadowMap.enabled = g.tier.shadows;
       g.started = true;
       g.keys.forward = 1;
       for (let i = 0; i < 30 && !fault; i++) {
         g.update(1 / 60);
         g.updateCamera(1 / 60);
-        if (renderer) renderer.render(g.scene, g.camera);
+        g.renderer.render(g.scene, g.camera);
         fault = auditScene(g.scene, g.camera, `${quality} frame ${i}`);
       }
       // the recording context has no window for three to cancel a frame on
@@ -379,12 +374,12 @@ console.log('\nthe reported failure, on demand');
   sc.add(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ color: 0xff0000 })));
   const cam = new THREE.PerspectiveCamera(60, 1, 0.1, 100);
   cam.position.z = 4;
-  const healthy = new THREE.WebGLRenderer({ canvas, context: makeGL() });
+  const { r: healthy } = probeRenderer();
   let healthyFault = '';
   try { healthy.render(sc, cam); } catch (err) { healthyFault = err.message; }
   check('an untouched renderer draws', !healthyFault, healthyFault || 'drew');
 
-  const sabotaged = new THREE.WebGLRenderer({ canvas, context: makeGL() });
+  const { r: sabotaged } = probeRenderer();
   sabotaged.debug = undefined;
   let fault = '';
   try { sabotaged.render(sc, cam); } catch (err) { fault = err.message; }

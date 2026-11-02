@@ -99,7 +99,7 @@ export class El {
     return this._qs.get(sel);
   }
   querySelectorAll() { return []; }
-  getContext() { return makeCtx(); }
+  getContext(type) { return ctxFor(this, type); }
   getBoundingClientRect() { return { left: 0, top: 0, width: 320, height: 200 }; }
   setPointerCapture() {}
   releasePointerCapture() {}
@@ -118,7 +118,21 @@ export class El {
 
 const els = new Map();
 
-export function installDOM({ width = 1280, height = 720 } = {}) {
+// A canvas made by this DOM is a stub, except when a lane asks for a real
+// WebGL context: then `getContext('webgl2')` hands back whatever factory was
+// installed, so the *real* three.js can run against a recording context.
+let glFactory = null;
+function ctxFor(el, type) {
+  if (glFactory && /webgl/i.test(String(type || ''))) {
+    if (!el._gl) el._gl = glFactory(el);
+    return el._gl;
+  }
+  if (!el._2d) el._2d = makeCtx();
+  return el._2d;
+}
+
+export function installDOM({ width = 1280, height = 720, webgl = null } = {}) {
+  glFactory = webgl;
   // the body registers anything appended to it by id, so a module that builds
   // its own overlay can be found again through document.getElementById
   const body = new El('body');
@@ -134,7 +148,7 @@ export function installDOM({ width = 1280, height = 720 } = {}) {
         const isCanvas = ['app', 'radar', 'previewCanvas', 'previewCanvasLobby'].includes(id) ? false : false;
         const el = new El(id === 'radar' || id.startsWith('previewCanvas') ? 'canvas' : 'div', id);
         el.width = 220; el.height = 220;
-        if (el.tagName === 'CANVAS') el.getContext = () => makeCtx();
+        if (el.tagName === 'CANVAS') el.getContext = (type) => ctxFor(el, type);
         els.set(id, el);
       }
       return els.get(id);
@@ -150,7 +164,13 @@ export function installDOM({ width = 1280, height = 720 } = {}) {
     querySelector() { return new El('div'); },
     createElement(tag) {
       const el = new El(tag);
-      if (tag === 'canvas') { const ctx = makeCtx(); el.getContext = () => ctx; }
+      if (tag === 'canvas') { el.getContext = (type) => ctxFor(el, type); }
+      return el;
+    },
+    // three.js builds its canvas through the namespaced factory
+    createElementNS(ns, tag) {
+      const el = new El(tag);
+      if (tag === 'canvas') { el.getContext = (type) => ctxFor(el, type); el.width = 1; el.height = 1; }
       return el;
     },
     createTextNode: (t) => ({ nodeType: 3, textContent: t }),
@@ -172,11 +192,22 @@ export function installDOM({ width = 1280, height = 720 } = {}) {
   };
 
   const storage = new Map();
+  // a real Storage: getItem/setItem/removeItem/clear plus length + key(i), which
+  // is what code that *lists* saved slots has to use
   const localStorage = {
     getItem: (k) => (storage.has(k) ? storage.get(k) : null),
-    setItem: (k, v) => storage.set(k, String(v)),
+    setItem: (k, v) => {
+      if (String(v).length > (globalThis.__STORAGE_CAP__ || Infinity)) {
+        const err = new Error('QuotaExceededError');
+        err.name = 'QuotaExceededError';
+        throw err;
+      }
+      storage.set(k, String(v));
+    },
     removeItem: (k) => storage.delete(k),
     clear: () => storage.clear(),
+    key: (i) => [...storage.keys()][i] ?? null,
+    get length() { return storage.size; },
   };
 
   const listeners = {};
@@ -184,7 +215,14 @@ export function installDOM({ width = 1280, height = 720 } = {}) {
     innerWidth: width, innerHeight: height, devicePixelRatio: 2,
     screen: { width: width, height: height },
     addEventListener: (t, fn) => { (listeners[t] ||= []).push(fn); },
-    removeEventListener() {},
+    // a real remove, so a suite can prove a screen unsubscribed when it left
+    removeEventListener(t, fn) {
+      const list = listeners[t];
+      if (!list) return;
+      const i = list.indexOf(fn);
+      if (i >= 0) list.splice(i, 1);
+    },
+    listenerCount: (t) => (listeners[t] || []).length,
     dispatch: (t, ev) => (listeners[t] || []).forEach((f) => f(ev)),
     matchMedia: (q) => ({ matches: /coarse/.test(q) ? Boolean(globalThis.__COARSE__) : false, addEventListener() {}, addListener() {} }),
     location: { search: globalThis.__SEARCH__ || '', host: '127.0.0.1:8000', protocol: 'http:', reload() {} },
@@ -207,5 +245,5 @@ export function installDOM({ width = 1280, height = 720 } = {}) {
   globalThis.location = win.location;
   globalThis.screen = win.screen;
   globalThis.devicePixelRatio = win.devicePixelRatio;
-  return { els, El, win, localStorage };
+  return { els, El, win, localStorage, listeners };
 }

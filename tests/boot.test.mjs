@@ -50,8 +50,19 @@ console.log('\nhome payload');
     `${(bytes / 1024).toFixed(0)} KB`);
   check('the home never statically imports the game', !names.includes('game.js'));
   check('the home never statically imports the avatar rig', !names.includes('avatar.js'));
-  check('the home payload is under 200 KB', bytes < 200 * 1024,
+  // 200 → 208 KB: the hub can now offer to continue the last run, and the
+  // wiring for that (plus the date on a logged run) is ~3 KB of the shell. The
+  // heavy half — js/memory.js, snapshots and the CONTINUE card — is deliberately
+  // *outside* this graph and fetched after the menu paints, which is pinned
+  // below. Everything that keeps the first paint light (no three.js, no game
+  // kit, no avatar rig) is still enforced.
+  check('the home payload is under 208 KB', bytes < 208 * 1024,
     `${(bytes / 1024).toFixed(1)} KB across ${seen.size} modules`);
+  check('the memory module is fetched after first paint, not with the home',
+    !names.includes('memory.js'), names.includes('memory.js') ? 'in the boot graph' : 'lazy');
+  const bootMain = await readFile(path.join(publicDir, 'js', 'main.js'), 'utf8');
+  check('…and the hub asks for it lazily',
+    /import\('\.\/memory\.js'\)/.test(bootMain));
   check('the home is a small graph (no deep chains)', seen.size <= 20, `${seen.size} modules`);
 
   const main = await readFile(path.join(publicDir, 'js', 'main.js'), 'utf8');

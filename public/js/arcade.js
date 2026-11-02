@@ -660,7 +660,8 @@ export class Arcade {
       ? `<div class="arc-history"><h3>RECENT RUNS<span>${runs.length}</span></h3><ol>${runs
         .slice(0, 8)
         .map((r) => `<li><span>${escapeHtml(titles.get(r.id) || r.id)}</span>`
-          + `<em>${r.day ? `W${r.day} · ` : ''}${r.seconds ? `${r.seconds}s` : escapeHtml(r.meta || '')}</em>`
+          + `<em>${escapeHtml(Arcade.clockLabel(r.at))}${r.day ? ` · W${r.day}` : ''}`
+          + `${r.seconds ? ` · ${r.seconds}s` : r.meta ? ` · ${escapeHtml(r.meta)}` : ''}</em>`
           + `<b>${r.score}</b></li>`)
         .join('')}</ol></div>`
       : '<div class="arc-history"><h3>RECENT RUNS</h3><p class="arc-note">No runs logged on this device yet.</p></div>';
@@ -719,7 +720,7 @@ export class Arcade {
     document.documentElement.classList.remove('rot-stage');
     if (isPortrait()) requestLandscape();
     this.nodes.player.classList.remove('hidden');
-    this.nodes.result.classList.add('hidden');
+    this.hideResult();
     this.syncStage();
     this.nodes.playerTitle.textContent = game.title;
     // no loading copy anywhere: the frame simply fades in when the game says it
@@ -815,13 +816,58 @@ export class Arcade {
           // minute). Handing it over here is what lets a sandboxed game show a
           // real leaderboard without a key, a second request or CORS.
           leaderboard: this.playing ? (this.boards.get(this.playing.id) || null) : null,
+          // THIS game's last runs, with timestamps. A sandboxed frame has an
+          // opaque origin, so its own localStorage is empty every time it
+          // reloads — which is why the launch menu used to say "NO RUNS LOGGED
+          // YET" one second after the hub had logged a run. The hub can read
+          // its own storage, so it hands the list over instead.
+          history: this.historyFor(this.playing ? this.playing.id : ''),
         },
       }, '*');
     } catch { /* frame not ready yet — the game's local fallback covers it */ }
   }
 
+  /**
+   * "14:32" today, "12 NOV" before that. Kept local (rather than imported from
+   * js/memory.js) so the hub's boot graph does not grow for a date string.
+   */
+  static clockLabel(at, now = Date.now()) {
+    const t = new Date(Number(at) || 0);
+    if (!Number.isFinite(t.getTime()) || !at) return '';
+    const pad = (n) => String(n).padStart(2, '0');
+    if (t.toDateString() === new Date(now).toDateString()) return `${pad(t.getHours())}:${pad(t.getMinutes())}`;
+    const months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+    return `${t.getDate()} ${months[t.getMonth()]}`;
+  }
+
+  /** This game's recent runs, newest first, as the frame should draw them. */
+  historyFor(gameId) {
+    const all = Array.isArray(this.stats?.data?.history) ? this.stats.data.history : [];
+    return all
+      .filter((r) => r && r.id === gameId)
+      .slice(0, 6)
+      .map((r) => ({
+        score: Math.round(Number(r.score) || 0),
+        at: Number(r.at) || 0,
+        day: Math.round(Number(r.day) || 0),
+        seconds: Math.round(Number(r.seconds) || 0),
+        meta: String(r.meta || ''),
+      }));
+  }
+
+  /** The RUN LOGGED card is only ever on screen for a run that just ended. */
+  hideResult() {
+    const result = this.nodes?.result;
+    if (!result) return;
+    result.classList.add('hidden');
+    // and empty, so a stale "RUN LOGGED" can never flash back before the next
+    // score paints over it
+    result.innerHTML = '';
+  }
+
   closeGame() {
     this.playing = null;
+    this.hideResult();
     clearTimeout(this.stallTimer);
     document.body.classList.remove('run-live');
     document.body.classList.remove('auto-land');

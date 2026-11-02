@@ -2000,6 +2000,41 @@
     paintHistory();
   }
 
+  /** "14:32" today, "12 NOV" before that. Empty when there is no timestamp. */
+  function starTime(at) {
+    const t = new Date(Number(at) || 0);
+    if (!Number.isFinite(t.getTime()) || !at) return '';
+    const now = new Date();
+    if (t.toDateString() === now.toDateString()) {
+      return `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
+    }
+    const months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+    return `${t.getDate()} ${months[t.getMonth()]}`;
+  }
+
+  /**
+   * The hub's memory of this game's runs. It only wins when it knows more than
+   * the live list does: a battle finished a second ago is already in `history`,
+   * and the hub's copy of it only exists after the score round-trips.
+   */
+  function rememberFromHub(rows) {
+    const fromHub = (Array.isArray(rows) ? rows : [])
+      .filter((r) => r && Number.isFinite(Number(r.score)))
+      .map((r) => ({
+        score: Math.round(Number(r.score) || 0),
+        wave: Math.max(1, Math.round(Number(r.day) || 1)),
+        // the hub keeps the score row's meta, not a kills column
+        kills: Math.round(Number(r.kills)
+          || Number((String(r.meta || '').match(/(\d+)\s*kills/i) || [])[1]) || 0),
+        at: Number(r.at) || 0,
+        meta: String(r.meta || ''),
+      }));
+    if (fromHub.length > history.length) {
+      history = fromHub.slice(0, 6);
+      paintHistory();
+    }
+  }
+
   function paintHistory() {
     const host = $('historyList');
     if (!host || host.innerHTML === undefined) return;
@@ -2009,7 +2044,12 @@
     }
     host.innerHTML = history.slice(0, 6).map((row, i) => {
       const scale = i === 0 ? ' class="last"' : '';
-      return `<li${scale}><span>W${Number(row.wave) || 1} · ${Number(row.kills) || 0} KILLS</span>`
+      // when it happened is half of what a history is for — and it is the first
+      // thing missing when a row is painted from a bare score
+      const when = starTime(row.at);
+      const wave = Number(row.wave) || 1;
+      const kills = Number(row.kills) || 0;
+      return `<li${scale}><span>${when ? `${when} · ` : ''}W${wave} · ${kills} KILLS</span>`
         + `<b>${Number(row.score) || 0}</b></li>`;
     }).join('');
   }
@@ -2943,9 +2983,12 @@
 
   addEventListener('keydown', (event) => {
     const key = String(event.key || '').toLowerCase();
-    if (key === 'escape') {
+    if (key === 'escape' || key === 'p') {
+      // Escape closes the panel you are in; with no panel open it is the pause,
+      // which is what every desktop player reaches for
       if (interiorOpen) { closeInterior(); return; }
       if (hangarOpen) { closeHangar(false); return; }
+      if (screen === 'battle') { setPaused(!paused); event.preventDefault(); return; }
     }
     if (screen !== 'battle') {
       if ((key === 'enter' || key === ' ') && screen === 'title') { event.preventDefault(); startBattle(); }
@@ -3180,15 +3223,28 @@
     const data = payload || {};
     if (data.quality) quality = String(data.quality);
     if (Array.isArray(data.leaderboard)) paintBoard(data.leaderboard);
+    if (Array.isArray(data.history)) rememberFromHub(data.history);
+    // The hub's memory of this game's runs. A sandboxed frame has an opaque
+    // origin, so its own localStorage is always empty after a reload — this is
+    // the list that keeps the launch menu honest.
+
     paintTitleStats();
     paintHud(true);
   }
   if (sdk.on) {
     try {
-      sdk.on('start', (player) => applyHubInit({ quality: sdk.quality, leaderboard: sdk.leaderboard, player }));
+      sdk.on('start', (player) => applyHubInit({
+        quality: sdk.quality, leaderboard: sdk.leaderboard, history: sdk.history, player,
+      }));
+      // a later init means the hub just logged a run: the launch menu should
+      // show it without the frame being reloaded
+      sdk.on('init', (payload) => applyHubInit({
+        quality: sdk.quality, leaderboard: sdk.leaderboard, history: sdk.history,
+        ...(payload || {}),
+      }));
     } catch { /* an older SDK without events: the local values stand in */ }
   }
-  applyHubInit({ quality: sdk.quality, leaderboard: sdk.leaderboard });
+  applyHubInit({ quality: sdk.quality, leaderboard: sdk.leaderboard, history: sdk.history });
 
   // test/debug handle: drive the sim without a browser
   window.__starBattle = {
