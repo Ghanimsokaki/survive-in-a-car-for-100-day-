@@ -27,6 +27,22 @@ const INVULN = 0.55;
 // how far a *peer* is still worth drawing. Beyond this a survivor is a radar
 // blip, not a body — and skipping them is free.
 const PEER_CULL = 1400;
+/**
+ * A colour as a CSS swatch, from either a packed 0xRRGGBB int (what the engine
+ * uses) or a "#rrggbb" string (what a profile, or an older client, may send).
+ * The party list and the radar used to assume an int, so a string peer colour
+ * rendered as "##ff0000" — and a *missing* one threw "Cannot read properties of
+ * undefined (reading 'toString')" in the middle of a run.
+ */
+function swatch(colour, fallback = 0xffb347) {
+  if (typeof colour === 'number' && Number.isFinite(colour)) {
+    return `#${(colour & 0xffffff).toString(16).padStart(6, '0')}`;
+  }
+  const text = String(colour || '').trim();
+  if (/^#[0-9a-f]{3,8}$/i.test(text)) return text;
+  if (/^[0-9a-f]{6}$/i.test(text)) return `#${text}`;
+  return `#${(fallback & 0xffffff).toString(16).padStart(6, '0')}`;
+}
 
 export const WEAPON_DATA = {
   fists: { name: 'BARE FISTS', dmg: 8, dur: Infinity, range: 2.5, cd: 0.5 },
@@ -209,7 +225,12 @@ export class Game {
     if (!this.renderer) {
       throw new Error(`This device would not open a 3D view (${lastGfxError?.message || 'WebGL unavailable'}). Try another browser or turn on hardware acceleration.`);
     }
-    this.renderer.debug = undefined;
+    // three.js reads `renderer.debug.checkShaderErrors` on the first draw of
+    // every material. Nulling `debug` (which this line used to do) is not a
+    // quiet way to silence shader warnings — it turns *every* draw into
+    // "Cannot read properties of undefined (reading 'checkShaderErrors')",
+    // which is the "GRAPHICS ERROR … PRESS RESTART" report: a render failure on
+    // every frame, from a line that looked like a de-optimisation.
     // adaptive resolution: the frame governor trades pixels for frames, so even
     // ULTRA degrades gracefully instead of stuttering
     this.renderScale = 1;
@@ -2197,16 +2218,21 @@ export class Game {
     }));
     this.net.peers.forEach((p) => {
       if (typeof p.x !== 'number' || typeof p.z !== 'number') return;
-      blips.push({ x: p.x - px, z: p.z - pz, kind: 'peer', color: '#' + (p.color || 0x5ff0ff).toString(16).padStart(6, '0') });
+      blips.push({ x: p.x - px, z: p.z - pz, kind: 'peer', color: swatch(p.color, 0x5ff0ff) });
     });
     return blips;
   }
 
   partyRows() {
-    const rows = [{ name: `${this.profile.name} (YOU)`, color: `#${this.profile.color.toString(16).padStart(6, '0')}`, status: this.inCar ? 'DRIVING' : 'ON FOOT' }];
+    const me = this.profile || {};
+    const rows = [{
+      name: `${me.name || 'SURVIVOR'} (YOU)`,
+      color: swatch(me.color),
+      status: this.inCar ? 'DRIVING' : 'ON FOOT',
+    }];
     this.net.peers.forEach((p) => rows.push({
-      name: p.name,
-      color: `#${(p.color || 0x8fd0ff).toString(16).padStart(6, '0')}`,
+      name: p.name || 'SURVIVOR',
+      color: swatch(p.color, 0x8fd0ff),
       status: p.inCar ? 'DRIVING' : 'ON FOOT',
     }));
     return rows.slice(0, 6);
