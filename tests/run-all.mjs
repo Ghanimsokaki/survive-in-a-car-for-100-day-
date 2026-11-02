@@ -31,6 +31,7 @@ const suites = [
   ['boot.test.mjs', 'FAST BOOT + PORTRAIT HOME + SUPABASE RELAY'],
   ['graphics.test.mjs', 'GRAPHICS TIERS + FULLSCREEN'],
   ['render-real.test.mjs', 'REAL RENDERER — FUEL RUN + EVERY MODE'],
+  ['peers-world.test.mjs', 'TWO SURVIVORS — BODIES, NAMETAGS, CULL'],
   ['iron-tide-water.test.mjs', 'IRON TIDE — WATER PHYSICS'],
   ['iron-tide-boot.test.mjs', 'IRON TIDE — FAST BOOT + DOCK'],
   ['iron-tide-3d.test.mjs', 'IRON TIDE — THE 3D SEA'],
